@@ -1,5 +1,6 @@
 'use client';
-import Image from 'next/image';
+import Logo from '@/components/Logo';
+import ThemeToggle from '@/components/ThemeToggle';
 import Link from 'next/link';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -28,8 +29,11 @@ export default function Signup() {
 
   return (
     <div className="auth">
+      <div className="auth-theme">
+        <ThemeToggle />
+      </div>
       <div className="auth-card">
-        <Image src="/brand/logo-full.png" alt="LaborOps" width={160} height={146} priority className="auth-logo" />
+        <Logo width={160} className="auth-logo" />
         <h1>Create your company account</h1>
         {error && <Banner>{error}</Banner>}
         <form onSubmit={submit}>

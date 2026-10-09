@@ -1,5 +1,6 @@
 'use client';
-import Image from 'next/image';
+import Logo from '@/components/Logo';
+import ThemeToggle from '@/components/ThemeToggle';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -34,8 +35,11 @@ export default function Login() {
 
   return (
     <div className="auth">
+      <div className="auth-theme">
+        <ThemeToggle />
+      </div>
       <div className="auth-card">
-        <Image src="/brand/logo-full.png" alt="LaborOps — run every shift with precision" width={200} height={183} priority className="auth-logo" />
+        <Logo width={200} className="auth-logo" />
         <h1>Sign in</h1>
         {error && <Banner>{error}</Banner>}
         <form
