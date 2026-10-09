@@ -1,12 +1,12 @@
 #!/bin/bash
 # LaborOps - Lightsail first-boot script (Ubuntu 24.04).
-# Paste this into the "Launch script" box when creating the instance, after replacing PUBLIC_KEY.
+# Paste this whole file into the "Launch script" box when creating the instance.
 # It installs Docker, adds a small swap file, authorises the deploy key, and creates /opt/laborops/.env
 # with freshly generated secrets. Progress log: /var/log/laborops-launch.log
 set -euo pipefail
 exec > /var/log/laborops-launch.log 2>&1
 
-PUBLIC_KEY='PASTE-YOUR-DEPLOY-PUBLIC-KEY-HERE'
+PUBLIC_KEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEYHUyh7fsBRGW/XLX6axqaxlnduHo2iLtmCC0zXTDeY cadeh@DESKTOP-NMTOL9Q'
 DOMAIN='demo.laborops.app'
 APP_USER='ubuntu'
 
