@@ -35,6 +35,27 @@ export async function eventRoutes(app: FastifyInstance) {
     })),
   );
 
+  app.get('/api/calendar', { preHandler: mgr }, async (req, reply) => {
+    const q = z
+      .object({ from: z.string().datetime({ offset: true }), to: z.string().datetime({ offset: true }) })
+      .safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ error: 'from and to are required (ISO date-times)' });
+    const { from, to } = q.data;
+    if (new Date(to).getTime() - new Date(from).getTime() > 62 * 86400000) return reply.code(400).send({ error: 'Range too large' });
+    const rows = await withTenant(req.user.tid, async (c) =>
+      (
+        await c.query(
+          `SELECT s.id, s.role_name, s.starts_at, s.ends_at, s.headcount, e.id AS event_id, e.name AS event_name, e.venue,
+              (SELECT count(*)::int FROM shift_assignments a WHERE a.shift_id = s.id AND a.status <> 'declined') AS filled
+           FROM shifts s JOIN events e ON e.id = s.event_id
+           WHERE s.starts_at >= $1 AND s.starts_at < $2 ORDER BY s.starts_at, e.name`,
+          [from, to],
+        )
+      ).rows,
+    );
+    return { shifts: rows };
+  });
+
   app.post('/api/events', { preHandler: mgr }, async (req, reply) => {
     const b = eventBody.parse(req.body);
     if (b.endDate < b.startDate) return reply.code(400).send({ error: 'End date is before the start date' });

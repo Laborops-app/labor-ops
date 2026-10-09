@@ -61,52 +61,42 @@ function Body() {
           </div>
         </form>
       </section>
-      <section className="card">
-        {!list ? (
-          <div className="muted">Loading…</div>
-        ) : list.length === 0 ? (
-          <Empty>No events yet. Create one above, then add shifts to it.</Empty>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Event</th>
-                  <th>Dates</th>
-                  <th>Shifts</th>
-                  <th>Filled</th>
-                </tr>
-              </thead>
-              <tbody>
-                {list.map((ev) => (
-                  <tr key={ev.id}>
-                    <td>
-                      <Link href={`/events/${ev.id}`}>
-                        <b>{ev.name}</b>
-                      </Link>
-                      {ev.venue && <div className="muted small">{ev.venue}</div>}
-                    </td>
-                    <td className="small">
-                      {fmtDate(ev.start_date.slice(0, 10))}
-                      {ev.end_date.slice(0, 10) !== ev.start_date.slice(0, 10) && <> – {fmtDate(ev.end_date.slice(0, 10))}</>}
-                    </td>
-                    <td>{ev.shift_count}</td>
-                    <td>
-                      {ev.slots === 0 ? (
-                        <span className="muted">–</span>
-                      ) : (
-                        <span className={ev.accepted >= ev.slots ? 'good' : ''}>
-                          {ev.accepted} / {ev.slots} confirmed
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      {!list ? (
+        <div className="muted">Loading…</div>
+      ) : list.length === 0 ? (
+        <Empty>No events yet. Create one above, then add shifts to it.</Empty>
+      ) : (
+        <div className="cards3">
+          {list.map((ev) => {
+            const full = ev.slots > 0 && ev.accepted >= ev.slots;
+            const s0 = ev.start_date.slice(0, 10);
+            const e0 = ev.end_date.slice(0, 10);
+            return (
+              <Link key={ev.id} href={`/events/${ev.id}`} className="sc">
+                <div className="sc-top">
+                  <b>{ev.name}</b>
+                  <span className={`badge ${full ? 'good' : ev.slots ? 'warn' : ''}`}>{full ? 'Full' : ev.slots ? 'Needs crew' : 'No shifts'}</span>
+                </div>
+                <div className="sub">
+                  <span>
+                    {fmtDate(s0)}
+                    {e0 !== s0 && <> – {fmtDate(e0)}</>}
+                  </span>
+                  {ev.venue && <span>{ev.venue}</span>}
+                </div>
+                <div className="progress" aria-hidden="true">
+                  <i style={{ width: `${ev.slots ? Math.min(100, (ev.accepted / ev.slots) * 100) : 0}%` }} />
+                </div>
+                <div className="meta">
+                  <span>
+                    {ev.shift_count} shift{ev.shift_count === 1 ? '' : 's'} · {ev.accepted} / {ev.slots} confirmed
+                  </span>
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+      )}
     </>
   );
 }

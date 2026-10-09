@@ -27,13 +27,24 @@ const NAV: { href: string; label: string; roles: Role[]; icon: React.ReactNode }
     ),
   },
   {
+    href: '/schedule',
+    label: 'Schedule',
+    roles: ['admin', 'manager'],
+    icon: icon(
+      <>
+        <rect x="3" y="4" width="18" height="18" rx="2.5" />
+        <path d="M16 2v4M8 2v4M3 10h18M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01" />
+      </>,
+    ),
+  },
+  {
     href: '/events',
     label: 'Events',
     roles: ['admin', 'manager'],
     icon: icon(
       <>
-        <rect x="3" y="4" width="18" height="18" rx="2.5" />
-        <path d="M16 2v4M8 2v4M3 10h18" />
+        <rect x="3" y="7" width="18" height="13" rx="2.5" />
+        <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 13h18" />
       </>,
     ),
   },

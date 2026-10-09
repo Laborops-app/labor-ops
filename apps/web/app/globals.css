@@ -321,3 +321,48 @@ a.sc:hover { border-color: var(--primary); }
   .cards3 { grid-template-columns: 1fr; }
   .hero { padding: 1rem; }
 }
+
+/* ---------- Schedule calendar ---------- */
+.cal-bar { display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap; margin-bottom: 0.9rem; }
+.cal-bar h1 { margin: 0; font-size: 1.35rem; margin-right: auto; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface); }
+.seg button { font: inherit; font-weight: 600; font-size: 0.86rem; border: 0; background: transparent; color: var(--muted); padding: 0.45rem 0.85rem; cursor: pointer; display: inline-flex; align-items: center; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button:hover { background: var(--surface-2); color: var(--text); }
+.seg button.active { background: var(--primary); color: var(--on-primary); }
+.legend { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--muted); }
+.legend .d { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-left: 0.5rem; }
+.legend .d.good, .ev-card.good { --c: var(--good); --cb: var(--good-bg); }
+.legend .d.warn, .ev-card.warn { --c: var(--warn); --cb: var(--warn-bg); }
+.legend .d.bad, .ev-card.bad { --c: var(--bad); --cb: var(--bad-bg); }
+.legend .d { background: var(--c); }
+.cal-head { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 0.6rem; padding: 0 0.2rem 0.4rem; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 0.6rem; transition: opacity 0.15s; }
+.cal-grid.loading { opacity: 0.55; }
+.cal-cell { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 0.55rem; display: grid; align-content: start; gap: 0.4rem; min-height: 130px; min-width: 0; }
+.cal-grid.week .cal-cell { min-height: 420px; }
+.cal-cell.today { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary) inset; }
+.cal-cell.today .cal-cell-h b { color: var(--primary); }
+.cal-cell.out { opacity: 0.45; }
+.cal-cell-h { display: grid; gap: 0.05rem; }
+.cal-cell-h b { font-size: 0.78rem; letter-spacing: 0.02em; }
+.cal-cell-h small { font-size: 0.7rem; color: var(--muted); }
+.ev-card { display: grid; gap: 0.1rem; padding: 0.4rem 0.5rem 0.4rem 0.6rem; border-radius: 8px; background: var(--cb); border-left: 4px solid var(--c); color: var(--text); text-decoration: none; font-size: 0.74rem; min-width: 0; }
+.ev-card:hover { filter: brightness(0.97); outline: 1px solid var(--c); }
+.ev-card b { font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-card span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-card .dots { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 0.2rem; }
+.ev-card .dots i { width: 6px; height: 6px; border-radius: 50%; background: color-mix(in srgb, var(--c) 28%, transparent); }
+.ev-card .dots i.on { background: var(--c); }
+.progress { height: 6px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
+.progress i { display: block; height: 100%; background: var(--primary); border-radius: 99px; }
+
+@media (max-width: 1099px) {
+  .cal-head { display: none; }
+  .cal-grid { grid-template-columns: 1fr; }
+  .cal-cell.no-ev { display: none; }
+  .cal-cell.out { display: none; }
+  .cal-grid.week .cal-cell { min-height: 0; }
+  .cal-grid.week .cal-cell.no-ev { display: grid; }
+  .legend { display: none; }
+}
