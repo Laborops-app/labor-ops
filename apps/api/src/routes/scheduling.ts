@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
 import { guard, authenticate } from '../auth';
+import { notify, notifyStaff, describeShift } from '../notify';
 import { evaluateShift, findClash, filledCount, certMessage } from '../eligibility';
 
 const uuid = z.string().uuid();
@@ -60,12 +61,24 @@ export async function schedulingRoutes(app: FastifyInstance) {
         const filled = await filledCount(c, id);
         if (b.headcount < filled) return { error: `${filled} people are already on this shift` };
       }
+      const wasOpen = (await c.query('SELECT is_open FROM shifts WHERE id = $1', [id])).rows[0]?.is_open;
       const r = await c.query(
         `UPDATE shifts SET is_open = COALESCE($2, is_open), required_certs = COALESCE($3, required_certs), headcount = COALESCE($4, headcount)
          WHERE id = $1 RETURNING *`,
         [id, b.isOpen ?? null, b.requiredCerts ?? null, b.headcount ?? null],
       );
       if (r.rows[0]) await audit(c, req.user.tid, req.user.sub, 'shift.update', 'shift', id, b);
+      if (r.rows[0] && b.isOpen === true && wasOpen === false) {
+        const d = await describeShift(c, req.user.tid, id);
+        const elig = await evaluateShift(c, id);
+        const onShift = new Set((await c.query('SELECT user_id FROM shift_assignments WHERE shift_id = $1', [id])).rows.map((x) => x.user_id));
+        const who = elig.filter((e) => !e.missing_certs.length && !e.time_off && !onShift.has(e.user_id));
+        if (d && who.length)
+          await notify(c, req.user.tid, who.map((e) => ({
+            userId: e.user_id, category: 'open_shift' as const, title: `Open shift: ${d.role}`,
+            body: `${d.line}\n\nThis shift is open. Claim it if you are available.`, link: '/open-shifts',
+          })));
+      }
       return { shift: r.rows[0] };
     });
     if ('error' in row) return reply.code(409).send(row);
@@ -112,6 +125,13 @@ export async function schedulingRoutes(app: FastifyInstance) {
       if (el?.missing_certs.length) return { code: 409, error: certMessage(a.name, el.missing_certs) };
       await c.query("UPDATE shift_assignments SET status = 'accepted' WHERE id = $1", [id]);
       await audit(c, req.user.tid, req.user.sub, 'claim.approve', 'assignment', id);
+      const d = await describeShift(c, req.user.tid, a.shift_id);
+      if (d)
+        await notify(c, req.user.tid, {
+          userId: a.user_id, category: 'approval_result', title: `Shift approved: ${d.role}`,
+          body: `${d.line}\n\nYour request was approved. You're on this shift.`, link: `/my-shifts/${id}`,
+          sms: `Approved: ${d.role}, ${d.event}, ${d.when}.`,
+        });
       return { code: 200, ok: true };
     });
     return send(reply, r);
@@ -120,8 +140,18 @@ export async function schedulingRoutes(app: FastifyInstance) {
   app.post('/api/assignments/:id/reject', { preHandler: mgr }, async (req, reply) => {
     const { id } = idParam.parse(req.params);
     const n = await withTenant(req.user.tid, async (c) => {
+      const prev = (await c.query("SELECT user_id, shift_id FROM shift_assignments WHERE id = $1 AND status = 'pending'", [id])).rows[0];
       const r = await c.query("DELETE FROM shift_assignments WHERE id = $1 AND status = 'pending'", [id]);
-      if (r.rowCount) await audit(c, req.user.tid, req.user.sub, 'claim.reject', 'assignment', id);
+      if (r.rowCount) {
+        await audit(c, req.user.tid, req.user.sub, 'claim.reject', 'assignment', id);
+        const d = prev && (await describeShift(c, req.user.tid, prev.shift_id));
+        if (d)
+          await notify(c, req.user.tid, {
+            userId: prev.user_id, category: 'approval_result', title: `Shift request declined: ${d.role}`,
+            body: `${d.line}\n\nYour request for this shift wasn't approved.`, link: '/open-shifts',
+            sms: `Your request for ${d.role}, ${d.event}, ${d.when} wasn't approved.`,
+          });
+      }
       return r.rowCount;
     });
     return n ? { ok: true } : reply.code(404).send({ error: 'Request not found (it may already be handled)' });
@@ -132,7 +162,7 @@ export async function schedulingRoutes(app: FastifyInstance) {
     const r = await withTenant(req.user.tid, async (c): Promise<Out> => {
       const w = (
         await c.query(
-          `SELECT w.id, w.assignment_id, w.taken_by, a.shift_id, s.starts_at, s.ends_at, u.name
+          `SELECT w.id, w.assignment_id, w.taken_by, w.offered_by, a.shift_id, s.starts_at, s.ends_at, u.name
            FROM shift_swaps w JOIN shift_assignments a ON a.id = w.assignment_id JOIN shifts s ON s.id = a.shift_id
            JOIN users u ON u.id = w.taken_by WHERE w.id = $1 AND w.status = 'pending' FOR UPDATE OF w`,
           [id],
@@ -150,6 +180,16 @@ export async function schedulingRoutes(app: FastifyInstance) {
       await c.query("UPDATE shift_assignments SET user_id = $2, status = 'accepted' WHERE id = $1", [w.assignment_id, w.taken_by]);
       await c.query("UPDATE shift_swaps SET status = 'approved', resolved_at = now() WHERE id = $1", [id]);
       await audit(c, req.user.tid, req.user.sub, 'swap.approve', 'swap', id);
+      const d = await describeShift(c, req.user.tid, w.shift_id);
+      if (d)
+        await notify(c, req.user.tid, [
+          { userId: w.taken_by, category: 'approval_result', title: `Swap approved: ${d.role}`,
+            body: `${d.line}\n\nThe swap was approved. You're now on this shift.`, link: `/my-shifts/${w.assignment_id}`,
+            sms: `Swap approved: ${d.role}, ${d.event}, ${d.when}. You're on this shift.` },
+          { userId: w.offered_by, category: 'approval_result', title: `Swap approved: ${d.role}`,
+            body: `${d.line}\n\nYour swap was approved. You're no longer on this shift.`, link: '/my-shifts',
+            sms: `Swap approved: you're off ${d.role}, ${d.event}, ${d.when}.` },
+        ]);
       return { code: 200, ok: true };
     });
     return send(reply, r);
@@ -159,8 +199,23 @@ export async function schedulingRoutes(app: FastifyInstance) {
     const { id } = idParam.parse(req.params);
     const n = await withTenant(req.user.tid, async (c) => {
       // Rejecting a taker puts the shift back on the swap board so someone else can take it.
+      const prev = (
+        await c.query(
+          `SELECT w.taken_by, a.shift_id FROM shift_swaps w JOIN shift_assignments a ON a.id = w.assignment_id WHERE w.id = $1 AND w.status = 'pending'`,
+          [id],
+        )
+      ).rows[0];
       const r = await c.query("UPDATE shift_swaps SET status = 'open', taken_by = NULL WHERE id = $1 AND status = 'pending'", [id]);
-      if (r.rowCount) await audit(c, req.user.tid, req.user.sub, 'swap.reject', 'swap', id);
+      if (r.rowCount) {
+        await audit(c, req.user.tid, req.user.sub, 'swap.reject', 'swap', id);
+        const d = prev && (await describeShift(c, req.user.tid, prev.shift_id));
+        if (d)
+          await notify(c, req.user.tid, {
+            userId: prev.taken_by, category: 'approval_result', title: `Swap request declined: ${d.role}`,
+            body: `${d.line}\n\nYour request to take this shift wasn't approved.`, link: '/open-shifts',
+            sms: `Your swap request for ${d.role}, ${d.event}, ${d.when} wasn't approved.`,
+          });
+      }
       return r.rowCount;
     });
     return n ? { ok: true } : reply.code(404).send({ error: 'Request not found (it may already be handled)' });
@@ -189,8 +244,14 @@ export async function schedulingRoutes(app: FastifyInstance) {
   app.post('/api/certs/:id/verify', { preHandler: mgr }, async (req, reply) => {
     const { id } = idParam.parse(req.params);
     const n = await withTenant(req.user.tid, async (c) => {
-      const r = await c.query('UPDATE user_certs SET verified = true WHERE id = $1', [id]);
-      if (r.rowCount) await audit(c, req.user.tid, req.user.sub, 'cert.verify', 'cert', id);
+      const r = await c.query('UPDATE user_certs SET verified = true WHERE id = $1 RETURNING user_id, name', [id]);
+      if (r.rowCount) {
+        await audit(c, req.user.tid, req.user.sub, 'cert.verify', 'cert', id);
+        await notify(c, req.user.tid, {
+          userId: r.rows[0].user_id, category: 'cert', title: `${r.rows[0].name} certificate verified`,
+          body: `Your ${r.rows[0].name} certificate was reviewed and verified. You can now be scheduled for shifts that require it.`, link: '/profile',
+        });
+      }
       return r.rowCount;
     });
     return n ? { ok: true } : reply.code(404).send({ error: 'Certificate not found' });
@@ -350,6 +411,8 @@ export async function schedulingRoutes(app: FastifyInstance) {
         ])
       ).rows[0];
       await audit(c, req.user.tid, req.user.sub, 'claim.create', 'assignment', a.id, { shiftId: id });
+      const d = await describeShift(c, req.user.tid, id);
+      if (d) await notifyStaff(c, req.user.tid, { category: 'approval_request', title: `${req.user.name} wants ${d.role}`, body: `${req.user.name} asked to take a shift.\n\n${d.line}`, link: '/requests' });
       return { code: 201, assignmentId: a.id };
     });
     return send(reply, r);
@@ -441,6 +504,8 @@ export async function schedulingRoutes(app: FastifyInstance) {
       if (el?.missing_certs.length) return { code: 409, error: `You need a valid ${el.missing_certs.join(', ')} certificate for this shift` };
       await c.query("UPDATE shift_swaps SET status = 'pending', taken_by = $2 WHERE id = $1", [id, req.user.sub]);
       await audit(c, req.user.tid, req.user.sub, 'swap.take', 'swap', id);
+      const d = await describeShift(c, req.user.tid, w.shift_id);
+      if (d) await notifyStaff(c, req.user.tid, { category: 'approval_request', title: `Swap needs approval: ${d.role}`, body: `${req.user.name} asked to take a shift that was offered for swap.\n\n${d.line}`, link: '/requests' });
       return { code: 200, ok: true };
     });
     return send(reply, r);

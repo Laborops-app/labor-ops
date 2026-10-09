@@ -225,6 +225,9 @@ function Body() {
               <button type="button" className="btn ghost" onClick={resetPw} disabled={busy === 'pw'}>
                 Reset password
               </button>
+              <button type="button" className="btn ghost" onClick={() => act('invite', `Email sent to ${m.email} with a link to choose a password.`, () => api(`/api/crew/${id}/invite`, { body: {} }))} disabled={busy === 'invite'}>
+                Email set-password link
+              </button>
             </>
           )}
         </div>

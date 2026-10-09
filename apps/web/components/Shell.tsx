@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { api, Me, Role, roleLabel } from '@/lib/api';
 import ThemeToggle from '@/components/ThemeToggle';
+import NotificationBell from '@/components/NotificationBell';
 
 const icon = (d: React.ReactNode) => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -89,6 +90,17 @@ const NAV: { href: string; label: string; roles: Role[]; icon: React.ReactNode }
     icon: icon(
       <>
         <path d="M12 2v20M17 6.5C17 4.6 14.8 3.5 12 3.5S7 4.6 7 6.5 9.2 9.5 12 10s5 1.6 5 3.5-2.2 3-5 3-5-1.1-5-3" />
+      </>,
+    ),
+  },
+  {
+    href: '/messaging',
+    label: 'Messaging',
+    roles: ['admin'],
+    icon: icon(
+      <>
+        <rect x="3" y="5" width="18" height="14" rx="2" />
+        <path d="m3 7 9 6 9-6" />
       </>,
     ),
   },
@@ -207,6 +219,7 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
           </Link>
           <span className="page-title">{current?.label ?? ''}</span>
           <span className="spacer" />
+          <NotificationBell />
           <Link href="/profile" className="who" aria-label="My profile">
             <span className="avatar solid" aria-hidden="true">
               {initials(me.name)}

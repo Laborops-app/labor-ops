@@ -593,3 +593,128 @@ test('skills and pay rates: admin manages them, coordinators and crew only see n
   assert.match(adminCsv[1], /,30,0\.00$/);
   assert.doesNotMatch((await call(mgr, 'GET', '/api/timesheets/export.csv')).text.split('\r\n')[0], /rate/i);
 });
+
+test('notifications: queue, inbox, preferences, SMS consent, reset and invite links, STOP, tenant isolation', async () => {
+  const { processQueue } = await import('../src/notify/worker');
+  const a = await register('ntf');
+  const c1 = await mkCrew(a, 'nt1');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'NGig', venue: 'Hall', startDate: '2030-01-01', endDate: '2030-01-02' })).json.event.id;
+  const s1 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Rigger', startsAt: start(30), endsAt: start(36), headcount: 1 })).json.shift.id;
+  const as = (await call(a, 'POST', `/api/shifts/${s1}/assign`, { userId: c1.id })).json.assignment.id;
+
+  // crew gets an in-app notification and a queued email, but no SMS until they opt in
+  let inbox = await call(c1.session, 'GET', '/api/notifications');
+  assert.equal(inbox.json.unread, 1);
+  assert.match(inbox.json.items[0].title, /New shift offered: Rigger/);
+  assert.equal((await call(a, 'GET', '/api/notifications')).json.unread, 0);
+  let log = await call(a, 'GET', '/api/messaging');
+  assert.ok(log.json.deliveries.some((d: any) => d.channel === 'email' && d.category === 'assignment'));
+  assert.ok(!log.json.deliveries.some((d: any) => d.channel === 'sms'));
+  assert.equal(log.json.email.live, false);
+
+  // SMS needs a valid phone and explicit consent
+  let p = await call(c1.session, 'PUT', '/api/my/notification-prefs', { email: true, sms: true, smsConsent: true });
+  assert.equal(p.status, 400);
+  await call(a, 'PATCH', `/api/crew/${c1.id}`, { phone: '801-555-0142' });
+  p = await call(c1.session, 'PUT', '/api/my/notification-prefs', { email: true, sms: true });
+  assert.equal(p.status, 400);
+  p = await call(c1.session, 'PUT', '/api/my/notification-prefs', { email: true, sms: true, smsConsent: true });
+  assert.equal(p.status, 200, p.text);
+  const g = await call(c1.session, 'GET', '/api/my/notification-prefs');
+  assert.equal(g.json.sms, true);
+  assert.ok(g.json.consentAt);
+
+  // approving something now also queues a text
+  const s2 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: start(60), endsAt: start(64), headcount: 1 })).json.shift.id;
+  await call(a, 'POST', `/api/shifts/${s2}/assign`, { userId: c1.id });
+  log = await call(a, 'GET', '/api/messaging');
+  const sms = log.json.deliveries.find((d: any) => d.channel === 'sms');
+  assert.ok(sms, 'sms queued');
+  assert.equal(sms.to_addr, '+18015550142');
+
+  // worker drains the queue in log-only mode (nothing really sent) and skips placeholder addresses
+  await processQueue(100);
+  log = await call(a, 'GET', '/api/messaging');
+  assert.ok(log.json.deliveries.every((d: any) => d.status !== 'queued' && d.status !== 'sending'));
+  assert.ok(log.json.deliveries.find((d: any) => d.channel === 'sms').status === 'sent');
+
+  // read state
+  await call(c1.session, 'POST', '/api/notifications/read', {});
+  assert.equal((await call(c1.session, 'GET', '/api/notifications/count')).json.unread, 0);
+
+  // turning email off stops email but keeps in-app
+  await call(c1.session, 'PUT', '/api/my/notification-prefs', { email: false, sms: false });
+  const before = (await call(a, 'GET', '/api/messaging')).json.deliveries.length;
+  const s3 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Grip', startsAt: start(80), endsAt: start(84), headcount: 1 })).json.shift.id;
+  await call(a, 'POST', `/api/shifts/${s3}/assign`, { userId: c1.id });
+  assert.equal((await call(a, 'GET', '/api/messaging')).json.deliveries.length, before);
+  assert.equal((await call(c1.session, 'GET', '/api/notifications/count')).json.unread, 1);
+
+  // coordinators are told about claims; crew are not
+  await call(a, 'PATCH', `/api/shifts/${s3}`, { isOpen: false });
+  const c2 = await mkCrew(a, 'nt2');
+  await call(a, 'PATCH', `/api/shifts/${s2}`, { isOpen: true });
+  assert.ok((await call(c2.session, 'GET', '/api/notifications')).json.items.some((i: any) => /Open shift/.test(i.title)));
+
+  // non-admins cannot see the delivery log
+  assert.equal((await call(c1.session, 'GET', '/api/messaging')).status, 403);
+  assert.equal((await call(c1.session, 'POST', '/api/messaging/test', { channel: 'email', to: 'x@y.com' })).status, 403);
+  const t = await call(a, 'POST', '/api/messaging/test', { channel: 'sms', to: 'nope' });
+  assert.equal(t.status, 400);
+  assert.equal((await call(a, 'POST', '/api/messaging/test', { channel: 'email', to: 'me@test.example' })).json.logged, true);
+
+  // another company sees none of this
+  const other = await register('ntf2');
+  assert.equal((await call(other, 'GET', '/api/messaging')).json.deliveries.length, 0);
+
+  // forgot / reset: same answer for unknown emails; token works once and sets a new password
+  assert.equal((await call(null, 'POST', '/api/auth/forgot', { email: 'nobody@test.example' })).json.ok, true);
+  const email = `nt1-${run}@test.example`;
+  const crewRow = (await pool.query('SELECT email FROM auth_find_user($1)', [email])).rowCount;
+  assert.ok(crewRow);
+  assert.equal((await call(null, 'POST', '/api/auth/forgot', { email })).json.ok, true);
+  const mail = await withTenant(await tidOf(), async (c) => (await c.query("SELECT body FROM deliveries WHERE to_addr = $1 AND category = 'account' ORDER BY created_at DESC LIMIT 1", [email])).rows[0]);
+  const token = /token=([\w-]+)/.exec(mail?.body ?? '')?.[1];
+  assert.ok(token, 'reset link in email');
+  assert.equal((await call(null, 'POST', '/api/auth/reset', { token, password: 'short' })).status, 400);
+  assert.equal((await call(null, 'POST', '/api/auth/reset', { token, password: 'brand-new-pass-1' })).status, 200);
+  assert.equal((await call(null, 'POST', '/api/auth/reset', { token, password: 'another-pass-22' })).status, 400);
+  await login(email, 'brand-new-pass-1');
+  assert.equal((await call(null, 'POST', '/api/auth/reset', { token: 'x'.repeat(43), password: 'brand-new-pass-1' })).status, 400);
+
+  // inbound STOP turns SMS off (requires a configured auth token, so exercise the DB function directly)
+  await call(c1.session, 'PUT', '/api/my/notification-prefs', { email: true, sms: true, smsConsent: true });
+  assert.equal((await pool.query("SELECT notify_sms_stop('8015550142') AS n")).rows[0].n >= 1, true);
+  assert.equal((await call(c1.session, 'GET', '/api/my/notification-prefs')).json.sms, false);
+  const inbound = await app.inject({ method: 'POST', url: '/api/sms/twilio/inbound', payload: 'Body=STOP&From=%2B18015550142', headers: { 'content-type': 'application/x-www-form-urlencoded' } });
+  assert.equal(inbound.statusCode, 503); // no Twilio token configured in tests
+  void as;
+});
+
+async function tidOf() {
+  return (await pool.query('SELECT tenant_id FROM auth_find_user($1)', [`admin-ntf-${run}@test.example`])).rows[0].tenant_id as string;
+}
+
+test('twilio inbound webhook: signature is required, STOP switches SMS off', async () => {
+  const { config } = await import('../src/config');
+  const crypto = await import('node:crypto');
+  const a = await register('twi');
+  const c1 = await mkCrew(a, 'tw1');
+  await call(a, 'PATCH', `/api/crew/${c1.id}`, { phone: '(385) 555-0199' });
+  await call(c1.session, 'PUT', '/api/my/notification-prefs', { email: true, sms: true, smsConsent: true });
+  config.sms.token = 'test-token';
+  try {
+    const params: Record<string, string> = { Body: 'stop', From: '+13855550199' };
+    const sig = (p: Record<string, string>) =>
+      crypto.createHmac('sha1', 'test-token').update(`${config.appUrl}/api/sms/twilio/inbound` + Object.keys(p).sort().map((k) => k + p[k]).join('')).digest('base64');
+    const send = (sg: string) =>
+      app.inject({ method: 'POST', url: '/api/sms/twilio/inbound', payload: new URLSearchParams(params).toString(),
+        headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-twilio-signature': sg } });
+    assert.equal((await send('bogus')).statusCode, 403);
+    assert.equal((await call(c1.session, 'GET', '/api/my/notification-prefs')).json.sms, true);
+    assert.equal((await send(sig(params))).statusCode, 200);
+    assert.equal((await call(c1.session, 'GET', '/api/my/notification-prefs')).json.sms, false);
+  } finally {
+    config.sms.token = '';
+  }
+});

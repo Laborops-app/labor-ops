@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import { withTenant, audit, pool } from '../db';
 import { guard } from '../auth';
+import { sendInvite } from '../notify/tokens';
 
 const createBody = z.object({
   name: z.string().trim().min(1).max(100),
@@ -59,6 +60,7 @@ export async function crewRoutes(app: FastifyInstance) {
         [req.user.tid, body.email, body.name, body.role, hash, body.phone ?? null, body.skills],
       );
       await audit(c, req.user.tid, req.user.sub, 'user.create', 'user', r.rows[0].id, { role: body.role });
+      await sendInvite(c, req.user.tid, r.rows[0]);
       return r.rows[0];
     });
     return reply.code(201).send({ member: row, tempPassword: body.password ? undefined : tempPassword });
@@ -88,6 +90,19 @@ export async function crewRoutes(app: FastifyInstance) {
       };
     });
     return out ?? reply.code(404).send({ error: 'Not found' });
+  });
+
+  // Email someone a fresh link to choose their own password.
+  app.post('/api/crew/:id/invite', { preHandler: guard('admin', 'manager') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const ok = await withTenant(req.user.tid, async (c) => {
+      const u = (await c.query("SELECT id, email, name FROM users WHERE id = $1 AND active AND (role = 'crew' OR $2 = 'admin') AND id <> $3", [id, req.user.role, req.user.sub])).rows[0];
+      if (!u) return false;
+      await sendInvite(c, req.user.tid, u);
+      await audit(c, req.user.tid, req.user.sub, 'user.invite', 'user', id);
+      return true;
+    });
+    return ok ? { ok: true } : reply.code(404).send({ error: 'Not found' });
   });
 
   // Set a new temporary password for someone (they can change it on their profile).

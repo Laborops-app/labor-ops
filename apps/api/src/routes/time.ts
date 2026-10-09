@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { notifyStaff, describeShift } from '../notify';
 import { withTenant, audit } from '../db';
 import { authenticate, guard } from '../auth';
 
@@ -103,7 +104,14 @@ export async function timeRoutes(app: FastifyInstance) {
          RETURNING id, status`,
         [id, req.user.sub, response],
       );
-      if (r.rows[0]) await audit(c, req.user.tid, req.user.sub, `assignment.${response}`, 'assignment', id);
+      if (r.rows[0]) {
+        await audit(c, req.user.tid, req.user.sub, `assignment.${response}`, 'assignment', id);
+        if (response === 'declined') {
+          const sh = (await c.query('SELECT shift_id FROM shift_assignments WHERE id = $1', [id])).rows[0];
+          const d = sh && (await describeShift(c, req.user.tid, sh.shift_id));
+          if (d) await notifyStaff(c, req.user.tid, { category: 'approval_request', title: `${req.user.name} declined ${d.role}`, body: `${req.user.name} declined a shift and may need replacing.\n\n${d.line}`, link: `/events` });
+        }
+      }
       return r.rows[0];
     });
     if (!row) return reply.code(404).send({ error: 'Shift not found, or already worked' });

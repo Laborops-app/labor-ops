@@ -1,3 +1,4 @@
+import { notify, describeShift } from '../notify';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
@@ -130,7 +131,14 @@ export async function eventRoutes(app: FastifyInstance) {
   app.delete('/api/shifts/:id', { preHandler: mgr }, async (req, reply) => {
     const { id: shiftId } = id.parse(req.params);
     const n = await withTenant(req.user.tid, async (c) => {
+      const d = await describeShift(c, req.user.tid, shiftId);
+      const crew = d ? (await c.query("SELECT user_id FROM shift_assignments WHERE shift_id = $1 AND status <> 'declined'", [shiftId])).rows : [];
       const r = await c.query('DELETE FROM shifts WHERE id = $1', [shiftId]);
+      if (r.rowCount && d)
+        await notify(c, req.user.tid, crew.map((x) => ({
+          userId: x.user_id, category: 'shift_change' as const, title: `Shift cancelled: ${d.role}`,
+          body: `${d.line}\n\nThis shift was cancelled.`, link: '/my-shifts', sms: `Shift cancelled: ${d.role}, ${d.event}, ${d.when}.`,
+        })));
       if (r.rowCount) await audit(c, req.user.tid, req.user.sub, 'shift.delete', 'shift', shiftId);
       return r.rowCount;
     });
@@ -189,6 +197,13 @@ export async function eventRoutes(app: FastifyInstance) {
         )
       ).rows[0];
       await audit(c, req.user.tid, req.user.sub, 'assignment.create', 'assignment', a.id, { shiftId, userId });
+      const d = await describeShift(c, req.user.tid, shiftId);
+      if (d)
+        await notify(c, req.user.tid, {
+          userId, category: 'assignment', title: `New shift offered: ${d.role}`,
+          body: `${d.line}\n\nOpen the shift to accept or decline.`,
+          link: `/my-shifts/${a.id}`, sms: `New shift offered: ${d.role}, ${d.event}, ${d.when}. Open the app to accept.`,
+        });
       return { code: 201, assignment: a };
     });
     const { code, ...body } = result as { code: number; [k: string]: unknown };
@@ -198,7 +213,16 @@ export async function eventRoutes(app: FastifyInstance) {
   app.delete('/api/assignments/:id', { preHandler: mgr }, async (req, reply) => {
     const { id: aId } = id.parse(req.params);
     const n = await withTenant(req.user.tid, async (c) => {
+      const prev = (await c.query('SELECT user_id, shift_id FROM shift_assignments WHERE id = $1', [aId])).rows[0];
       const r = await c.query('DELETE FROM shift_assignments WHERE id = $1', [aId]);
+      if (r.rowCount && prev) {
+        const d = await describeShift(c, req.user.tid, prev.shift_id);
+        if (d)
+          await notify(c, req.user.tid, {
+            userId: prev.user_id, category: 'shift_change', title: `Removed from shift: ${d.role}`,
+            body: `${d.line}\n\nYou were removed from this shift.`, link: '/my-shifts', sms: `You were removed from ${d.role}, ${d.event}, ${d.when}.`,
+          });
+      }
       if (r.rowCount) await audit(c, req.user.tid, req.user.sub, 'assignment.delete', 'assignment', aId);
       return r.rowCount;
     });

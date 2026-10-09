@@ -61,6 +61,9 @@ export default function Login() {
           </button>
         </form>
         <p className="muted small center-text">
+          <Link href="/forgot">Forgot your password?</Link>
+        </p>
+        <p className="muted small center-text">
           New company? <Link href="/signup">Create an account</Link>
         </p>
         {demo.enabled && (

@@ -35,6 +35,17 @@ services:
       COOKIE_SECURE: "true"
       SEED_DEMO: ${SEED_DEMO:-false}
       DEMO_PASSWORD: ${DEMO_PASSWORD:-LaborOps-Demo-1}
+      APP_URL: ${APP_URL:-https://${DOMAIN}}
+      # Email (Amazon SES SMTP). Leave unset to run in log-only mode.
+      SES_SMTP_HOST: ${SES_SMTP_HOST:-}
+      SES_SMTP_PORT: ${SES_SMTP_PORT:-587}
+      SES_SMTP_USER: ${SES_SMTP_USER:-}
+      SES_SMTP_PASS: ${SES_SMTP_PASS:-}
+      EMAIL_FROM: ${EMAIL_FROM:-LaborOps <no-reply@laborops.app>}
+      # Text messages (Twilio). Leave unset to run in log-only mode.
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
 
   web:
     build:

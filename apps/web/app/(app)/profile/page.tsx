@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import NotificationSettings from '@/components/NotificationSettings';
 import Shell, { initials } from '@/components/Shell';
 import { Banner } from '@/components/ui';
 import { api, ApiError, roleLabel } from '@/lib/api';
@@ -295,6 +296,8 @@ function Body({ role }: { role: string }) {
           </form>
         </section>
       )}
+
+      <NotificationSettings phone={u?.phone} />
 
       <form className="card" onSubmit={savePassword}>
         <h2>Change password</h2>
