@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
 import { guard } from '../auth';
+import { evaluateShift } from '../eligibility';
 
 const id = z.object({ id: z.string().uuid() });
 const eventBody = z.object({
@@ -16,6 +17,8 @@ const shiftBody = z.object({
   startsAt: z.string().datetime({ offset: true }),
   endsAt: z.string().datetime({ offset: true }),
   headcount: z.number().int().min(1).max(500).default(1),
+  isOpen: z.boolean().default(false),
+  requiredCerts: z.array(z.string().trim().min(1).max(60)).max(10).default([]),
 });
 
 const mgr = guard('admin', 'manager');
@@ -85,7 +88,11 @@ export async function eventRoutes(app: FastifyInstance) {
           [eventId],
         )
       ).rows;
-      return { event: ev, shifts: shifts.map((s) => ({ ...s, assignments: assigns.filter((a) => a.shift_id === s.id) })) };
+      const out = [];
+      for (const s of shifts) {
+        out.push({ ...s, assignments: assigns.filter((a) => a.shift_id === s.id), crew_status: await evaluateShift(c, s.id) });
+      }
+      return { event: ev, shifts: out };
     });
     if (!out) return reply.code(404).send({ error: 'Event not found' });
     return out;
@@ -108,9 +115,9 @@ export async function eventRoutes(app: FastifyInstance) {
     const row = await withTenant(req.user.tid, async (c) => {
       if (!(await c.query('SELECT 1 FROM events WHERE id = $1', [eventId])).rowCount) return null;
       const r = await c.query(
-        `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount)
-         VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-        [req.user.tid, eventId, b.roleName, b.startsAt, b.endsAt, b.headcount],
+        `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+        [req.user.tid, eventId, b.roleName, b.startsAt, b.endsAt, b.headcount, b.isOpen, b.requiredCerts],
       );
       await audit(c, req.user.tid, req.user.sub, 'shift.create', 'shift', r.rows[0].id);
       return r.rows[0];
@@ -132,7 +139,7 @@ export async function eventRoutes(app: FastifyInstance) {
   // Assign crew to a shift. Blocks double-booking and over-filling.
   app.post('/api/shifts/:id/assign', { preHandler: mgr }, async (req, reply) => {
     const { id: shiftId } = id.parse(req.params);
-    const { userId } = z.object({ userId: z.string().uuid() }).parse(req.body);
+    const { userId, override } = z.object({ userId: z.string().uuid(), override: z.boolean().optional() }).parse(req.body);
     const result = await withTenant(req.user.tid, async (c) => {
       const shift = (await c.query('SELECT * FROM shifts WHERE id = $1 FOR UPDATE', [shiftId])).rows[0];
       if (!shift) return { code: 404, error: 'Shift not found' };
@@ -163,6 +170,16 @@ export async function eventRoutes(app: FastifyInstance) {
 
       const dup = await c.query('SELECT 1 FROM shift_assignments WHERE shift_id = $1 AND user_id = $2', [shiftId, userId]);
       if (dup.rowCount) return { code: 409, error: `${user.name} is already on this shift` };
+
+      const [el] = await evaluateShift(c, shiftId, userId);
+      if (el?.missing_certs.length)
+        return { code: 409, error: `${user.name} does not have a valid ${el.missing_certs.join(', ')} certificate for that shift`, reason: 'missing_cert' };
+      if ((el?.time_off || el?.outside_availability) && !override)
+        return {
+          code: 409,
+          error: `${user.name} is ${el.time_off ? 'on time off' : 'outside their weekly availability'} for that shift.`,
+          reason: 'unavailable',
+        };
 
       const a = (
         await c.query(
@@ -197,6 +214,9 @@ export async function eventRoutes(app: FastifyInstance) {
             SELECT count(*) FROM shift_assignments a WHERE a.shift_id = s.id AND a.status <> 'declined'), 0)),0)::int AS n
           FROM shifts s WHERE s.ends_at > now()`),
         pendingApprovals: await one("SELECT count(*)::int AS n FROM time_entries WHERE status = 'submitted'"),
+        pendingRequests: await one(
+          "SELECT ((SELECT count(*) FROM shift_assignments WHERE status = 'pending') + (SELECT count(*) FROM shift_swaps WHERE status = 'pending'))::int AS n",
+        ),
         hoursScheduled: Math.round(
           Number(
             (

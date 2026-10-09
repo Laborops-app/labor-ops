@@ -72,6 +72,17 @@ const NAV: { href: string; label: string; roles: Role[]; icon: React.ReactNode }
     ),
   },
   {
+    href: '/requests',
+    label: 'Requests',
+    roles: ['admin', 'manager'],
+    icon: icon(
+      <>
+        <path d="M22 12h-6l-2 3h-4l-2-3H2" />
+        <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11Z" />
+      </>,
+    ),
+  },
+  {
     href: '/my-shifts',
     label: 'My shifts',
     roles: ['crew'],
@@ -81,6 +92,23 @@ const NAV: { href: string; label: string; roles: Role[]; icon: React.ReactNode }
         <path d="M16 2v4M8 2v4M3 10h18M9 16l2 2 4-4" />
       </>,
     ),
+  },
+  {
+    href: '/open-shifts',
+    label: 'Open shifts',
+    roles: ['crew'],
+    icon: icon(
+      <>
+        <circle cx="12" cy="12" r="9.5" />
+        <path d="M12 8v8M8 12h8" />
+      </>,
+    ),
+  },
+  {
+    href: '/availability',
+    label: 'Availability',
+    roles: ['crew'],
+    icon: icon(<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" />),
   },
 ];
 

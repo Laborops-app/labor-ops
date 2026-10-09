@@ -22,6 +22,7 @@ type Dash = {
   upcomingShifts: number;
   openSlots: number;
   pendingApprovals: number;
+  pendingRequests: number;
   hoursScheduled: number;
   upcoming: Up[];
   clockedIn: { name: string; clock_in: string; role_name: string; event_name: string }[];
@@ -137,6 +138,13 @@ function Body({ name }: { name: string }) {
                     <li>
                       <Link href="/timesheets">
                         {d.pendingApprovals} timesheet{d.pendingApprovals === 1 ? ' is' : 's are'} waiting for approval
+                      </Link>
+                    </li>
+                  )}
+                  {d.pendingRequests > 0 && (
+                    <li>
+                      <Link href="/requests">
+                        {d.pendingRequests} shift request{d.pendingRequests === 1 ? ' needs' : 's need'} your approval
                       </Link>
                     </li>
                   )}

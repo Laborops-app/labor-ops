@@ -25,7 +25,15 @@ const COLS = 'id, name, email, role, phone, skills, active, created_at';
 export async function crewRoutes(app: FastifyInstance) {
   app.get('/api/crew', { preHandler: guard('admin', 'manager') }, async (req) => {
     return withTenant(req.user.tid, async (c) => ({
-      crew: (await c.query(`SELECT ${COLS} FROM users ORDER BY role, name`)).rows,
+      crew: (
+        await c.query(
+          `SELECT ${COLS},
+             COALESCE((SELECT json_agg(json_build_object('id', k.id, 'name', k.name, 'expires_on', k.expires_on::text) ORDER BY k.name)
+                       FROM user_certs k WHERE k.user_id = users.id), '[]'::json) AS certs,
+             EXISTS (SELECT 1 FROM availability a WHERE a.user_id = users.id) AS has_availability
+           FROM users ORDER BY role, name`,
+        )
+      ).rows,
     }));
   });
 

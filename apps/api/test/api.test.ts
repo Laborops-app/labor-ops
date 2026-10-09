@@ -19,7 +19,7 @@ after(async () => {
 
 type Session = { cookie: string; id: string; tid?: string };
 
-async function call(s: Session | null, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, body?: unknown) {
+async function call(s: Session | null, method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', url: string, body?: unknown) {
   const res = await app.inject({
     method,
     url,
@@ -214,4 +214,193 @@ test('time: accept, clock in/out, approve, export CSV', async () => {
   const dash = (await call(a, 'GET', '/api/dashboard')).json;
   assert.equal(dash.pendingApprovals, 0);
   assert.equal(dash.crewCount, 1);
+});
+
+async function mkCrew(a: Session, tag: string) {
+  const m = await call(a, 'POST', '/api/crew', { name: `Crew ${tag}`, email: `${tag}-${run}@test.example`, password: 'password123' });
+  assert.equal(m.status, 201, m.text);
+  return { id: m.json.member.id as string, session: await login(`${tag}-${run}@test.example`, 'password123') };
+}
+async function mkEvent(a: Session) {
+  return (await call(a, 'POST', '/api/events', { name: 'Show', startDate: '2030-01-01', endDate: '2030-01-02' })).json.event.id as string;
+}
+
+test('certificates: required certs are enforced (missing, expired, valid)', async () => {
+  const a = await register('certs');
+  const c1 = await mkCrew(a, 'cert1');
+  const ev = await mkEvent(a);
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Fork', startsAt: start(30), endsAt: start(36), headcount: 2, requiredCerts: ['Forklift'] })).json.shift.id;
+
+  const missing = await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id });
+  assert.equal(missing.status, 409);
+  assert.equal(missing.json.reason, 'missing_cert');
+  // the manager's view marks them ineligible
+  const detail = await call(a, 'GET', `/api/events/${ev}`);
+  assert.deepEqual(detail.json.shifts[0].crew_status[0].missing_certs, ['Forklift']);
+
+  // an expired cert does not count
+  assert.equal((await call(a, 'POST', `/api/crew/${c1.id}/certs`, { name: 'forklift', expiresOn: '2020-01-01' })).status, 201);
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id })).status, 409);
+  // renewing it (same name, case-insensitive) fixes it
+  assert.equal((await call(a, 'POST', `/api/crew/${c1.id}/certs`, { name: 'Forklift', expiresOn: '2099-01-01' })).status, 201);
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id })).status, 201);
+  // crew cannot manage certs
+  assert.equal((await call(c1.session, 'POST', `/api/crew/${c1.id}/certs`, { name: 'Self-made' })).status, 403);
+});
+
+test('availability: outside weekly availability needs a manager override; time off counts too', async () => {
+  const a = await register('avail');
+  const c1 = await mkCrew(a, 'av1');
+  const ev = await mkEvent(a);
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'A', startsAt: start(30), endsAt: start(36), headcount: 3 })).json.shift.id;
+  // no availability set = always available
+  const fine = await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: (await mkCrew(a, 'av0')).id });
+  assert.equal(fine.status, 201);
+  // only 00:00-00:30 every day: a six hour shift can never fit
+  const windows = [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({ weekday, startTime: '00:00', endTime: '00:30' }));
+  assert.equal((await call(c1.session, 'PUT', '/api/my/availability', { windows })).status, 200);
+  assert.equal((await call(c1.session, 'PUT', '/api/my/availability', { windows: [{ weekday: 1, startTime: '10:00', endTime: '09:00' }] })).status, 400);
+  const blocked = await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id });
+  assert.equal(blocked.status, 409);
+  assert.equal(blocked.json.reason, 'unavailable');
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, override: true })).status, 201);
+
+  // time off
+  const c2 = await mkCrew(a, 'av2');
+  const sh2 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'B', startsAt: start(100), endsAt: start(104), headcount: 1 })).json.shift.id;
+  const day = (h: number) => new Date(Date.now() + h * 3600_000).toISOString().slice(0, 10);
+  assert.equal((await call(c2.session, 'POST', '/api/my/time-off', { startsOn: day(90), endsOn: day(110) })).status, 201);
+  const off = await call(a, 'POST', `/api/shifts/${sh2}/assign`, { userId: c2.id });
+  assert.equal(off.status, 409);
+  assert.equal(off.json.reason, 'unavailable');
+  const mine = await call(c2.session, 'GET', '/api/my/availability');
+  assert.equal(mine.json.timeOff.length, 1);
+  assert.equal((await call(c2.session, 'DELETE', `/api/my/time-off/${mine.json.timeOff[0].id}`)).status, 200);
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh2}/assign`, { userId: c2.id })).status, 201);
+});
+
+test('open shifts: claim, hold the slot, manager approves or rejects', async () => {
+  const a = await register('claim');
+  const [c1, c2, c3] = [await mkCrew(a, 'cl1'), await mkCrew(a, 'cl2'), await mkCrew(a, 'cl3')];
+  const ev = await mkEvent(a);
+  const closed = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Closed', startsAt: start(40), endsAt: start(44), headcount: 1 })).json.shift.id;
+  const open = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Open', startsAt: start(50), endsAt: start(54), headcount: 1, isOpen: true })).json.shift.id;
+  const gated = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Gated', startsAt: start(60), endsAt: start(64), headcount: 1, isOpen: true, requiredCerts: ['Rigging'] })).json.shift.id;
+
+  // only open shifts are listed; the gated one is visible but not claimable
+  const list = await call(c1.session, 'GET', '/api/open-shifts');
+  assert.deepEqual(list.json.shifts.map((s: any) => s.role_name), ['Open', 'Gated']);
+  assert.equal(list.json.shifts[1].can_claim, false);
+  assert.match(list.json.shifts[1].reason, /Rigging/);
+  assert.equal((await call(c1.session, 'POST', `/api/shifts/${closed}/claim`)).status, 404);
+  assert.equal((await call(c1.session, 'POST', `/api/shifts/${gated}/claim`)).status, 409);
+
+  const claim = await call(c1.session, 'POST', `/api/shifts/${open}/claim`);
+  assert.equal(claim.status, 201, claim.text);
+  // the pending claim holds the slot, so a second person is turned away
+  assert.equal((await call(c2.session, 'POST', `/api/shifts/${open}/claim`)).status, 409);
+  assert.equal((await call(c1.session, 'POST', `/api/shifts/${open}/claim`)).status, 409);
+  // a pending claim cannot be used to clock in
+  assert.equal((await call(c1.session, 'POST', '/api/time/clock-in', { assignmentId: claim.json.assignmentId })).status, 404);
+
+  const reqs = await call(a, 'GET', '/api/requests');
+  assert.equal(reqs.json.claims.length, 1);
+  assert.equal(reqs.json.claims[0].user_name, 'Crew cl1');
+  // crew cannot approve their own claim
+  assert.equal((await call(c1.session, 'POST', `/api/assignments/${claim.json.assignmentId}/approve`)).status, 403);
+  assert.equal((await call(a, 'POST', `/api/assignments/${claim.json.assignmentId}/approve`)).status, 200);
+  assert.equal((await call(a, 'POST', `/api/assignments/${claim.json.assignmentId}/approve`)).status, 404);
+  const mine = await call(c1.session, 'GET', '/api/my/shifts');
+  assert.equal(mine.json.shifts.find((s: any) => s.role_name === 'Open').status, 'accepted');
+
+  // rejecting frees the slot
+  const open2 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Open2', startsAt: start(70), endsAt: start(74), headcount: 1, isOpen: true })).json.shift.id;
+  const claim3 = await call(c3.session, 'POST', `/api/shifts/${open2}/claim`);
+  assert.equal(claim3.status, 201);
+  assert.equal((await call(a, 'POST', `/api/assignments/${claim3.json.assignmentId}/reject`)).status, 200);
+  assert.equal((await call(c2.session, 'POST', `/api/shifts/${open2}/claim`)).status, 201);
+  // toggling a shift closed removes it from the list
+  assert.equal((await call(a, 'PATCH', `/api/shifts/${open2}`, { isOpen: false })).status, 200);
+  assert.equal((await call(c1.session, 'GET', '/api/open-shifts')).json.shifts.some((s: any) => s.role_name === 'Open2'), false);
+});
+
+test('swaps: offer, take, manager approval moves the shift; clashes and certs block taking', async () => {
+  const a = await register('swap');
+  const [c1, c2, c3] = [await mkCrew(a, 'sw1'), await mkCrew(a, 'sw2'), await mkCrew(a, 'sw3')];
+  const ev = await mkEvent(a);
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Swap me', startsAt: start(50), endsAt: start(56), headcount: 1 })).json.shift.id;
+  const asg = (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id })).json.assignment.id;
+
+  // only an accepted assignment can be offered
+  assert.equal((await call(c1.session, 'POST', `/api/assignments/${asg}/offer-swap`)).status, 404);
+  assert.equal((await call(c1.session, 'POST', `/api/assignments/${asg}/respond`, { response: 'accepted' })).status, 200);
+  assert.equal((await call(c2.session, 'POST', `/api/assignments/${asg}/offer-swap`)).status, 404);
+  const offer = await call(c1.session, 'POST', `/api/assignments/${asg}/offer-swap`);
+  assert.equal(offer.status, 201, offer.text);
+  assert.equal((await call(c1.session, 'POST', `/api/assignments/${asg}/offer-swap`)).status, 409);
+  assert.equal((await call(c1.session, 'GET', '/api/my/shifts')).json.shifts[0].swap_status, 'open');
+
+  // c3 is busy at that time, so cannot take it
+  const other = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Busy', startsAt: start(52), endsAt: start(54), headcount: 1 })).json.shift.id;
+  assert.equal((await call(a, 'POST', `/api/shifts/${other}/assign`, { userId: c3.id })).status, 201);
+  const board3 = await call(c3.session, 'GET', '/api/swaps/board');
+  assert.equal(board3.json.swaps[0].can_take, false);
+  assert.equal((await call(c3.session, 'POST', `/api/swaps/${offer.json.swapId}/take`)).status, 409);
+  // you can't take your own offer
+  assert.equal((await call(c1.session, 'POST', `/api/swaps/${offer.json.swapId}/take`)).status, 409);
+
+  const board = await call(c2.session, 'GET', '/api/swaps/board');
+  assert.equal(board.json.swaps.length, 1);
+  assert.equal(board.json.swaps[0].can_take, true);
+  assert.equal((await call(c2.session, 'POST', `/api/swaps/${offer.json.swapId}/take`)).status, 200);
+  // now it needs a manager
+  assert.equal((await call(c2.session, 'GET', '/api/swaps/board')).json.swaps.length, 0);
+  const reqs = await call(a, 'GET', '/api/requests');
+  assert.equal(reqs.json.swaps.length, 1);
+  assert.equal(reqs.json.swaps[0].taken_by_name, 'Crew sw2');
+  assert.equal((await call(c2.session, 'POST', `/api/swaps/${offer.json.swapId}/approve`)).status, 403);
+  assert.equal((await call(a, 'POST', `/api/swaps/${offer.json.swapId}/approve`)).status, 200);
+
+  // the shift moved from c1 to c2, accepted
+  assert.equal((await call(c1.session, 'GET', '/api/my/shifts')).json.shifts.some((s: any) => s.role_name === 'Swap me'), false);
+  const m2 = (await call(c2.session, 'GET', '/api/my/shifts')).json.shifts.find((s: any) => s.role_name === 'Swap me');
+  assert.equal(m2.status, 'accepted');
+
+  // cancel and reject paths
+  const offer2 = await call(c2.session, 'POST', `/api/assignments/${m2.assignment_id}/offer-swap`);
+  assert.equal((await call(c1.session, 'POST', `/api/swaps/${offer2.json.swapId}/take`)).status, 200);
+  assert.equal((await call(a, 'POST', `/api/swaps/${offer2.json.swapId}/reject`)).status, 200);
+  assert.equal((await call(c1.session, 'GET', '/api/swaps/board')).json.swaps.length, 1); // back on the board
+  assert.equal((await call(c2.session, 'POST', `/api/swaps/${offer2.json.swapId}/cancel`)).status, 200);
+  assert.equal((await call(c1.session, 'GET', '/api/swaps/board')).json.swaps.length, 0);
+});
+
+test('recurring shifts and templates: bulk create, validation, template CRUD', async () => {
+  const a = await register('bulk');
+  const ev = await mkEvent(a);
+  const days = [0, 1, 2, 3, 4, 5, 6].map((d) => ({ roleName: 'Stagehand', startsAt: start(24 * (d + 1)), endsAt: start(24 * (d + 1) + 8), headcount: 2, isOpen: d % 2 === 0, requiredCerts: ['Rigging'] }));
+  const r = await call(a, 'POST', `/api/events/${ev}/shifts/bulk`, { shifts: days });
+  assert.equal(r.status, 201);
+  assert.equal(r.json.created, 7);
+  const detail = await call(a, 'GET', `/api/events/${ev}`);
+  assert.equal(detail.json.shifts.length, 7);
+  assert.equal(detail.json.shifts[0].is_open, true);
+  assert.deepEqual(detail.json.shifts[0].required_certs, ['Rigging']);
+
+  // all-or-nothing validation
+  const bad = await call(a, 'POST', `/api/events/${ev}/shifts/bulk`, { shifts: [days[0], { ...days[1], endsAt: days[1].startsAt }] });
+  assert.equal(bad.status, 400);
+  assert.equal((await call(a, 'GET', `/api/events/${ev}`)).json.shifts.length, 7);
+  assert.equal((await call(a, 'POST', `/api/events/${ev}/shifts/bulk`, { shifts: [] })).status, 400);
+  assert.equal((await call(a, 'POST', `/api/events/${ev}/shifts/bulk`, { shifts: Array(121).fill(days[0]) })).status, 400);
+
+  const t = await call(a, 'POST', '/api/templates', { name: 'Std day', items: [{ role: 'Load-in', dayOffset: 0, start: '08:00', end: '16:00', headcount: 4 }, { role: 'Show', dayOffset: 1, start: '18:00', end: '23:30', headcount: 2, isOpen: true }] });
+  assert.equal(t.status, 201, t.text);
+  assert.equal((await call(a, 'POST', '/api/templates', { name: 'Bad', items: [{ role: 'X', dayOffset: 0, start: '8am', end: '16:00', headcount: 1 }] })).status, 400);
+  assert.equal((await call(a, 'GET', '/api/templates')).json.templates.length, 1);
+  // templates are per company
+  const other = await register('bulk2');
+  assert.equal((await call(other, 'GET', '/api/templates')).json.templates.length, 0);
+  assert.equal((await call(other, 'DELETE', `/api/templates/${t.json.template.id}`)).status, 404);
+  assert.equal((await call(a, 'DELETE', `/api/templates/${t.json.template.id}`)).status, 200);
 });

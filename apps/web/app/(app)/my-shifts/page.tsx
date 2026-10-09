@@ -14,6 +14,9 @@ type MyShift = {
   venue: string | null;
   clocked_in: boolean;
   can_clock_in: boolean;
+  swap_status: string | null;
+  swap_id: string | null;
+  can_offer_swap: boolean;
 };
 type Entry = { id: string; status: string; clock_in: string; clock_out: string | null; hours: number; event_name: string; role_name: string };
 
@@ -90,6 +93,20 @@ function Body() {
               {s.status === 'accepted' && !s.clocked_in && s.can_clock_in && (
                 <button className="btn primary big" disabled={!!busy || !!clockedIn} onClick={() => act(s.assignment_id, () => api('/api/time/clock-in', { body: { assignmentId: s.assignment_id } }))}>
                   Clock in
+                </button>
+              )}
+              {s.status === 'pending' && <span className="muted small">Waiting for manager approval.</span>}
+              {s.swap_status && s.swap_id && (
+                <>
+                  <span className="muted small">{s.swap_status === 'pending' ? 'Swap awaiting approval.' : 'Offered for swap.'}</span>
+                  <button className="btn ghost small" disabled={!!busy} onClick={() => act(s.assignment_id, () => api(`/api/swaps/${s.swap_id}/cancel`, { body: {} }))}>
+                    Cancel swap
+                  </button>
+                </>
+              )}
+              {!s.swap_status && s.can_offer_swap && !s.clocked_in && (
+                <button className="btn ghost small" disabled={!!busy} onClick={() => act(s.assignment_id, () => api(`/api/assignments/${s.assignment_id}/offer-swap`, { body: {} }))}>
+                  Offer for swap
                 </button>
               )}
               {s.clocked_in && (

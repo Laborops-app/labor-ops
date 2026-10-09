@@ -29,7 +29,7 @@ export async function authRoutes(app: FastifyInstance) {
       maxAge: 12 * 3600,
     });
   };
-  const limit = { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } };
+  const limit = { config: { rateLimit: { max: Number(process.env.AUTH_RATE_MAX ?? 10), timeWindow: '1 minute' } } };
 
   app.post('/api/auth/register', limit, async (req, reply) => {
     const body = registerBody.parse(req.body);

@@ -33,6 +33,9 @@ export async function timeRoutes(app: FastifyInstance) {
         await c.query(
           `SELECT a.id AS assignment_id, a.status, s.role_name, s.starts_at, s.ends_at,
              e.name AS event_name, e.venue,
+             (SELECT w.status FROM shift_swaps w WHERE w.assignment_id = a.id AND w.status IN ('open','pending') LIMIT 1) AS swap_status,
+             (SELECT w.id FROM shift_swaps w WHERE w.assignment_id = a.id AND w.status IN ('open','pending') LIMIT 1) AS swap_id,
+             (a.status = 'accepted' AND s.starts_at > now() AND NOT EXISTS (SELECT 1 FROM time_entries t WHERE t.assignment_id = a.id)) AS can_offer_swap,
              EXISTS (SELECT 1 FROM time_entries t WHERE t.assignment_id = a.id AND t.clock_out IS NULL) AS clocked_in,
              (a.status = 'accepted' AND now() BETWEEN s.starts_at - interval '1 hour' AND s.ends_at + interval '2 hours') AS can_clock_in
            FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
