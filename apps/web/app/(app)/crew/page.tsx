@@ -4,6 +4,7 @@ import { Fragment, useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, Me, roleLabel } from '@/lib/api';
+import SkillPicker, { useSkillNames } from '@/components/SkillPicker';
 
 type Cert = { id: string; name: string; expires_on: string | null; verified: boolean; has_file: boolean };
 type Member = { id: string; name: string; email: string; role: string; phone: string | null; skills: string[]; active: boolean; certs: Cert[]; has_availability: boolean };
@@ -20,7 +21,8 @@ function Body({ me }: { me: Me }) {
   const [list, setList] = useState<Member[] | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [f, setF] = useState({ name: '', email: '', phone: '', skills: '', role: 'crew' });
+  const [f, setF] = useState({ name: '', email: '', phone: '', skills: [] as string[], role: 'crew' });
+  const skillNames = useSkillNames();
   const [open, setOpen] = useState<string | null>(null);
   const [cf, setCf] = useState({ name: '', expiresOn: '' });
 
@@ -43,11 +45,11 @@ function Body({ me }: { me: Me }) {
           email: f.email,
           phone: f.phone || null,
           role: f.role,
-          skills: f.skills.split(',').map((s) => s.trim()).filter(Boolean),
+          skills: f.skills,
         },
       });
       setNotice(`Added ${r.member.name}. Temporary password: ${r.tempPassword} — share it with them now, it is not shown again.`);
-      setF({ name: '', email: '', phone: '', skills: '', role: 'crew' });
+      setF({ name: '', email: '', phone: '', skills: [], role: 'crew' });
       load();
     } catch (err) {
       setError((err as Error).message);
@@ -119,8 +121,8 @@ function Body({ me }: { me: Me }) {
             <input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} />
           </label>
           <label>
-            Skills <span className="muted small">(comma separated)</span>
-            <input value={f.skills} onChange={(e) => setF({ ...f, skills: e.target.value })} placeholder="Audio, Rigging" />
+            Skills
+            <SkillPicker value={f.skills} onChange={(skills) => setF({ ...f, skills })} options={skillNames} />
           </label>
           {me.role === 'admin' && (
             <label>

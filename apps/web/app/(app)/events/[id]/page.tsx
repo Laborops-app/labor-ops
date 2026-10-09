@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { api, fmtDate, fmtDateTime, fmtTime } from '@/lib/api';
+import { useSkillNames } from '@/components/SkillPicker';
 
 type Assignment = { id: string; user_id: string; user_name: string; status: string };
 type Elig = { user_id: string; missing_certs: string[]; time_off: boolean; outside_availability: boolean };
@@ -69,6 +70,8 @@ function Body() {
       until: '',
     };
   });
+  const skillNames = useSkillNames();
+  const [otherRole, setOtherRole] = useState(false);
   const [tplId, setTplId] = useState('');
   const [tplStart, setTplStart] = useState('');
   const [tplName, setTplName] = useState('');
@@ -212,7 +215,28 @@ function Body() {
         <form className="grid-form" onSubmit={addShift}>
           <label>
             Role
-            <input value={f.roleName} onChange={(e) => setF({ ...f, roleName: e.target.value })} placeholder="Audio Tech" required />
+            {skillNames.length > 0 && !otherRole ? (
+              <select
+                value={f.roleName}
+                required
+                onChange={(e) => {
+                  if (e.target.value === '__other') {
+                    setOtherRole(true);
+                    setF({ ...f, roleName: '' });
+                  } else setF({ ...f, roleName: e.target.value });
+                }}
+              >
+                <option value="">Choose a role…</option>
+                {skillNames.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+                <option value="__other">Other (type a name)…</option>
+              </select>
+            ) : (
+              <input value={f.roleName} onChange={(e) => setF({ ...f, roleName: e.target.value })} placeholder="Audio Tech" required />
+            )}
           </label>
           <label>
             Starts

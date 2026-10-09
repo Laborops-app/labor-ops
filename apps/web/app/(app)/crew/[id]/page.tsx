@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import Shell, { initials } from '@/components/Shell';
 import { Banner } from '@/components/ui';
 import { api, ApiError, roleLabel } from '@/lib/api';
+import SkillPicker, { useSkillNames } from '@/components/SkillPicker';
 
 type Member = {
   id: string;
@@ -53,7 +54,8 @@ async function upload(certId: string, file: File) {
 function Body() {
   const { id } = useParams<{ id: string }>();
   const [d, setD] = useState<Detail | null>(null);
-  const [f, setF] = useState({ name: '', email: '', phone: '', address: '', emergencyName: '', emergencyPhone: '', bio: '', coordinatorNotes: '', skills: '' });
+  const [f, setF] = useState({ name: '', email: '', phone: '', address: '', emergencyName: '', emergencyPhone: '', bio: '', coordinatorNotes: '', skills: [] as string[] });
+  const skillNames = useSkillNames();
   const [cf, setCf] = useState<{ name: string; expiresOn: string; file: File | null }>({ name: '', expiresOn: '', file: null });
   const [error, setError] = useState('');
   const [ok, setOk] = useState('');
@@ -76,7 +78,7 @@ function Body() {
         emergencyPhone: m.emergency_phone ?? '',
         bio: m.bio ?? '',
         coordinatorNotes: m.coordinator_notes ?? '',
-        skills: m.skills.join(', '),
+        skills: m.skills,
       });
     } catch (e) {
       setError((e as Error).message);
@@ -112,7 +114,7 @@ function Body() {
     act('save', 'Saved.', () =>
       api(`/api/crew/${id}`, {
         method: 'PATCH',
-        body: { ...f, skills: f.skills.split(',').map((x) => x.trim()).filter(Boolean) },
+        body: f,
       }),
     );
   };
@@ -187,8 +189,8 @@ function Body() {
             <input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} maxLength={300} />
           </label>
           <label style={{ gridColumn: '1 / -1' }}>
-            Skills <span className="muted small">(comma separated)</span>
-            <input value={f.skills} onChange={(e) => setF({ ...f, skills: e.target.value })} placeholder="Audio, Rigging, Forklift" />
+            Skills
+            <SkillPicker value={f.skills} onChange={(skills) => setF({ ...f, skills })} options={skillNames} />
           </label>
           <label style={{ gridColumn: '1 / -1' }}>
             About <span className="muted small">(what the person wrote about themselves)</span>

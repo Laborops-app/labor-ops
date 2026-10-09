@@ -541,3 +541,55 @@ test('labor coordinator can view and edit a crew member profile, certs and passw
   const denied = await app.inject({ method: 'PUT', url: `/api/certs/${cert.id}/file`, payload: Buffer.from('%PDF-1.4 x'), headers: { cookie: c2.session.cookie, 'content-type': 'application/pdf' } });
   assert.equal(denied.statusCode, 403);
 });
+
+test('skills and pay rates: admin manages them, coordinators and crew only see names, export shows pay to admins', async () => {
+  const a = await register('skills');
+  const coord = await mkCrew(a, 'sk0'); // placeholder crew to test crew visibility
+  const mgrRes = await call(a, 'POST', '/api/crew', { name: 'Coord', email: `coord-sk-${run}@test.example`, password: 'password123', role: 'manager' });
+  assert.equal(mgrRes.status, 201, mgrRes.text);
+  const mgr = await login(`coord-sk-${run}@test.example`, 'password123');
+
+  const s1 = await call(a, 'POST', '/api/skills', { name: 'Audio Tech', payRate: 28.5 });
+  assert.equal(s1.status, 201, s1.text);
+  assert.equal(s1.json.skill.payRate, 28.5);
+  assert.equal((await call(a, 'POST', '/api/skills', { name: 'audio tech', payRate: 1 })).status, 409);
+  assert.equal((await call(a, 'POST', '/api/skills', { name: 'Rigger', payRate: 22.35 })).status, 201);
+  assert.equal((await call(a, 'POST', '/api/skills', { name: 'Bad', payRate: -1 })).status, 400);
+
+  // only admins can change; names are visible to others without rates
+  assert.equal((await call(mgr, 'POST', '/api/skills', { name: 'Nope', payRate: 1 })).status, 403);
+  assert.equal((await call(coord.session, 'PATCH', `/api/skills/${s1.json.skill.id}`, { payRate: 99 })).status, 403);
+  const seenByMgr = (await call(mgr, 'GET', '/api/skills')).json.skills;
+  assert.deepEqual(seenByMgr.map((x: any) => x.name), ['Audio Tech', 'Rigger']);
+  assert.equal(seenByMgr[0].payRate, undefined);
+  assert.equal((await call(a, 'GET', '/api/skills')).json.skills[0].payRate, 28.5);
+
+  // rename carries over to people; deactivated skills leave the drop-downs
+  await call(a, 'PATCH', `/api/crew/${coord.id}`, { skills: ['Audio Tech'] });
+  await call(a, 'PATCH', `/api/skills/${s1.json.skill.id}`, { name: 'Audio Engineer', payRate: 30 });
+  assert.deepEqual((await call(a, 'GET', `/api/crew/${coord.id}`)).json.member.skills, ['Audio Engineer']);
+  const rig = (await call(a, 'GET', '/api/skills')).json.skills.find((x: any) => x.name === 'Rigger');
+  await call(a, 'PATCH', `/api/skills/${rig.id}`, { active: false });
+  assert.deepEqual((await call(coord.session, 'GET', '/api/skills')).json.skills.map((x: any) => x.name), ['Audio Engineer']);
+  assert.equal((await call(a, 'GET', '/api/skills')).json.skills.length, 2);
+
+  // isolation: another company sees none of it
+  const b = await register('skills-b');
+  assert.deepEqual((await call(b, 'GET', '/api/skills')).json.skills, []);
+  assert.equal((await call(b, 'DELETE', `/api/skills/${rig.id}`)).status, 404);
+  assert.equal((await call(a, 'DELETE', `/api/skills/${rig.id}`)).status, 200);
+
+  // timesheet export: pay columns for admins only
+  const ev = await mkEvent(a);
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Audio Engineer (Show)', startsAt: start(-3), endsAt: start(5), headcount: 1 })).json.shift.id;
+  const asg = (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: coord.id })).json.assignment.id;
+  await call(coord.session, 'POST', `/api/assignments/${asg}/respond`, { response: 'accepted' });
+  await call(coord.session, 'POST', '/api/time/clock-in', { assignmentId: asg });
+  await call(coord.session, 'POST', '/api/time/clock-out', {});
+  const entry = (await call(a, 'GET', '/api/timesheets?status=submitted')).json.entries[0];
+  await call(a, 'POST', `/api/timesheets/${entry.id}/approve`);
+  const adminCsv = (await call(a, 'GET', '/api/timesheets/export.csv')).text.split('\r\n');
+  assert.match(adminCsv[0], /Hourly rate,Pay$/);
+  assert.match(adminCsv[1], /,30,0\.00$/);
+  assert.doesNotMatch((await call(mgr, 'GET', '/api/timesheets/export.csv')).text.split('\r\n')[0], /rate/i);
+});

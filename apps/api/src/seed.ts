@@ -18,6 +18,7 @@ export async function seedDemo(): Promise<void> {
     await withTenant(tid, async (c) => {
       await seedScheduling(c, tid);
       await seedAddresses(c);
+      await seedSkills(c, tid);
     });
     return;
   }
@@ -100,6 +101,7 @@ export async function seedDemo(): Promise<void> {
 
     await seedScheduling(c, tenantId);
     await seedAddresses(c);
+    await seedSkills(c, tenantId);
     await audit(c, tenantId, admin, 'tenant.seed', 'tenant', tenantId);
   });
   console.log('demo data created (admin@demo.laborops.app, manager@..., crew1@... through crew5@...)');
@@ -113,6 +115,21 @@ const DEMO_ADDRESSES: Record<string, string> = {
 async function seedAddresses(c: import('pg').PoolClient): Promise<void> {
   for (const [name, addr] of Object.entries(DEMO_ADDRESSES))
     await c.query('UPDATE events SET address = $2 WHERE name = $1 AND address IS NULL', [name, addr]);
+}
+
+const DEMO_SKILLS: [string, number][] = [
+  ['Audio Tech', 28], ['Camera Operator', 32], ['Forklift Operator', 26], ['Lighting Tech', 30], ['Loader', 20],
+  ['Rigger', 38], ['Runner', 18], ['Security', 24], ['Stagehand', 22],
+];
+const DEMO_CREW_SKILLS: Record<string, string[]> = {
+  crew1: ['Audio Tech', 'Stagehand'], crew2: ['Lighting Tech', 'Rigger'], crew3: ['Camera Operator'],
+  crew4: ['Stagehand', 'Forklift Operator'], crew5: ['Security', 'Runner'],
+};
+/** Sample skills and pay rates, once. */
+async function seedSkills(c: import('pg').PoolClient, tenantId: string): Promise<void> {
+  if ((await c.query('SELECT 1 FROM skills LIMIT 1')).rowCount) return;
+  for (const [name, rate] of DEMO_SKILLS) await c.query('INSERT INTO skills (tenant_id, name, pay_rate) VALUES ($1,$2,$3)', [tenantId, name, rate]);
+  for (const [k, list] of Object.entries(DEMO_CREW_SKILLS)) await c.query('UPDATE users SET skills = $2 WHERE lower(email) = $1', [`${k}@demo.laborops.app`, list]);
 }
 
 /** Sample certificates, availability, an open shift with a pending claim, a swap offer and a template. Runs once. */

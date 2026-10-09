@@ -189,7 +189,16 @@ export async function timeRoutes(app: FastifyInstance) {
       await audit(c, req.user.tid, req.user.sub, 'export.timesheets', 'time_entry', null, { rows: r.length });
       return r;
     });
-    const head = ['Employee', 'Email', 'Event', 'Role', 'Clock in (UTC)', 'Clock out (UTC)', 'Hours', 'Approved by'];
+    // Pay columns are for admins only. The rate comes from the Roles & rates list, matching the shift role
+    // name (ignoring a trailing "(Show)" style note).
+    const isAdmin = req.user.role === 'admin';
+    const rates = isAdmin
+      ? new Map<string, number>(
+          (await withTenant(req.user.tid, (c) => c.query('SELECT lower(name) AS n, pay_rate FROM skills'))).rows.map((r: any) => [r.n as string, Number(r.pay_rate)]),
+        )
+      : new Map<string, number>();
+    const rateFor = (role: string) => rates.get(role.replace(/\s*\(.*\)\s*$/, '').trim().toLowerCase());
+    const head = ['Employee', 'Email', 'Event', 'Role', 'Clock in (UTC)', 'Clock out (UTC)', 'Hours', 'Approved by', ...(isAdmin ? ['Hourly rate', 'Pay'] : [])];
     const lines = [head.join(',')].concat(
       rows.map((r) =>
         [
@@ -201,6 +210,7 @@ export async function timeRoutes(app: FastifyInstance) {
           r.clock_out?.toISOString(),
           r.hours,
           r.approved_by_name,
+          ...(isAdmin ? [rateFor(r.role_name) ?? '', rateFor(r.role_name) === undefined ? '' : (Math.round(Number(r.hours) * rateFor(r.role_name)! * 100) / 100).toFixed(2)] : []),
         ]
           .map(csvCell)
           .join(','),
