@@ -1,0 +1,96 @@
+name: CI and deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: API tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: laborops
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_ADMIN_URL: postgres://postgres:postgres@localhost:5432/laborops
+      DATABASE_URL: postgres://laborops_app:laborops_app@localhost:5432/laborops
+      APP_DB_PASSWORD: laborops_app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npx tsc --noEmit -p apps/api
+      - run: npm test
+
+  web:
+    name: Web build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run build -w apps/web
+
+  deploy:
+    name: Deploy to demo server
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [api, web]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-demo
+      cancel-in-progress: false
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check deploy settings
+        id: cfg
+        run: |
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_SSH_KEY" ]; then
+            echo "Deploy secrets are not set yet - skipping deploy."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Prepare SSH
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+      - name: Copy code to the server
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          rsync -az --delete \
+            --exclude '.git' --exclude 'node_modules' --exclude '.next' --exclude 'dist' --exclude '.env' \
+            -e "ssh -i ~/.ssh/deploy_key" ./ "${DEPLOY_USER:-ubuntu}@$DEPLOY_HOST:/opt/laborops/"
+      - name: Build and restart
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          ssh -i ~/.ssh/deploy_key "${DEPLOY_USER:-ubuntu}@$DEPLOY_HOST" \
+            'cd /opt/laborops && docker compose up -d --build --remove-orphans && docker image prune -f'
+      - name: Health check
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS https://demo.laborops.app/api/health; then echo; echo "Healthy"; exit 0; fi
+            echo "waiting for the site ($i/30)..."; sleep 10
+          done
+          echo "Site did not become healthy"; exit 1

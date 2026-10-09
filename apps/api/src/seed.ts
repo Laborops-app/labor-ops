@@ -1,0 +1,119 @@
+import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
+import { config } from './config';
+import { pool, withTenant, audit } from './db';
+import { Client } from 'pg';
+import { migrateWithRetry } from './migrate';
+
+const DEMO_SLUG = 'demo-productions';
+const hoursFromNow = (h: number) => new Date(Date.now() + h * 3600_000).toISOString();
+const dateOnly = (offsetDays: number) => new Date(Date.now() + offsetDays * 86400_000).toISOString().slice(0, 10);
+
+/** Creates a sample company so the demo is not an empty screen. Safe to run repeatedly. */
+export async function seedDemo(): Promise<void> {
+  const found = await pool.query('SELECT 1 FROM auth_find_user($1)', ['admin@demo.laborops.app']);
+  if (found.rowCount) return;
+
+  const tenantId = crypto.randomUUID();
+  const hash = await bcrypt.hash(config.demoPassword, 10);
+  const id = () => crypto.randomUUID();
+
+  await withTenant(tenantId, async (c) => {
+    await c.query('INSERT INTO tenants (id, name, slug) VALUES ($1,$2,$3)', [tenantId, 'Demo Productions', DEMO_SLUG]);
+    const addUser = async (email: string, name: string, role: string, skills: string[] = [], phone?: string) => {
+      const uid = id();
+      await c.query(
+        'INSERT INTO users (id, tenant_id, email, name, role, password_hash, skills, phone) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+        [uid, tenantId, email, name, role, hash, skills, phone ?? null],
+      );
+      return uid;
+    };
+    const admin = await addUser('admin@demo.laborops.app', 'Alex Admin', 'admin');
+    const manager = await addUser('manager@demo.laborops.app', 'Morgan Manager', 'manager');
+    const crew = [
+      await addUser('crew1@demo.laborops.app', 'Jordan Rivera', 'crew', ['Audio', 'Stage'], '555-0101'),
+      await addUser('crew2@demo.laborops.app', 'Sam Okafor', 'crew', ['Lighting', 'Rigging'], '555-0102'),
+      await addUser('crew3@demo.laborops.app', 'Taylor Nguyen', 'crew', ['Video', 'Camera'], '555-0103'),
+      await addUser('crew4@demo.laborops.app', 'Casey Brooks', 'crew', ['Stage', 'Forklift'], '555-0104'),
+      await addUser('crew5@demo.laborops.app', 'Riley Chen', 'crew', ['Security'], '555-0105'),
+    ];
+
+    const addEvent = async (name: string, venue: string, s: number, e: number) => {
+      const eid = id();
+      await c.query(
+        'INSERT INTO events (id, tenant_id, name, venue, start_date, end_date, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+        [eid, tenantId, name, venue, dateOnly(s), dateOnly(e), manager],
+      );
+      return eid;
+    };
+    const addShift = async (eid: string, role: string, startH: number, endH: number, headcount: number) => {
+      const sid = id();
+      await c.query(
+        'INSERT INTO shifts (id, tenant_id, event_id, role_name, starts_at, ends_at, headcount) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+        [sid, tenantId, eid, role, hoursFromNow(startH), hoursFromNow(endH), headcount],
+      );
+      return sid;
+    };
+    const assign = async (sid: string, uid: string, status: string) => {
+      const aid = id();
+      await c.query('INSERT INTO shift_assignments (id, tenant_id, shift_id, user_id, status) VALUES ($1,$2,$3,$4,$5)', [
+        aid, tenantId, sid, uid, status,
+      ]);
+      return aid;
+    };
+
+    // A finished gig with timesheets waiting for approval.
+    const past = await addEvent('Corporate Gala (last week)', 'Grand Hotel Ballroom', -7, -7);
+    const pastShift = await addShift(past, 'Audio Tech', -24 * 7, -24 * 7 + 8, 2);
+    for (const uid of [crew[0], crew[3]]) {
+      const aid = await assign(pastShift, uid, 'accepted');
+      await c.query(
+        "INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in, clock_out, status) VALUES ($1,$2,$3,$4,$5,'submitted')",
+        [tenantId, aid, uid, hoursFromNow(-24 * 7), hoursFromNow(-24 * 7 + 7.5)],
+      );
+    }
+
+    // An upcoming multi-day festival with some roles filled and some open.
+    const fest = await addEvent('Summer Music Festival', 'Riverside Park', 1, 3);
+    const loadIn = await addShift(fest, 'Stagehand (Load-in)', 24 + 6, 24 + 14, 4);
+    const show = await addShift(fest, 'Audio Tech (Show)', 48 + 8, 48 + 16, 2);
+    const strike = await addShift(fest, 'Stagehand (Strike)', 72 + 2, 72 + 8, 3);
+    await assign(loadIn, crew[0], 'accepted');
+    await assign(loadIn, crew[3], 'offered');
+    await assign(show, crew[0], 'offered');
+    await assign(show, crew[1], 'accepted');
+    await assign(strike, crew[3], 'offered');
+
+    // A shift starting now so crew can try clock in/out straight away.
+    const today = await addEvent('Warehouse Load-out (today)', 'Main Warehouse', 0, 0);
+    const now = await addShift(today, 'Loader', -1, 7, 3);
+    await assign(now, crew[0], 'accepted');
+    await assign(now, crew[2], 'accepted');
+
+    await audit(c, tenantId, admin, 'tenant.seed', 'tenant', tenantId);
+  });
+  console.log('demo data created (admin@demo.laborops.app, manager@..., crew1@... through crew5@...)');
+}
+
+/** Removes the demo company (and everything in it) using the owner connection. */
+async function resetDemo(): Promise<void> {
+  const c = new Client({ connectionString: config.adminDatabaseUrl });
+  await c.connect();
+  try {
+    const r = await c.query('DELETE FROM tenants WHERE slug = $1', [DEMO_SLUG]);
+    console.log(`demo data removed (${r.rowCount} company)`);
+  } finally {
+    await c.end();
+  }
+}
+
+if (require.main === module) {
+  migrateWithRetry()
+    .then(() => (process.argv.includes('--reset') ? resetDemo() : undefined))
+    .then(seedDemo)
+    .then(() => pool.end())
+    .catch((e) => {
+      console.error(e);
+      process.exit(1);
+    });
+}
