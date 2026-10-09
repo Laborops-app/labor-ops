@@ -176,7 +176,7 @@ export async function schedulingRoutes(app: FastifyInstance) {
       if (!(await c.query("SELECT 1 FROM users WHERE id = $1 AND role = 'crew'", [id])).rowCount) return null;
       const r = await c.query(
         `INSERT INTO user_certs (tenant_id, user_id, name, expires_on) VALUES ($1,$2,$3,$4)
-         ON CONFLICT (user_id, lower(name)) DO UPDATE SET name = EXCLUDED.name, expires_on = EXCLUDED.expires_on RETURNING id, name, expires_on`,
+         ON CONFLICT (user_id, lower(name)) DO UPDATE SET name = EXCLUDED.name, expires_on = EXCLUDED.expires_on, verified = true RETURNING id, name, expires_on, verified`,
         [req.user.tid, id, b.name, b.expiresOn ?? null],
       );
       await audit(c, req.user.tid, req.user.sub, 'cert.set', 'user', id, { name: b.name, expiresOn: b.expiresOn ?? null });
@@ -184,6 +184,16 @@ export async function schedulingRoutes(app: FastifyInstance) {
     });
     if (!row) return reply.code(404).send({ error: 'Crew member not found' });
     return reply.code(201).send({ cert: row });
+  });
+
+  app.post('/api/certs/:id/verify', { preHandler: mgr }, async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    const n = await withTenant(req.user.tid, async (c) => {
+      const r = await c.query('UPDATE user_certs SET verified = true WHERE id = $1', [id]);
+      if (r.rowCount) await audit(c, req.user.tid, req.user.sub, 'cert.verify', 'cert', id);
+      return r.rowCount;
+    });
+    return n ? { ok: true } : reply.code(404).send({ error: 'Certificate not found' });
   });
 
   app.delete('/api/certs/:id', { preHandler: mgr }, async (req, reply) => {
@@ -247,7 +257,7 @@ export async function schedulingRoutes(app: FastifyInstance) {
           [req.user.sub],
         )
       ).rows,
-      certs: (await c.query('SELECT id, name, expires_on::text FROM user_certs WHERE user_id = $1 ORDER BY name', [req.user.sub])).rows,
+      certs: (await c.query('SELECT id, name, expires_on::text, verified FROM user_certs WHERE user_id = $1 ORDER BY name', [req.user.sub])).rows,
     })),
   );
 

@@ -18,7 +18,7 @@ export async function evaluateShift(c: PoolClient, shiftId: string, userId?: str
      SELECT u.id AS user_id,
        ARRAY(SELECT r FROM unnest(x.required_certs) r WHERE NOT EXISTS (
          SELECT 1 FROM user_certs uc WHERE uc.user_id = u.id AND lower(uc.name) = lower(r)
-           AND (uc.expires_on IS NULL OR uc.expires_on >= x.ls::date))) AS missing_certs,
+           AND uc.verified AND (uc.expires_on IS NULL OR uc.expires_on >= x.ls::date))) AS missing_certs,
        EXISTS (SELECT 1 FROM time_off o WHERE o.user_id = u.id AND o.starts_on <= x.le::date AND o.ends_on >= x.ls::date) AS time_off,
        (EXISTS (SELECT 1 FROM availability a WHERE a.user_id = u.id)
         AND NOT EXISTS (SELECT 1 FROM availability a WHERE a.user_id = u.id

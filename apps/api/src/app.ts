@@ -10,6 +10,7 @@ import { authRoutes } from './routes/auth';
 import { crewRoutes } from './routes/crew';
 import { eventRoutes } from './routes/events';
 import { timeRoutes } from './routes/time';
+import { profileRoutes } from './routes/profile';
 import { schedulingRoutes } from './routes/scheduling';
 
 export async function buildApp() {
@@ -54,5 +55,6 @@ export async function buildApp() {
   await app.register(eventRoutes);
   await app.register(timeRoutes);
   await app.register(schedulingRoutes);
+  await app.register(profileRoutes);
   return app;
 }

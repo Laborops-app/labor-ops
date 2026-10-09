@@ -430,3 +430,73 @@ test('crew shift details: address, coworkers, own calendar only', async () => {
   assert.deepEqual(cal.json.shifts.map((x: any) => x.role_name), ['A']);
   assert.equal((await call(c1.session, 'GET', '/api/my/calendar')).status, 400);
 });
+
+test('profile: edit details, change password, upload certificates that a manager must verify', async () => {
+  const a = await register('prof');
+  const c1 = await mkCrew(a, 'pf1');
+  const c2 = await mkCrew(a, 'pf2');
+  const email = `pf1-${run}@test.example`;
+
+  const patch = await call(c1.session, 'PATCH', '/api/my/profile', {
+    name: 'Pat Crew', phone: '555-0199', address: '9 Elm St', emergencyName: 'Kim', emergencyPhone: '555-0100', bio: 'Hi', skills: ['Audio', 'Stage'],
+  });
+  assert.equal(patch.status, 200, patch.text);
+  const prof = (await call(c1.session, 'GET', '/api/my/profile')).json;
+  assert.equal(prof.user.name, 'Pat Crew');
+  assert.equal(prof.user.emergency_name, 'Kim');
+  assert.deepEqual(prof.user.skills, ['Audio', 'Stage']);
+  assert.equal((await call(c1.session, 'GET', '/api/auth/me')).json.user.name, 'Pat Crew');
+  // the manager sees the details
+  const seen = (await call(a, 'GET', '/api/crew')).json.crew.find((m: any) => m.id === c1.id);
+  assert.equal(seen.address, '9 Elm St');
+  // clearing a field
+  await call(c1.session, 'PATCH', '/api/my/profile', { bio: '' });
+  assert.equal((await call(c1.session, 'GET', '/api/my/profile')).json.user.bio, null);
+
+  // password
+  assert.equal((await call(c1.session, 'POST', '/api/my/password', { current: 'wrong-pass', next: 'newpassword1' })).status, 400);
+  assert.equal((await call(c1.session, 'POST', '/api/my/password', { current: 'password123', next: 'short' })).status, 400);
+  assert.equal((await call(c1.session, 'POST', '/api/my/password', { current: 'password123', next: 'newpassword1' })).status, 200);
+  await login(email, 'newpassword1');
+  assert.equal((await call(null, 'POST', '/api/auth/login', { email, password: 'password123' })).status, 401);
+
+  // self-submitted certificate does not count until verified
+  const ev = await mkEvent(a);
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Fork', startsAt: start(30), endsAt: start(36), headcount: 1, requiredCerts: ['Forklift'] })).json.shift.id;
+  const mk = await call(c1.session, 'POST', '/api/my/certs', { name: 'Forklift', expiresOn: '2099-01-01' });
+  assert.equal(mk.status, 201, mk.text);
+  const certId = mk.json.cert.id;
+  assert.equal(mk.json.cert.verified, false);
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id })).status, 409);
+
+  // uploads: wrong type, then a real PDF
+  const put = (s: Session, cid: string, buf: Buffer, ct = 'application/pdf') =>
+    app.inject({ method: 'PUT', url: `/api/my/certs/${cid}/file?filename=card.pdf`, payload: buf, headers: { cookie: s.cookie, 'content-type': ct } });
+  assert.equal((await put(c1.session, certId, Buffer.from('MZ not a pdf'))).statusCode, 400);
+  assert.equal((await put(c1.session, certId, Buffer.from('%PDF-1.4 hello'), 'text/plain')).statusCode, 400);
+  assert.equal((await put(c2.session, certId, Buffer.from('%PDF-1.4 hello'))).statusCode, 404);
+  assert.equal((await put(c1.session, certId, Buffer.from('%PDF-1.4 hello'))).statusCode, 201);
+
+  const dl = await app.inject({ method: 'GET', url: `/api/certs/${certId}/file`, headers: { cookie: c1.session.cookie } });
+  assert.equal(dl.statusCode, 200);
+  assert.equal(dl.headers['content-type'], 'application/pdf');
+  assert.equal(dl.headers['x-content-type-options'], 'nosniff');
+  assert.equal(dl.body, '%PDF-1.4 hello');
+  assert.equal((await app.inject({ method: 'GET', url: `/api/certs/${certId}/file`, headers: { cookie: a.cookie } })).statusCode, 200);
+  assert.equal((await app.inject({ method: 'GET', url: `/api/certs/${certId}/file`, headers: { cookie: c2.session.cookie } })).statusCode, 404);
+
+  // manager reviews: crew list shows it, verify makes it count
+  const row = (await call(a, 'GET', '/api/crew')).json.crew.find((m: any) => m.id === c1.id).certs[0];
+  assert.equal(row.verified, false);
+  assert.equal(row.has_file, true);
+  assert.equal((await call(c1.session, 'POST', `/api/certs/${certId}/verify`)).status, 403);
+  assert.equal((await call(a, 'POST', `/api/certs/${certId}/verify`)).status, 200);
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id })).status, 201);
+  // changing the expiry sends it back for review
+  assert.equal((await call(c1.session, 'POST', '/api/my/certs', { name: 'forklift', expiresOn: '2098-01-01' })).json.cert.verified, false);
+
+  // others cannot delete mine; I can
+  assert.equal((await call(c2.session, 'DELETE', `/api/my/certs/${certId}`)).status, 404);
+  assert.equal((await call(c1.session, 'DELETE', `/api/my/certs/${certId}`)).status, 200);
+  assert.equal((await call(a, 'GET', `/api/certs/${certId}/file`)).status, 404);
+});

@@ -1,4 +1,5 @@
 'use client';
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner } from '@/components/ui';
@@ -142,7 +143,10 @@ function Body() {
 
       <section className="card">
         <h2>My certificates</h2>
-        {certs.length === 0 ? <p className="muted small">None on file. Your manager adds certificates and expiry dates.</p> : <div>{certs.map(certChip)}</div>}
+        {certs.length === 0 ? <p className="muted small">None on file yet.</p> : <div>{certs.map(certChip)}</div>}
+        <p className="small" style={{ marginBottom: 0 }}>
+          Add certificates and upload copies on your <Link href="/profile">profile</Link>.
+        </p>
       </section>
     </>
   );

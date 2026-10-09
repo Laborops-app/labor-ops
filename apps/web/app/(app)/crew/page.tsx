@@ -4,7 +4,7 @@ import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, Me } from '@/lib/api';
 
-type Cert = { id: string; name: string; expires_on: string | null };
+type Cert = { id: string; name: string; expires_on: string | null; verified: boolean; has_file: boolean };
 type Member = { id: string; name: string; email: string; role: string; phone: string | null; skills: string[]; active: boolean; certs: Cert[]; has_availability: boolean };
 
 const certState = (c: Cert) => {
@@ -12,7 +12,8 @@ const certState = (c: Cert) => {
   const days = (new Date(c.expires_on + 'T23:59:59').getTime() - Date.now()) / 86400000;
   return days < 0 ? 'bad' : days < 30 ? 'warn' : '';
 };
-const certLabel = (c: Cert) => (c.expires_on ? `${c.name} · ${certState(c) === 'bad' ? 'expired' : 'exp'} ${c.expires_on}` : c.name);
+const certLabel = (c: Cert) => (c.expires_on ? `${c.name} · ${certState(c) === 'bad' ? 'expired' : 'exp'} ${c.expires_on}` : c.name) + (c.verified ? '' : ' · needs review');
+const chipCls = (c: Cert) => (c.verified ? certState(c) : 'warn');
 
 function Body({ me }: { me: Me }) {
   const [list, setList] = useState<Member[] | null>(null);
@@ -59,6 +60,15 @@ function Body({ me }: { me: Me }) {
       await api(`/api/crew/${m.id}/certs`, { body: { name: cf.name, expiresOn: cf.expiresOn || null } });
       setCf({ name: '', expiresOn: '' });
       load();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+  const verifyCert = async (c: Cert) => {
+    setError('');
+    try {
+      await api(`/api/certs/${c.id}/verify`, { body: {} });
+      await load();
     } catch (err) {
       setError((err as Error).message);
     }
@@ -162,7 +172,7 @@ function Body({ me }: { me: Me }) {
                       </td>
                       <td>
                         {m.certs.map((c) => (
-                          <span key={c.id} className={`chip ${certState(c)}`}>
+                          <span key={c.id} className={`chip ${chipCls(c)}`}>
                             {certLabel(c)}
                           </span>
                         ))}
@@ -203,8 +213,18 @@ function Body({ me }: { me: Me }) {
                           {m.certs.length > 0 && (
                             <div className="row" style={{ marginTop: '0.6rem' }}>
                               {m.certs.map((c) => (
-                                <span key={c.id} className={`chip ${certState(c)}`}>
+                                <span key={c.id} className={`chip ${chipCls(c)}`}>
                                   {certLabel(c)}{' '}
+                                  {c.has_file && (
+                                    <a href={`/api/certs/${c.id}/file`} target="_blank" rel="noopener noreferrer">
+                                      View file
+                                    </a>
+                                  )}{' '}
+                                  {!c.verified && (
+                                    <button className="chip-x" onClick={() => verifyCert(c)} aria-label={`Verify ${c.name}`}>
+                                      ✓ Verify
+                                    </button>
+                                  )}{' '}
                                   <button className="chip-x" onClick={() => removeCert(c)} aria-label={`Remove ${c.name}`}>
                                     ✕
                                   </button>

@@ -73,7 +73,10 @@ export async function authRoutes(app: FastifyInstance) {
 
   app.get('/api/auth/me', { preHandler: authenticate }, async (req) => {
     const u = req.user;
-    const company = await withTenant(u.tid, async (c) => (await c.query('SELECT name FROM tenants')).rows[0]?.name);
-    return { user: { id: u.sub, name: u.name, role: u.role, company } };
+    const { company, name } = await withTenant(u.tid, async (c) => ({
+      company: (await c.query('SELECT name FROM tenants')).rows[0]?.name as string | undefined,
+      name: ((await c.query('SELECT name FROM users WHERE id = $1', [u.sub])).rows[0]?.name as string | undefined) ?? u.name,
+    }));
+    return { user: { id: u.sub, name, role: u.role, company } };
   });
 }
