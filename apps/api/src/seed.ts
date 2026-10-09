@@ -15,7 +15,10 @@ export async function seedDemo(): Promise<void> {
   if (found.rowCount) {
     // Existing demo company: add the sample data for newer features once.
     const tid = found.rows[0].tenant_id as string;
-    await withTenant(tid, (c) => seedScheduling(c, tid));
+    await withTenant(tid, async (c) => {
+      await seedScheduling(c, tid);
+      await seedAddresses(c);
+    });
     return;
   }
 
@@ -96,9 +99,20 @@ export async function seedDemo(): Promise<void> {
     await assign(now, crew[2], 'accepted');
 
     await seedScheduling(c, tenantId);
+    await seedAddresses(c);
     await audit(c, tenantId, admin, 'tenant.seed', 'tenant', tenantId);
   });
   console.log('demo data created (admin@demo.laborops.app, manager@..., crew1@... through crew5@...)');
+}
+
+const DEMO_ADDRESSES: Record<string, string> = {
+  'Corporate Gala (last week)': '1700 Lincoln St, Denver, CO 80203',
+  'Summer Music Festival': '1101 W 7th Ave, Denver, CO 80204',
+  'Warehouse Load-out (today)': '4800 Brighton Blvd, Denver, CO 80216',
+};
+async function seedAddresses(c: import('pg').PoolClient): Promise<void> {
+  for (const [name, addr] of Object.entries(DEMO_ADDRESSES))
+    await c.query('UPDATE events SET address = $2 WHERE name = $1 AND address IS NULL', [name, addr]);
 }
 
 /** Sample certificates, availability, an open shift with a pending claim, a swap offer and a template. Runs once. */

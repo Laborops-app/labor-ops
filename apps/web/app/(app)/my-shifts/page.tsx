@@ -1,4 +1,5 @@
 'use client';
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
@@ -67,7 +68,11 @@ function Body() {
           <section className="card shift-card" key={s.assignment_id}>
             <div className="row space">
               <div>
-                <h2>{s.role_name}</h2>
+                <h2>
+                  <Link href={`/my-shifts/${s.assignment_id}`} className="shift-link">
+                    {s.role_name}
+                  </Link>
+                </h2>
                 <div>{s.event_name}</div>
                 <div className="muted small">
                   {fmtDateTime(s.starts_at)} – {fmtTime(s.ends_at)}
@@ -77,6 +82,9 @@ function Body() {
               <Pill status={s.clocked_in ? 'clocked in' : s.status} />
             </div>
             <div className="row">
+              <Link className="btn ghost small" href={`/my-shifts/${s.assignment_id}`}>
+                Details &amp; map
+              </Link>
               {s.status === 'offered' && (
                 <>
                   <button className="btn primary" disabled={!!busy} onClick={() => act(s.assignment_id, () => api(`/api/assignments/${s.assignment_id}/respond`, { body: { response: 'accepted' } }))}>

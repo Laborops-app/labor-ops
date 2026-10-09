@@ -47,6 +47,51 @@ export async function timeRoutes(app: FastifyInstance) {
     })),
   );
 
+  app.get('/api/my/calendar', { preHandler: authenticate }, async (req, reply) => {
+    const q = z.object({ from: z.string().datetime({ offset: true }), to: z.string().datetime({ offset: true }) }).safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ error: 'from and to are required (ISO date-times)' });
+    if (new Date(q.data.to).getTime() - new Date(q.data.from).getTime() > 62 * 86400000) return reply.code(400).send({ error: 'Range too large' });
+    return withTenant(req.user.tid, async (c) => ({
+      shifts: (
+        await c.query(
+          `SELECT a.id AS assignment_id, a.status, s.role_name, s.starts_at, s.ends_at, e.name AS event_name, e.venue
+           FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
+           WHERE a.user_id = $1 AND a.status <> 'declined' AND s.starts_at >= $2 AND s.starts_at < $3
+           ORDER BY s.starts_at`,
+          [req.user.sub, q.data.from, q.data.to],
+        )
+      ).rows,
+    }));
+  });
+
+  app.get('/api/my/assignments/:id', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const out = await withTenant(req.user.tid, async (c) => {
+      const me = (
+        await c.query(
+          `SELECT a.id AS assignment_id, a.status, s.id AS shift_id, s.role_name, s.starts_at, s.ends_at, s.required_certs,
+                  e.id AS event_id, e.name AS event_name, e.venue, e.address, e.notes, e.start_date, e.end_date
+           FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
+           WHERE a.id = $1 AND a.user_id = $2`,
+          [id, req.user.sub],
+        )
+      ).rows[0];
+      if (!me) return null;
+      const coworkers = (
+        await c.query(
+          `SELECT u.id AS user_id, u.name, u.phone, s.id AS shift_id, s.role_name, s.starts_at, s.ends_at, a.status
+           FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN users u ON u.id = a.user_id
+           WHERE s.event_id = $1 AND a.user_id <> $2 AND a.status IN ('accepted','offered')
+           ORDER BY s.starts_at, u.name`,
+          [me.event_id, req.user.sub],
+        )
+      ).rows;
+      return { shift: me, coworkers };
+    });
+    if (!out) return reply.code(404).send({ error: 'Shift not found' });
+    return out;
+  });
+
   app.post('/api/assignments/:id/respond', { preHandler: authenticate }, async (req, reply) => {
     const { id } = z.object({ id: uuid }).parse(req.params);
     const { response } = z.object({ response: z.enum(['accepted', 'declined']) }).parse(req.body);

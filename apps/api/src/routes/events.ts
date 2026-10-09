@@ -8,6 +8,7 @@ const id = z.object({ id: z.string().uuid() });
 const eventBody = z.object({
   name: z.string().trim().min(1).max(150),
   venue: z.string().trim().max(200).optional().nullable(),
+  address: z.string().trim().max(300).optional().nullable(),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   notes: z.string().max(5000).optional().nullable(),
@@ -64,9 +65,9 @@ export async function eventRoutes(app: FastifyInstance) {
     if (b.endDate < b.startDate) return reply.code(400).send({ error: 'End date is before the start date' });
     const row = await withTenant(req.user.tid, async (c) => {
       const r = await c.query(
-        `INSERT INTO events (tenant_id, name, venue, start_date, end_date, notes, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-        [req.user.tid, b.name, b.venue ?? null, b.startDate, b.endDate, b.notes ?? null, req.user.sub],
+        `INSERT INTO events (tenant_id, name, venue, address, start_date, end_date, notes, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+        [req.user.tid, b.name, b.venue ?? null, b.address || null, b.startDate, b.endDate, b.notes ?? null, req.user.sub],
       );
       await audit(c, req.user.tid, req.user.sub, 'event.create', 'event', r.rows[0].id);
       return r.rows[0];

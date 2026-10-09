@@ -404,3 +404,29 @@ test('recurring shifts and templates: bulk create, validation, template CRUD', a
   assert.equal((await call(other, 'DELETE', `/api/templates/${t.json.template.id}`)).status, 404);
   assert.equal((await call(a, 'DELETE', `/api/templates/${t.json.template.id}`)).status, 200);
 });
+
+test('crew shift details: address, coworkers, own calendar only', async () => {
+  const a = await register('detail');
+  const [c1, c2, c3] = [await mkCrew(a, 'dt1'), await mkCrew(a, 'dt2'), await mkCrew(a, 'dt3')];
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Gig', venue: 'Hall', address: '1 Main St, Denver', startDate: '2030-01-01', endDate: '2030-01-02' })).json.event.id;
+  const s1 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'A', startsAt: start(30), endsAt: start(36), headcount: 2 })).json.shift.id;
+  const s2 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'B', startsAt: start(50), endsAt: start(54), headcount: 1 })).json.shift.id;
+  const a1 = (await call(a, 'POST', `/api/shifts/${s1}/assign`, { userId: c1.id })).json.assignment.id;
+  await call(a, 'POST', `/api/shifts/${s1}/assign`, { userId: c2.id });
+  await call(a, 'POST', `/api/shifts/${s2}/assign`, { userId: c3.id });
+
+  const d = await call(c1.session, 'GET', `/api/my/assignments/${a1}`);
+  assert.equal(d.status, 200, d.text);
+  assert.equal(d.json.shift.address, '1 Main St, Denver');
+  assert.deepEqual(d.json.coworkers.map((x: any) => x.name).sort(), ['Crew dt2', 'Crew dt3']);
+  assert.equal(d.json.coworkers.find((x: any) => x.name === 'Crew dt2').shift_id, s1);
+  // someone else's assignment is not visible
+  assert.equal((await call(c2.session, 'GET', `/api/my/assignments/${a1}`)).status, 404);
+  assert.equal((await call(c3.session, 'GET', `/api/my/assignments/${a1}`)).status, 404);
+
+  const from = new Date(Date.now() - 86400000).toISOString();
+  const to = new Date(Date.now() + 10 * 86400000).toISOString();
+  const cal = await call(c1.session, 'GET', `/api/my/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+  assert.deepEqual(cal.json.shifts.map((x: any) => x.role_name), ['A']);
+  assert.equal((await call(c1.session, 'GET', '/api/my/calendar')).status, 400);
+});

@@ -11,7 +11,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 function Body() {
   const [list, setList] = useState<Ev[] | null>(null);
   const [error, setError] = useState('');
-  const [f, setF] = useState({ name: '', venue: '', startDate: today(), endDate: today() });
+  const [f, setF] = useState({ name: '', venue: '', address: '', startDate: today(), endDate: today() });
 
   const load = () =>
     api<{ events: Ev[] }>('/api/events')
@@ -25,8 +25,8 @@ function Body() {
     e.preventDefault();
     setError('');
     try {
-      await api('/api/events', { body: { ...f, venue: f.venue || null } });
-      setF({ name: '', venue: '', startDate: today(), endDate: today() });
+      await api('/api/events', { body: { ...f, venue: f.venue || null, address: f.address || null } });
+      setF({ name: '', venue: '', address: '', startDate: today(), endDate: today() });
       load();
     } catch (err) {
       setError((err as Error).message);
@@ -47,6 +47,10 @@ function Body() {
           <label>
             Venue
             <input value={f.venue} onChange={(e) => setF({ ...f, venue: e.target.value })} />
+          </label>
+          <label>
+            Street address
+            <input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} placeholder="123 Main St, Denver, CO" />
           </label>
           <label>
             Starts

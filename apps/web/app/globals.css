@@ -390,3 +390,17 @@ details.card[open] > summary::before { content: '▾ '; }
 @media (max-width: 599px) { .avail-row { grid-template-columns: 1fr 1fr; } .avail-row label.check { grid-column: 1 / -1; } .avail-row > span.muted { display: none; } }
 
 .page > h3 { margin: 20px 0 10px; }
+
+/* shift details */
+.shift-link { color: inherit; text-decoration: none; }
+.shift-link:hover { text-decoration: underline; }
+.detail-grid { display: grid; grid-template-columns: 1fr 1.3fr; gap: 16px; align-items: start; }
+.detail-grid > .card { margin: 0; }
+@media (max-width: 799px) { .detail-grid { grid-template-columns: 1fr; } .detail-grid > .card { margin: 0; } }
+.map-frame { border-radius: var(--radius, 12px); overflow: hidden; border: 1px solid var(--border); margin: 12px 0; aspect-ratio: 16 / 9; background: var(--surface-2, var(--bg)); }
+.map-frame iframe { width: 100%; height: 100%; border: 0; display: block; }
+ul.people { list-style: none; margin: 0; padding: 0; }
+.person { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+.person:first-child { border-top: 0; }
+.person .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.detail-grid { margin: 16px 0; }
