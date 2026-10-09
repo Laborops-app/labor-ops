@@ -81,7 +81,7 @@ function Body() {
       <section className="card">
         <h2>Weekly hours</h2>
         <p className="muted small">
-          Tick the days you can work and the hours. Managers see when a shift falls outside them. Leave everything unticked to be available any time.
+          Tick the days you can work and the hours. Your labor coordinator sees when a shift falls outside them. Leave everything unticked to be available any time.
           {tz ? ` Times are in ${tz}.` : ''}
         </p>
         <div className="avail">

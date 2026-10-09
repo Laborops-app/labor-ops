@@ -43,7 +43,7 @@ export async function buildApp() {
           enabled: true,
           password: config.demoPassword,
           accounts: [
-            { label: 'Manager', email: 'manager@demo.laborops.app' },
+            { label: 'Labor Coordinator', email: 'manager@demo.laborops.app' },
             { label: 'Crew member', email: 'crew1@demo.laborops.app' },
           ],
         }

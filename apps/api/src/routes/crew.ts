@@ -15,12 +15,18 @@ const createBody = z.object({
 });
 const patchBody = z.object({
   name: z.string().trim().min(1).max(100).optional(),
+  email: z.string().trim().email().max(200).optional(),
   phone: z.string().trim().max(40).nullable().optional(),
+  address: z.string().trim().max(300).nullable().optional(),
+  emergencyName: z.string().trim().max(100).nullable().optional(),
+  emergencyPhone: z.string().trim().max(40).nullable().optional(),
+  bio: z.string().trim().max(1000).nullable().optional(),
+  coordinatorNotes: z.string().trim().max(2000).nullable().optional(),
   skills: z.array(z.string().trim().min(1).max(40)).max(30).optional(),
   active: z.boolean().optional(),
 });
 
-const COLS = 'id, name, email, role, phone, skills, active, created_at, address, emergency_name, emergency_phone, bio';
+const COLS = 'id, name, email, role, phone, skills, active, created_at, address, emergency_name, emergency_phone, bio, coordinator_notes';
 
 export async function crewRoutes(app: FastifyInstance) {
   app.get('/api/crew', { preHandler: guard('admin', 'manager') }, async (req) => {
@@ -58,17 +64,74 @@ export async function crewRoutes(app: FastifyInstance) {
     return reply.code(201).send({ member: row, tempPassword: body.password ? undefined : tempPassword });
   });
 
+  app.get('/api/crew/:id', { preHandler: guard('admin', 'manager') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const out = await withTenant(req.user.tid, async (c) => {
+      const member = (await c.query(`SELECT ${COLS} FROM users WHERE id = $1`, [id])).rows[0];
+      if (!member) return null;
+      return {
+        member,
+        certs: (
+          await c.query(
+            `SELECT k.id, k.name, k.expires_on::text, k.verified, f.filename AS file_name, f.size AS file_size
+             FROM user_certs k LEFT JOIN cert_files f ON f.cert_id = k.id WHERE k.user_id = $1 ORDER BY k.name`,
+            [id],
+          )
+        ).rows,
+        windows: (
+          await c.query(
+            "SELECT weekday, to_char(start_time, 'HH24:MI') AS start_time, to_char(end_time, 'HH24:MI') AS end_time FROM availability WHERE user_id = $1 ORDER BY weekday",
+            [id],
+          )
+        ).rows,
+        timeOff: (await c.query('SELECT id, starts_on::text, ends_on::text, note FROM time_off WHERE user_id = $1 AND ends_on >= current_date ORDER BY starts_on', [id])).rows,
+      };
+    });
+    return out ?? reply.code(404).send({ error: 'Not found' });
+  });
+
+  // Set a new temporary password for someone (they can change it on their profile).
+  app.post('/api/crew/:id/password', { preHandler: guard('admin', 'manager') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const b = z.object({ password: z.string().min(8).max(200).optional() }).parse(req.body ?? {});
+    const temp = b.password ?? crypto.randomBytes(6).toString('base64url');
+    const hash = await bcrypt.hash(temp, 10);
+    const ok = await withTenant(req.user.tid, async (c) => {
+      const r = await c.query("UPDATE users SET password_hash = $2 WHERE id = $1 AND (role = 'crew' OR $3 = 'admin') AND id <> $4", [id, hash, req.user.role, req.user.sub]);
+      if (r.rowCount) await audit(c, req.user.tid, req.user.sub, 'user.password_reset', 'user', id);
+      return r.rowCount;
+    });
+    if (!ok) return reply.code(404).send({ error: 'Not found' });
+    return { tempPassword: b.password ? undefined : temp };
+  });
+
   app.patch('/api/crew/:id', { preHandler: guard('admin', 'manager') }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const b = patchBody.parse(req.body);
+    if (b.email) {
+      const taken = (await pool.query('SELECT id FROM auth_find_user($1)', [b.email])).rows[0];
+      if (taken && taken.id !== id) return reply.code(409).send({ error: 'That email is already registered to someone else' });
+    }
     const row = await withTenant(req.user.tid, async (c) => {
       const r = await c.query(
         `UPDATE users SET name = COALESCE($2, name), phone = CASE WHEN $3::boolean THEN $4 ELSE phone END,
-           skills = COALESCE($5, skills), active = COALESCE($6, active)
+           skills = COALESCE($5, skills), active = COALESCE($6, active), email = COALESCE($8, email),
+           address = CASE WHEN $9::boolean THEN $10 ELSE address END,
+           emergency_name = CASE WHEN $11::boolean THEN $12 ELSE emergency_name END,
+           emergency_phone = CASE WHEN $13::boolean THEN $14 ELSE emergency_phone END,
+           bio = CASE WHEN $15::boolean THEN $16 ELSE bio END,
+           coordinator_notes = CASE WHEN $17::boolean THEN $18 ELSE coordinator_notes END
          WHERE id = $1 AND (role = 'crew' OR $7 = 'admin') RETURNING ${COLS}`,
-        [id, b.name ?? null, b.phone !== undefined, b.phone ?? null, b.skills ?? null, b.active ?? null, req.user.role],
+        [
+          id, b.name ?? null, b.phone !== undefined, b.phone || null, b.skills ?? null, b.active ?? null, req.user.role, b.email ?? null,
+          b.address !== undefined, b.address || null,
+          b.emergencyName !== undefined, b.emergencyName || null,
+          b.emergencyPhone !== undefined, b.emergencyPhone || null,
+          b.bio !== undefined, b.bio || null,
+          b.coordinatorNotes !== undefined, b.coordinatorNotes || null,
+        ],
       );
-      if (r.rows[0]) await audit(c, req.user.tid, req.user.sub, 'user.update', 'user', id, b);
+      if (r.rows[0]) await audit(c, req.user.tid, req.user.sub, 'user.update', 'user', id, { fields: Object.keys(b) });
       return r.rows[0];
     });
     if (!row) return reply.code(404).send({ error: 'Not found' });

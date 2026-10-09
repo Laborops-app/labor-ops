@@ -22,6 +22,7 @@ export async function api<T = any>(path: string, init: { method?: string; body?:
 }
 
 export type Role = 'admin' | 'manager' | 'crew';
+export const roleLabel = (r: string) => (r === 'manager' ? 'Labor Coordinator' : r === 'admin' ? 'Admin' : r === 'crew' ? 'Crew' : r);
 export type Me = { id: string; name: string; role: Role; company?: string };
 
 export const fmtDateTime = (iso: string) =>

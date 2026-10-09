@@ -95,7 +95,7 @@ function Body() {
               )}
               {s.outside_availability && s.can_claim && <div className="muted small">This is outside the availability you set — you can still ask.</div>}
               {s.reason && <div className="muted small">{s.reason}</div>}
-              <button className="btn primary small" disabled={!s.can_claim || !!busy} onClick={() => act(s.id, `/api/shifts/${s.id}/claim`, `Requested ${s.role_name}. A manager will approve it.`)}>
+              <button className="btn primary small" disabled={!s.can_claim || !!busy} onClick={() => act(s.id, `/api/shifts/${s.id}/claim`, `Requested ${s.role_name}. A labor coordinator will approve it.`)}>
                 Request this shift
               </button>
             </div>
@@ -124,7 +124,7 @@ function Body() {
                 {w.venue && <span>{w.venue}</span>}
               </div>
               {w.reason && <div className="muted small">{w.reason}</div>}
-              <button className="btn primary small" disabled={!w.can_take || !!busy} onClick={() => act(w.id, `/api/swaps/${w.id}/take`, `You asked to take ${w.role_name}. A manager will approve the swap.`)}>
+              <button className="btn primary small" disabled={!w.can_take || !!busy} onClick={() => act(w.id, `/api/swaps/${w.id}/take`, `You asked to take ${w.role_name}. A labor coordinator will approve the swap.`)}>
                 Take this shift
               </button>
             </div>

@@ -62,7 +62,7 @@ function Body() {
       {!shifts ? (
         <div className="muted">Loading…</div>
       ) : shifts.length === 0 ? (
-        <Empty>No shifts yet. When a manager assigns you one, it will show up here.</Empty>
+        <Empty>No shifts yet. When a labor coordinator assigns you one, it will show up here.</Empty>
       ) : (
         shifts.map((s) => (
           <section className="card shift-card" key={s.assignment_id}>
@@ -103,7 +103,7 @@ function Body() {
                   Clock in
                 </button>
               )}
-              {s.status === 'pending' && <span className="muted small">Waiting for manager approval.</span>}
+              {s.status === 'pending' && <span className="muted small">Waiting for approval.</span>}
               {s.swap_status && s.swap_id && (
                 <>
                   <span className="muted small">{s.swap_status === 'pending' ? 'Swap awaiting approval.' : 'Offered for swap.'}</span>

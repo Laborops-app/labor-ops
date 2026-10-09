@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Shell, { initials } from '@/components/Shell';
 import { Banner } from '@/components/ui';
-import { api, ApiError } from '@/lib/api';
+import { api, ApiError, roleLabel } from '@/lib/api';
 
 type User = {
   id: string;
@@ -118,7 +118,7 @@ function Body({ role }: { role: string }) {
   const addCert = async (e: React.FormEvent) => {
     e.preventDefault();
     const file = cf.file;
-    if (await act('cert', file ? 'Certificate added with its file. A manager will review it.' : 'Certificate added. A manager will review it.', async () => {
+    if (await act('cert', file ? 'Certificate added with its file. A labor coordinator will review it.' : 'Certificate added. A labor coordinator will review it.', async () => {
       const r = await api<{ cert: { id: string } }>('/api/my/certs', { body: { name: cf.name, expiresOn: cf.expiresOn || null } });
       if (file) await upload(r.cert.id, file);
     })) {
@@ -146,7 +146,7 @@ function Body({ role }: { role: string }) {
         <div>
           <h1>{u.name}</h1>
           <div className="muted">
-            {u.email} · <span style={{ textTransform: 'capitalize' }}>{u.role}</span>
+            {u.email} · {roleLabel(u.role)}
           </div>
         </div>
       </div>
@@ -183,7 +183,7 @@ function Body({ role }: { role: string }) {
             </label>
           )}
           <label style={{ gridColumn: '1 / -1' }}>
-            About me <span className="muted small">(optional — experience, anything a manager should know)</span>
+            About me <span className="muted small">(optional — experience, anything your labor coordinator should know)</span>
             <textarea rows={3} value={f.bio} onChange={(e) => setF({ ...f, bio: e.target.value })} maxLength={1000} />
           </label>
         </div>
@@ -209,7 +209,7 @@ function Body({ role }: { role: string }) {
         <section className="card">
           <h2>My certificates</h2>
           <p className="muted small">
-            Add each certificate with its expiry date and a photo or PDF of it (up to 5 MB). A manager reviews it before it counts for shifts that require it.
+            Add each certificate with its expiry date and a photo or PDF of it (up to 5 MB). A labor coordinator reviews it before it counts for shifts that require it.
           </p>
           {certs.length === 0 ? (
             <p className="muted">No certificates yet.</p>
@@ -265,7 +265,7 @@ function Body({ role }: { role: string }) {
               const file = e.target.files?.[0];
               const id = replaceFor;
               e.target.value = '';
-              if (file && id) act('up', 'File uploaded. A manager will review it.', () => upload(id, file));
+              if (file && id) act('up', 'File uploaded. A labor coordinator will review it.', () => upload(id, file));
             }}
           />
 

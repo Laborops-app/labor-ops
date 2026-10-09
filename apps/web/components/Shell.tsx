@@ -3,7 +3,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { api, Me, Role } from '@/lib/api';
+import { api, Me, Role, roleLabel } from '@/lib/api';
 import ThemeToggle from '@/components/ThemeToggle';
 
 const icon = (d: React.ReactNode) => (
@@ -205,7 +205,7 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
               <span className="name">{me.name}</span>
               <span className="role">
                 {me.company ? `${me.company} · ` : ''}
-                {me.role}
+                {roleLabel(me.role)}
               </span>
             </span>
           </Link>

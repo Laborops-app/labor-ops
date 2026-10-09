@@ -143,6 +143,28 @@ export async function profileRoutes(app: FastifyInstance) {
     return ok ? reply.code(201).send({ ok: true }) : reply.code(404).send({ error: 'Certificate not found' });
   });
 
+  // A labor coordinator uploads a file for someone's certificate. Their upload counts as reviewed.
+  app.put('/api/certs/:id/file', { preHandler: guard('admin', 'manager'), bodyLimit: MAX_FILE }, async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    const { filename } = z.object({ filename: z.string().trim().max(200).default('certificate') }).parse(req.query);
+    const body = req.body;
+    if (!Buffer.isBuffer(body) || body.length === 0) return reply.code(400).send({ error: 'Choose a PDF, PNG or JPG file (up to 5 MB)' });
+    const type = sniff(body);
+    if (!type) return reply.code(400).send({ error: 'That file is not a PDF, PNG or JPG' });
+    const ok = await withTenant(req.user.tid, async (c) => {
+      if (!(await c.query('SELECT 1 FROM user_certs WHERE id = $1', [id])).rowCount) return false;
+      await c.query(
+        `INSERT INTO cert_files (tenant_id, cert_id, filename, content_type, size, data) VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (cert_id) DO UPDATE SET filename = EXCLUDED.filename, content_type = EXCLUDED.content_type,
+           size = EXCLUDED.size, data = EXCLUDED.data, uploaded_at = now()`,
+        [req.user.tid, id, filename.replace(/[\\/\r\n"]/g, '_'), type, body.length, body],
+      );
+      await audit(c, req.user.tid, req.user.sub, 'cert.upload', 'cert', id, { size: body.length, type, by: 'coordinator' });
+      return true;
+    });
+    return ok ? reply.code(201).send({ ok: true }) : reply.code(404).send({ error: 'Certificate not found' });
+  });
+
   // Download: the owner, or a manager of the same company.
   app.get('/api/certs/:id/file', { preHandler: authenticate }, async (req, reply) => {
     const { id } = idParam.parse(req.params);

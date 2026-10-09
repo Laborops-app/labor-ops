@@ -1,8 +1,9 @@
 'use client';
+import Link from 'next/link';
 import { Fragment, useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
-import { api, Me } from '@/lib/api';
+import { api, Me, roleLabel } from '@/lib/api';
 
 type Cert = { id: string; name: string; expires_on: string | null; verified: boolean; has_file: boolean };
 type Member = { id: string; name: string; email: string; role: string; phone: string | null; skills: string[]; active: boolean; certs: Cert[]; has_availability: boolean };
@@ -126,7 +127,7 @@ function Body({ me }: { me: Me }) {
               Role
               <select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>
                 <option value="crew">Crew</option>
-                <option value="manager">Manager</option>
+                <option value="manager">Labor Coordinator</option>
               </select>
             </label>
           )}
@@ -158,11 +159,11 @@ function Body({ me }: { me: Me }) {
                   <Fragment key={m.id}>
                     <tr className={m.active ? '' : 'inactive'}>
                       <td>
-                        <b>{m.name}</b>
+                        <Link href={`/crew/${m.id}`} className="shift-link"><b>{m.name}</b></Link>
                         {!m.active && <span className="muted small"> (inactive)</span>}
                         {m.role === 'crew' && m.has_availability && <div className="muted small">Set weekly availability</div>}
                       </td>
-                      <td>{m.role}</td>
+                      <td>{roleLabel(m.role)}</td>
                       <td>
                         {m.skills.map((s) => (
                           <span key={s} className="chip">

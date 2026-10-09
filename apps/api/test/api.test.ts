@@ -500,3 +500,44 @@ test('profile: edit details, change password, upload certificates that a manager
   assert.equal((await call(c1.session, 'DELETE', `/api/my/certs/${certId}`)).status, 200);
   assert.equal((await call(a, 'GET', `/api/certs/${certId}/file`)).status, 404);
 });
+
+test('labor coordinator can view and edit a crew member profile, certs and password', async () => {
+  const a = await register('coord');
+  const c1 = await mkCrew(a, 'co1');
+  const c2 = await mkCrew(a, 'co2');
+  const cEmail = `co1-${run}@test.example`;
+
+  const patch = await call(a, 'PATCH', `/api/crew/${c1.id}`, {
+    name: 'Pat Q', email: `new-co1-${run}@test.example`, phone: '555-0111', address: '5 Oak', emergencyName: 'Lee', emergencyPhone: '555-0112', bio: 'bio', coordinatorNotes: 'prefers nights', skills: ['Audio'],
+  });
+  assert.equal(patch.status, 200, patch.text);
+  const full = (await call(a, 'GET', `/api/crew/${c1.id}`)).json;
+  assert.equal(full.member.email, `new-co1-${run}@test.example`);
+  assert.equal(full.member.coordinator_notes, 'prefers nights');
+  assert.equal(full.member.emergency_name, 'Lee');
+  // crew never see the coordinator notes, and cannot use these routes
+  assert.equal((await call(c1.session, 'GET', '/api/my/profile')).json.user.coordinator_notes, undefined);
+  assert.equal((await call(c1.session, 'GET', `/api/crew/${c1.id}`)).status, 403);
+  // email already used by someone else
+  assert.equal((await call(a, 'PATCH', `/api/crew/${c1.id}`, { email: `co2-${run}@test.example` })).status, 409);
+  // clearing a field
+  await call(a, 'PATCH', `/api/crew/${c1.id}`, { phone: '' });
+  assert.equal((await call(a, 'GET', `/api/crew/${c1.id}`)).json.member.phone, null);
+
+  // login follows the new email; reset password
+  assert.equal((await call(null, 'POST', '/api/auth/login', { email: cEmail, password: 'password123' })).status, 401);
+  const reset = await call(a, 'POST', `/api/crew/${c1.id}/password`, {});
+  assert.equal(reset.status, 200);
+  await login(`new-co1-${run}@test.example`, reset.json.tempPassword);
+  assert.equal((await call(c1.session, 'POST', `/api/crew/${c2.id}/password`, {})).status, 403);
+
+  // add a cert and its file for them; a coordinator's cert is verified
+  const cert = (await call(a, 'POST', `/api/crew/${c1.id}/certs`, { name: 'Rigging', expiresOn: '2099-01-01' })).json.cert;
+  const up = await app.inject({ method: 'PUT', url: `/api/certs/${cert.id}/file?filename=r.png`, payload: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2]), headers: { cookie: a.cookie, 'content-type': 'image/png' } });
+  assert.equal(up.statusCode, 201, up.body);
+  const certs = (await call(a, 'GET', `/api/crew/${c1.id}`)).json.certs;
+  assert.equal(certs[0].verified, true);
+  assert.equal(certs[0].file_name, 'r.png');
+  const denied = await app.inject({ method: 'PUT', url: `/api/certs/${cert.id}/file`, payload: Buffer.from('%PDF-1.4 x'), headers: { cookie: c2.session.cookie, 'content-type': 'application/pdf' } });
+  assert.equal(denied.statusCode, 403);
+});
