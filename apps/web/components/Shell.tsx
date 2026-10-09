@@ -105,59 +105,55 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
   };
   const items = NAV.filter((n) => n.roles.includes(me.role));
 
+  const current = items.find((n) => path.startsWith(n.href));
+
   return (
     <div className="app">
-      <aside className="sidebar" aria-label="Main">
-        <Link href="/" className="brand">
-          <Image src="/brand/icon.png" alt="" width={34} height={34} priority />
-          <span>
-            Labor<b>Ops</b>
-          </span>
+      <aside className="rail" aria-label="Main">
+        <Link href="/" className="logo" aria-label="LaborOps home">
+          <Image src="/brand/icon.png" alt="" width={38} height={38} priority />
         </Link>
         <nav>
           {items.map((n) => (
-            <Link key={n.href} href={n.href} className={path.startsWith(n.href) ? 'active' : ''} aria-current={path.startsWith(n.href) ? 'page' : undefined}>
+            <Link key={n.href} href={n.href} aria-label={n.label} className={path.startsWith(n.href) ? 'active' : ''} aria-current={path.startsWith(n.href) ? 'page' : undefined}>
               {n.icon}
-              <span>{n.label}</span>
+              <span className="tip">{n.label}</span>
             </Link>
           ))}
         </nav>
-        <div className="side-foot">
-          <div className="user">
-            <div className="avatar" aria-hidden="true">
-              {initials(me.name)}
-            </div>
-            <div className="user-text">
-              <b>{me.name}</b>
-              <span className="muted small">
-                {me.company ? `${me.company} · ` : ''}
-                {me.role}
-              </span>
-            </div>
-          </div>
-          <div className="row">
-            <ThemeToggle />
-            <button className="btn ghost small" onClick={signOut}>
-              Sign out
-            </button>
-          </div>
+        <div className="rail-foot">
+          <ThemeToggle />
         </div>
       </aside>
 
       <div className="main">
         <header className="topbar">
           <Link href="/" className="brand">
-            <Image src="/brand/icon.png" alt="" width={30} height={30} priority />
+            <Image src="/brand/icon.png" alt="" width={28} height={28} priority />
             <span>
               Labor<b>Ops</b>
             </span>
           </Link>
-          <div className="topbar-right">
-            <ThemeToggle />
-            <button className="btn ghost small" onClick={signOut}>
-              Sign out
-            </button>
+          <span className="page-title">{current?.label ?? ''}</span>
+          <span className="spacer" />
+          <div className="who">
+            <span className="avatar solid" aria-hidden="true">
+              {initials(me.name)}
+            </span>
+            <span className="txt">
+              <span className="name">{me.name}</span>
+              <span className="role">
+                {me.company ? `${me.company} · ` : ''}
+                {me.role}
+              </span>
+            </span>
           </div>
+          <span className="mobile-only-toggle">
+            <ThemeToggle />
+          </span>
+          <button className="btn ghost small" onClick={signOut}>
+            Sign out
+          </button>
         </header>
         <main className="page">{children(me)}</main>
       </div>

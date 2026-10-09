@@ -176,6 +176,23 @@ export async function eventRoutes(app: FastifyInstance) {
             SELECT count(*) FROM shift_assignments a WHERE a.shift_id = s.id AND a.status <> 'declined'), 0)),0)::int AS n
           FROM shifts s WHERE s.ends_at > now()`),
         pendingApprovals: await one("SELECT count(*)::int AS n FROM time_entries WHERE status = 'submitted'"),
+        hoursScheduled: Math.round(
+          Number(
+            (
+              await c.query(`SELECT COALESCE(sum(EXTRACT(EPOCH FROM (s.ends_at - s.starts_at)) / 3600),0)::float AS n
+                FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id
+                WHERE a.status <> 'declined' AND s.ends_at > now() AND s.starts_at < now() + interval '7 days'`)
+            ).rows[0].n,
+          ),
+        ),
+        upcoming: (
+          await c.query(`SELECT s.id, s.role_name, s.starts_at, s.ends_at, s.headcount, e.id AS event_id, e.name AS event_name, e.venue,
+              (SELECT count(*)::int FROM shift_assignments a WHERE a.shift_id = s.id AND a.status <> 'declined') AS filled,
+              COALESCE((SELECT json_agg(x.name) FROM (SELECT u.name FROM shift_assignments a JOIN users u ON u.id = a.user_id
+                WHERE a.shift_id = s.id AND a.status <> 'declined' ORDER BY u.name LIMIT 4) x), '[]'::json) AS crew
+            FROM shifts s JOIN events e ON e.id = s.event_id
+            WHERE s.ends_at > now() ORDER BY s.starts_at LIMIT 12`)
+        ).rows,
         clockedIn: (
           await c.query(`SELECT u.name, t.clock_in, s.role_name, e.name AS event_name
             FROM time_entries t JOIN users u ON u.id = t.user_id
