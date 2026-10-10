@@ -7,7 +7,7 @@ import { api, fmtDateTime } from '@/lib/api';
 type Row = { id: string; channel: 'email' | 'sms'; category: string; to_addr: string; subject: string | null; status: string; attempts: number; last_error: string | null; created_at: string; user_name: string | null };
 type Data = {
   email: { live: boolean; from: string; host: string | null };
-  sms: { live: boolean; from: string | null };
+  sms: { live: boolean; provider: 'twilio' | 'sns'; from: string | null };
   appUrl: string;
   stats: { channel: string; status: string; n: number }[];
   deliveries: Row[];
@@ -95,7 +95,7 @@ function Body() {
         <>
           <div className="cols-2">
             <Card ch="email" title="Email" live={d.email.live} detail={d.email.live ? `Sending from ${d.email.from} through ${d.email.host}.` : 'Add the Amazon SES SMTP settings on the server to start sending. Until then, emails are recorded here but not delivered.'} />
-            <Card ch="sms" title="Text messages" live={d.sms.live} detail={d.sms.live ? `Sending from ${d.sms.from}. People only get texts after they turn them on and agree on their profile. Replying STOP turns them off.` : 'Add the Twilio settings on the server to start sending. Until then, texts are recorded here but not delivered.'} />
+            <Card ch="sms" title="Text messages" live={d.sms.live} detail={d.sms.live ? `Sending through ${d.sms.provider === 'sns' ? 'Amazon SNS' : 'Twilio'} from ${d.sms.from}. People only get texts after they turn them on and agree on their profile. Replying STOP turns them off.` : 'Add the Twilio or Amazon SNS settings on the server to start sending. Until then, texts are recorded here but not delivered.'} />
           </div>
           <section className="card">
             <h2>Recent messages</h2>

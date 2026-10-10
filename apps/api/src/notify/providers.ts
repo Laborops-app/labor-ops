@@ -1,10 +1,17 @@
+import { SNSClient, PublishCommand, ListPhoneNumbersOptedOutCommand } from '@aws-sdk/client-sns';
 import nodemailer, { type Transporter } from 'nodemailer';
 import { config } from '../config';
 
 export type SendResult = { ok: true; id: string; logged?: boolean } | { ok: false; permanent: boolean; error: string };
 
 export const emailConfigured = () => !!(config.email.host && config.email.user && config.email.pass);
-export const smsConfigured = () => !!(config.sms.sid && config.sms.token && config.sms.from);
+export const smsConfigured = () =>
+  config.sms.provider === 'sns'
+    ? !!(config.sms.sns.accessKeyId && config.sms.sns.secretAccessKey)
+    : !!(config.sms.sid && config.sms.token && config.sms.from);
+/** Display name of the sender for the admin page. */
+export const smsSender = () =>
+  config.sms.provider === 'sns' ? config.sms.sns.originationNumber || config.sms.sns.senderId || 'Amazon SNS' : config.sms.from || null;
 
 let transport: Transporter | null = null;
 function getTransport() {
@@ -53,7 +60,53 @@ export function toE164(raw: string | null | undefined): string | null {
   return null;
 }
 
+let sns: SNSClient | null = null;
+const getSns = () =>
+  (sns ??= new SNSClient({
+    region: config.sms.sns.region,
+    credentials: { accessKeyId: config.sms.sns.accessKeyId, secretAccessKey: config.sms.sns.secretAccessKey },
+  }));
+
+// Errors where retrying cannot help (bad number, opted out, sandbox/unverified destination, bad credentials).
+const SNS_PERMANENT = new Set([
+  'InvalidParameterException', 'InvalidParameter', 'OptedOutException', 'OptedOut', 'VerificationException',
+  'AuthorizationErrorException', 'AuthorizationError', 'InvalidClientTokenId', 'UnrecognizedClientException', 'SignatureDoesNotMatch',
+]);
+
+async function sendSnsSms(m: { to: string; body: string }): Promise<SendResult> {
+  try {
+    const attrs: Record<string, { DataType: string; StringValue: string }> = {
+      'AWS.SNS.SMS.SMSType': { DataType: 'String', StringValue: 'Transactional' },
+    };
+    if (config.sms.sns.originationNumber) attrs['AWS.MM.SMS.OriginationNumber'] = { DataType: 'String', StringValue: config.sms.sns.originationNumber };
+    else if (config.sms.sns.senderId) attrs['AWS.SNS.SMS.SenderID'] = { DataType: 'String', StringValue: config.sms.sns.senderId };
+    const r = await getSns().send(new PublishCommand({ PhoneNumber: m.to, Message: m.body, MessageAttributes: attrs }), { abortSignal: AbortSignal.timeout(15_000) });
+    return { ok: true, id: String(r.MessageId ?? '') };
+  } catch (e: any) {
+    const name = String(e?.name ?? e?.Code ?? '');
+    return { ok: false, permanent: SNS_PERMANENT.has(name), error: `SNS ${name || 'error'}: ${String(e?.message ?? e).slice(0, 250)}` };
+  }
+}
+
+/** Numbers that replied STOP to an AWS-owned sender. Returns last-10-digit strings. Empty when not using SNS or on error. */
+export async function snsOptedOut(): Promise<string[]> {
+  if (config.sms.provider !== 'sns' || !smsConfigured()) return [];
+  const out: string[] = [];
+  try {
+    let token: string | undefined;
+    do {
+      const r = await getSns().send(new ListPhoneNumbersOptedOutCommand({ nextToken: token }));
+      for (const n of r.phoneNumbers ?? []) out.push(n.replace(/\D/g, '').slice(-10));
+      token = r.nextToken;
+    } while (token && out.length < 5000);
+  } catch (e: any) {
+    console.error('sns opt-out sync failed:', e?.name ?? e);
+  }
+  return out;
+}
+
 export async function sendSms(m: { to: string; body: string }): Promise<SendResult> {
+  if (config.sms.provider === 'sns' && smsConfigured()) return sendSnsSms(m);
   if (!smsConfigured()) {
     console.log(`[sms:log-only] to=${m.to} chars=${m.body.length}`);
     return { ok: true, id: 'log-only', logged: true };

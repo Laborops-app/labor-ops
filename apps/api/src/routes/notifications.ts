@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { pool, withTenant, audit } from '../db';
 import { authenticate, guard } from '../auth';
 import { config } from '../config';
-import { emailConfigured, smsConfigured, sendEmail, sendSms, toE164 } from '../notify/providers';
+import { emailConfigured, smsConfigured, smsSender, sendEmail, sendSms, toE164 } from '../notify/providers';
 import { renderEmail } from '../notify/templates';
 import { hashToken, sendReset } from '../notify/tokens';
 import { runSweeps } from '../notify/sweeps';
@@ -107,7 +107,7 @@ export async function notificationRoutes(app: FastifyInstance) {
   app.get('/api/messaging', { preHandler: adm }, async (req) =>
     withTenant(req.user.tid, async (c) => ({
       email: { live: emailConfigured(), from: config.email.from, host: config.email.host || null },
-      sms: { live: smsConfigured(), from: config.sms.from || null },
+      sms: { live: smsConfigured(), provider: config.sms.provider, from: smsSender() },
       appUrl: config.appUrl,
       stats: (
         await c.query(

@@ -29,8 +29,17 @@ export const config = {
     pass: process.env.SES_SMTP_PASS ?? '',
     from: process.env.EMAIL_FROM ?? 'LaborOps <no-reply@laborops.app>',
   },
-  // SMS through Twilio. Unset = log-only mode.
+  // SMS provider: 'twilio' (default) or 'sns' (Amazon SNS). Not configured = log-only mode.
   sms: {
+    provider: (process.env.SMS_PROVIDER ?? 'twilio').toLowerCase() === 'sns' ? ('sns' as const) : ('twilio' as const),
+    sns: {
+      region: process.env.SNS_REGION ?? process.env.AWS_REGION ?? 'us-west-2',
+      accessKeyId: process.env.SNS_ACCESS_KEY_ID ?? process.env.AWS_ACCESS_KEY_ID ?? '',
+      secretAccessKey: process.env.SNS_SECRET_ACCESS_KEY ?? process.env.AWS_SECRET_ACCESS_KEY ?? '',
+      // Optional: the registered 10DLC / toll-free number to send from (E.164), or an alphanumeric sender ID where allowed.
+      originationNumber: process.env.SNS_ORIGINATION_NUMBER ?? '',
+      senderId: process.env.SNS_SENDER_ID ?? '',
+    },
     sid: process.env.TWILIO_ACCOUNT_SID ?? '',
     token: process.env.TWILIO_AUTH_TOKEN ?? '',
     from: process.env.TWILIO_FROM_NUMBER ?? '',

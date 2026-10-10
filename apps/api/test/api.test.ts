@@ -718,3 +718,26 @@ test('twilio inbound webhook: signature is required, STOP switches SMS off', asy
     config.sms.token = '';
   }
 });
+
+test('sms provider: SNS mode reports connected only with credentials and shows in admin status', async () => {
+  const { config } = await import('../src/config');
+  const a = await register('sns');
+  const prev = { ...config.sms.sns, provider: config.sms.provider };
+  try {
+    config.sms.provider = 'sns';
+    config.sms.sns.accessKeyId = '';
+    config.sms.sns.secretAccessKey = '';
+    let m = (await call(a, 'GET', '/api/messaging')).json;
+    assert.equal(m.sms.provider, 'sns');
+    assert.equal(m.sms.live, false);
+    config.sms.sns.accessKeyId = 'AKIATEST';
+    config.sms.sns.secretAccessKey = 'secret';
+    config.sms.sns.originationNumber = '+18015550100';
+    m = (await call(a, 'GET', '/api/messaging')).json;
+    assert.equal(m.sms.live, true);
+    assert.equal(m.sms.from, '+18015550100');
+  } finally {
+    config.sms.provider = prev.provider;
+    Object.assign(config.sms.sns, { accessKeyId: prev.accessKeyId, secretAccessKey: prev.secretAccessKey, originationNumber: prev.originationNumber });
+  }
+});
