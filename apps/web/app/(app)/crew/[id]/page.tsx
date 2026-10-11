@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import Shell, { initials } from '@/components/Shell';
 import { Banner } from '@/components/ui';
@@ -57,6 +57,7 @@ function Body() {
   const [f, setF] = useState({ name: '', email: '', phone: '', address: '', emergencyName: '', emergencyPhone: '', bio: '', coordinatorNotes: '', skills: [] as string[] });
   const skillNames = useSkillNames();
   const [cf, setCf] = useState<{ name: string; expiresOn: string; file: File | null }>({ name: '', expiresOn: '', file: null });
+  const router = useRouter();
   const [error, setError] = useState('');
   const [ok, setOk] = useState('');
   const [busy, setBusy] = useState('');
@@ -161,6 +162,17 @@ function Body() {
           </h1>
           <div className="muted">{roleLabel(m.role)}</div>
         </div>
+        <button
+          className="btn small"
+          style={{ marginLeft: 'auto' }}
+          onClick={() =>
+            api<{ id: string }>('/api/chat/dm', { body: { userId: m.id } })
+              .then((r) => router.push(`/chat?c=${r.id}`))
+              .catch((e) => setError(e.message))
+          }
+        >
+          Message
+        </button>
       </div>
       {error && <Banner onClose={() => setError('')}>{error}</Banner>}
       {ok && (

@@ -194,6 +194,17 @@ function Body() {
             {ev.end_date.slice(0, 10) !== ev.start_date.slice(0, 10) && <> – {fmtDate(ev.end_date.slice(0, 10))}</>}
           </div>
         </div>
+        <div className="row" style={{ gap: '0.4rem' }}>
+        <button
+          className="btn small"
+          onClick={() =>
+            api<{ id: string }>('/api/chat/channels', { body: { eventId: id } })
+              .then((r) => router.push(`/chat?c=${r.id}`))
+              .catch((e) => setError(e.message))
+          }
+        >
+          Event chat
+        </button>
         <button
           className="btn ghost small danger"
           onClick={() => {
@@ -202,6 +213,7 @@ function Body() {
         >
           Delete event
         </button>
+        </div>
       </div>
       {error && <Banner onClose={() => setError('')}>{error}</Banner>}
       {note && (

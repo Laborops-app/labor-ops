@@ -2,7 +2,7 @@ import type { PoolClient } from 'pg';
 import { toE164 } from './providers';
 import { absUrl, renderEmail } from './templates';
 
-export type Category = 'assignment' | 'shift_change' | 'reminder' | 'approval_request' | 'approval_result' | 'open_shift' | 'cert' | 'account';
+export type Category = 'assignment' | 'shift_change' | 'reminder' | 'approval_request' | 'approval_result' | 'open_shift' | 'chat' | 'cert' | 'account';
 
 // Categories that may also go out by text message (when the person opted in). Everything else is email + in-app only.
 const SMS_CATEGORIES = new Set<Category>(['assignment', 'shift_change', 'reminder', 'approval_result']);
@@ -15,6 +15,8 @@ export type NotifyInput = {
   link?: string;
   /** Short text-message wording. Defaults to the title. */
   sms?: string;
+  /** In-app + browser push only: no email or text message (used for chat). */
+  quiet?: boolean;
 };
 
 type Target = { id: string; email: string; phone: string | null; notify_email: boolean; notify_sms: boolean; sms_consent_at: Date | null };
@@ -49,7 +51,7 @@ export async function notify(c: PoolClient, tenantId: string, input: NotifyInput
         [tenantId, u.id, nid, n.category, sub.id, n.title, payload],
       );
     }
-    if (u.notify_email && u.email) {
+    if (!n.quiet && u.notify_email && u.email) {
       const m = renderEmail({ title: n.title, body: n.body, link: n.link });
       await c.query(
         `INSERT INTO deliveries (tenant_id, user_id, notification_id, channel, category, to_addr, subject, body, html)
@@ -58,7 +60,7 @@ export async function notify(c: PoolClient, tenantId: string, input: NotifyInput
       );
     }
     const phone = toE164(u.phone);
-    if (SMS_CATEGORIES.has(n.category) && u.notify_sms && u.sms_consent_at && phone) {
+    if (!n.quiet && SMS_CATEGORIES.has(n.category) && u.notify_sms && u.sms_consent_at && phone) {
       const text = `LaborOps: ${n.sms ?? n.title}${n.link ? ' ' + absUrl(n.link) : ''} Reply STOP to opt out.`;
       await c.query(
         `INSERT INTO deliveries (tenant_id, user_id, notification_id, channel, category, to_addr, body)

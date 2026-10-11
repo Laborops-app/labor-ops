@@ -94,6 +94,12 @@ const NAV: { href: string; label: string; roles: Role[]; icon: React.ReactNode }
     ),
   },
   {
+    href: '/chat',
+    label: 'Chat',
+    roles: ['admin', 'manager', 'crew'],
+    icon: icon(<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z" />),
+  },
+  {
     href: '/messaging',
     label: 'Messaging',
     roles: ['admin'],
@@ -169,6 +175,7 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
   const router = useRouter();
   const path = usePathname();
   const [me, setMe] = useState<Me | null>(null);
+  const [chatUnread, setChatUnread] = useState(0);
 
   useEffect(() => {
     api<{ user: Me }>('/api/auth/me')
@@ -179,6 +186,14 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
       .catch(() => router.replace('/login'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!me) return;
+    const poll = () => document.visibilityState === 'visible' && api<{ unread: number }>('/api/chat/unread').then((r) => setChatUnread(r.unread)).catch(() => undefined);
+    poll();
+    const t = setInterval(poll, 8000);
+    return () => clearInterval(t);
+  }, [me, path]);
 
   if (!me) return <div className="center muted">Loading…</div>;
 
@@ -200,6 +215,7 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
           {items.map((n) => (
             <Link key={n.href} href={n.href} aria-label={n.label} className={path.startsWith(n.href) ? 'active' : ''} aria-current={path.startsWith(n.href) ? 'page' : undefined}>
               {n.icon}
+              {n.href === '/chat' && chatUnread > 0 && <span className="nav-badge" aria-label={`${chatUnread} unread conversations`}>{chatUnread > 9 ? '9+' : chatUnread}</span>}
               <span className="tip">{n.label}</span>
             </Link>
           ))}
@@ -247,6 +263,7 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
           {items.map((n) => (
             <Link key={n.href} href={n.href} className={path.startsWith(n.href) ? 'active' : ''} aria-current={path.startsWith(n.href) ? 'page' : undefined}>
               {n.icon}
+              {n.href === '/chat' && chatUnread > 0 && <span className="nav-badge" aria-label={`${chatUnread} unread conversations`}>{chatUnread > 9 ? '9+' : chatUnread}</span>}
               <span>{n.label}</span>
             </Link>
           ))}

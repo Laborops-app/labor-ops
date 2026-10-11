@@ -912,3 +912,98 @@ test('browser push: subscribe, queue a push delivery, send, drop expired subscri
   assert.equal((await call(c1.session, 'POST', '/api/push/unsubscribe', {})).status, 200);
   assert.equal((await call(c1.session, 'GET', '/api/push/status')).json.devices.length, 0);
 });
+
+test('chat: DM rules, groups, event channels, unread, quiet notifications, delete, isolation', async () => {
+  const a = await register('cht');
+  const b = await register('chtB');
+  const c1 = await mkCrew(a, 'ch1');
+  const c2 = await mkCrew(a, 'ch2');
+
+  // crew may DM staff only; staff may DM anyone
+  assert.equal((await call(c1.session, 'POST', '/api/chat/dm', { userId: c2.id })).status, 404);
+  assert.equal((await call(c1.session, 'POST', '/api/chat/dm', { userId: c1.id })).status, 400);
+  const people = (await call(c1.session, 'GET', '/api/chat/people')).json.people;
+  assert.ok(people.every((p: any) => p.role !== 'crew'));
+  const dm = await call(c1.session, 'POST', '/api/chat/dm', { userId: a.id });
+  assert.equal(dm.status, 200, dm.text);
+  const dm2 = await call(a, 'POST', '/api/chat/dm', { userId: c1.id });
+  assert.equal(dm2.json.id, dm.json.id, 'one DM per pair');
+  assert.equal((await call(a, 'POST', '/api/chat/dm', { userId: b.id })).status, 404, 'no cross-company DMs');
+
+  // sending, unread and quiet notifications
+  const ch = dm.json.id as string;
+  assert.equal((await call(c1.session, 'POST', `/api/chat/channels/${ch}/messages`, { body: '  ' })).status, 400);
+  assert.equal((await call(c1.session, 'POST', `/api/chat/channels/${ch}/messages`, { body: 'hello' })).status, 200);
+  assert.equal((await call(c1.session, 'POST', `/api/chat/channels/${ch}/messages`, { body: 'anyone there?' })).status, 200);
+  assert.equal((await call(a, 'GET', '/api/chat/unread')).json.unread, 1);
+  const list = (await call(a, 'GET', '/api/chat/channels')).json.channels;
+  assert.equal(list[0].unread, 2);
+  assert.equal(list[0].name, 'Crew ch1');
+  const notes = (await call(a, 'GET', '/api/notifications')).json.items.filter((n: any) => n.category === 'chat');
+  assert.equal(notes.length, 1, 'later messages refresh the same notification');
+  assert.match(notes[0].body, /anyone there/);
+  // reading and paging
+  const msgs = (await call(a, 'GET', `/api/chat/channels/${ch}/messages`)).json;
+  assert.equal(msgs.messages.length, 2);
+  const lastSeq = msgs.messages[1].seq;
+  assert.equal((await call(a, 'GET', `/api/chat/channels/${ch}/messages?after=${lastSeq}`)).json.messages.length, 0);
+  await call(a, 'POST', `/api/chat/channels/${ch}/messages`, { body: 'on my way' });
+  assert.equal((await call(c1.session, 'GET', `/api/chat/channels/${ch}/messages?after=${lastSeq}`)).json.messages.length, 1);
+  assert.equal((await call(a, 'POST', `/api/chat/channels/${ch}/read`)).status, 200);
+  assert.equal((await call(a, 'GET', '/api/chat/unread')).json.unread, 0);
+
+  // outsiders cannot read or post
+  assert.equal((await call(c2.session, 'GET', `/api/chat/channels/${ch}/messages`)).status, 404);
+  assert.equal((await call(c2.session, 'POST', `/api/chat/channels/${ch}/messages`, { body: 'hi' })).status, 404);
+  assert.equal((await call(b, 'GET', `/api/chat/channels/${ch}`)).status, 404);
+
+  // delete: author or staff only
+  const mid = msgs.messages[0].id;
+  assert.equal((await call(c2.session, 'DELETE', `/api/chat/messages/${mid}`)).status, 404);
+  assert.equal((await call(c1.session, 'DELETE', `/api/chat/messages/${mid}`)).status, 200);
+  const after = (await call(a, 'GET', `/api/chat/channels/${ch}/messages`)).json.messages;
+  assert.equal(after[0].deleted, true);
+  assert.equal(after[0].body, '');
+
+  // groups: staff only
+  assert.equal((await call(c1.session, 'POST', '/api/chat/channels', { name: 'Crew room' })).status, 403);
+  const g = await call(a, 'POST', '/api/chat/channels', { name: 'Load-in', memberIds: [c1.id] });
+  assert.equal(g.status, 201, g.text);
+  assert.equal((await call(c1.session, 'GET', `/api/chat/channels/${g.json.id}`)).json.channel.name, 'Load-in');
+  assert.equal((await call(c2.session, 'GET', `/api/chat/channels/${g.json.id}`)).status, 404);
+  assert.equal((await call(c1.session, 'POST', `/api/chat/channels/${g.json.id}/members`, { userIds: [c2.id] })).status, 403);
+  assert.equal((await call(a, 'POST', `/api/chat/channels/${g.json.id}/members`, { userIds: [c2.id] })).status, 200);
+  assert.equal((await call(c2.session, 'GET', `/api/chat/channels/${g.json.id}`)).status, 200);
+  assert.equal((await call(c1.session, 'DELETE', `/api/chat/channels/${g.json.id}/members/${c2.id}`)).status, 404);
+  assert.equal((await call(a, 'DELETE', `/api/chat/channels/${g.json.id}/members/${c2.id}`)).status, 200);
+  assert.equal((await call(c2.session, 'GET', `/api/chat/channels/${g.json.id}`)).status, 404);
+  // mute stops notifications
+  assert.equal((await call(c1.session, 'PATCH', `/api/chat/channels/${g.json.id}`, { muted: true })).status, 200);
+  await call(a, 'POST', `/api/chat/channels/${g.json.id}/messages`, { body: 'quiet please' });
+  const c1notes = (await call(c1.session, 'GET', '/api/notifications')).json.items.filter((n: any) => /Load-in/.test(n.title));
+  assert.equal(c1notes.length, 0);
+
+  // event channels follow assignments
+  const ev = await mkEvent(a);
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Tech', startsAt: start(30), endsAt: start(36), headcount: 2 })).json.shift.id;
+  const ec = await call(a, 'POST', '/api/chat/channels', { eventId: ev });
+  assert.equal(ec.status, 201, ec.text);
+  assert.equal((await call(a, 'POST', '/api/chat/channels', { eventId: ev })).json.id, ec.json.id, 'one channel per event');
+  assert.equal((await call(c1.session, 'GET', `/api/chat/channels/${ec.json.id}`)).status, 404);
+  const asg = await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id });
+  assert.equal(asg.status < 300, true, asg.text);
+  assert.equal((await call(c1.session, 'GET', `/api/chat/channels/${ec.json.id}`)).status, 200);
+  const aid = (await call(a, 'GET', `/api/events/${ev}`)).json.shifts?.[0]?.assignments?.[0]?.id ?? asg.json.assignment?.id;
+  assert.ok(aid);
+  assert.equal((await call(a, 'DELETE', `/api/assignments/${aid}`)).status < 300, true);
+  assert.equal((await call(c1.session, 'GET', `/api/chat/channels/${ec.json.id}`)).status, 404);
+});
+
+test('chat: message rate limit', async () => {
+  const a = await register('chtrl');
+  const c1 = await mkCrew(a, 'rl1');
+  const ch = (await call(c1.session, 'POST', '/api/chat/dm', { userId: a.id })).json.id;
+  let last = 0;
+  for (let i = 0; i < 42; i++) last = (await call(c1.session, 'POST', `/api/chat/channels/${ch}/messages`, { body: `m${i}` })).status;
+  assert.equal(last, 429);
+});

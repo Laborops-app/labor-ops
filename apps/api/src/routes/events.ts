@@ -1,4 +1,5 @@
 import { notify, describeShift } from '../notify';
+import { syncEventChannel } from './chat';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
@@ -197,6 +198,7 @@ export async function eventRoutes(app: FastifyInstance) {
         )
       ).rows[0];
       await audit(c, req.user.tid, req.user.sub, 'assignment.create', 'assignment', a.id, { shiftId, userId });
+      await syncEventChannel(c, req.user.tid, shift.event_id, userId, true);
       const d = await describeShift(c, req.user.tid, shiftId);
       if (d)
         await notify(c, req.user.tid, {
@@ -213,8 +215,9 @@ export async function eventRoutes(app: FastifyInstance) {
   app.delete('/api/assignments/:id', { preHandler: mgr }, async (req, reply) => {
     const { id: aId } = id.parse(req.params);
     const n = await withTenant(req.user.tid, async (c) => {
-      const prev = (await c.query('SELECT user_id, shift_id FROM shift_assignments WHERE id = $1', [aId])).rows[0];
+      const prev = (await c.query('SELECT a.user_id, a.shift_id, s.event_id FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE a.id = $1', [aId])).rows[0];
       const r = await c.query('DELETE FROM shift_assignments WHERE id = $1', [aId]);
+      if (r.rowCount && prev) await syncEventChannel(c, req.user.tid, prev.event_id, prev.user_id, false);
       if (r.rowCount && prev) {
         const d = await describeShift(c, req.user.tid, prev.shift_id);
         if (d)
