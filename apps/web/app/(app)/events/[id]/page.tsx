@@ -6,10 +6,10 @@ import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { roleKey } from '@/components/Stars';
 import { api, ApiError, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
-import { EventDetails, Phases, EventFull, Phase } from '@/components/EventInfo';
+import { EventDetails, Phases, Clocking, EventFull, Phase } from '@/components/EventInfo';
 import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 
-type Assignment = { id: string; user_id: string; user_name: string; status: string };
+type Assignment = { id: string; user_id: string; user_name: string; status: string; clocked_in_at?: string | null; last_clock_out?: string | null };
 type Elig = { user_id: string; missing_certs: string[]; time_off: boolean; outside_availability: boolean };
 type Shift = {
   id: string;
@@ -281,9 +281,24 @@ function Body() {
                       <span>
                         {a.user_name} <Pill status={a.status} />
                       </span>
-                      <button className="btn ghost small" onClick={() => run(() => api(`/api/assignments/${a.id}`, { method: 'DELETE' }))}>
-                        Remove
-                      </button>
+                      <span className="row">
+                        {a.status === 'accepted' && !a.clocked_in_at && (
+                          <button className="btn small" onClick={() => run(() => api(`/api/assignments/${a.id}/check-in`, { body: {} }))}>
+                            Check in
+                          </button>
+                        )}
+                        {a.clocked_in_at && (
+                          <>
+                            <span className="muted small">on site since {fmtTime(a.clocked_in_at)}</span>
+                            <button className="btn small" onClick={() => run(() => api(`/api/assignments/${a.id}/check-out`, { body: {} }))}>
+                              Check out
+                            </button>
+                          </>
+                        )}
+                        <button className="btn ghost small" onClick={() => run(() => api(`/api/assignments/${a.id}`, { method: 'DELETE' }))}>
+                          Remove
+                        </button>
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -418,6 +433,7 @@ function Body() {
 
       <EventDetails ev={ev} hasPhases={d.phases.length > 0} onSaved={load} onError={setError} />
       <Phases eventId={id} phases={d.phases} onChanged={load} onError={setError} />
+      <Clocking ev={ev} onSaved={load} onError={setError} />
 
       <section className="card" ref={shiftForm}>
         <h2>Add a shift</h2>

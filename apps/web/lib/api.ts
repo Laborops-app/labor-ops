@@ -32,3 +32,15 @@ export const fmtDateTime = (iso: string) =>
 export const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 export const fmtDate = (d: string) =>
   new Date(d.length === 10 ? `${d}T00:00:00` : d).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+
+export type Pos = { lat: number; lng: number; accuracy: number };
+/** The device's current position, or an error message explaining why it could not be read. */
+export const getPosition = (timeoutMs = 12000): Promise<Pos> =>
+  new Promise((resolve, reject) => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) return reject(new Error('This device cannot share its location.'));
+    navigator.geolocation.getCurrentPosition(
+      (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }),
+      (e) => reject(new Error(e.code === 1 ? 'Location is blocked. Allow location access for this site in your browser settings, then try again.' : 'Could not read your location. Try again.')),
+      { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 10000 },
+    );
+  });

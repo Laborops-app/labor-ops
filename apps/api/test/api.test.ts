@@ -1271,3 +1271,44 @@ test('ratings: coordinators rate crew per position, crew cannot, base role name 
   assert.deepEqual((await call(a, 'PUT', `/api/crew/${c1.id}/ratings`, { role: 'Lighting', stars: null })).json.ratings, { audio: 5 });
   assert.equal((await call(a, 'PUT', `/api/crew/${crypto.randomUUID()}/ratings`, { role: 'Audio', stars: 3 })).status, 404);
 });
+
+test('clocking: geofence, coordinator mode and on-site check-in', async () => {
+  const a = await register('geo');
+  const c1 = await mkCrew(a, 'geo1');
+  const ev = await mkEvent(a);
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Tech', startsAt: start(-1), endsAt: start(5), headcount: 1 })).json.shift.id;
+  const asg = (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id })).json.assignment.id;
+  await call(c1.session, 'POST', `/api/assignments/${asg}/respond`, { response: 'accepted' });
+
+  // settings: admin/coordinator only, both coordinates needed
+  assert.equal((await call(c1.session, 'PUT', `/api/events/${ev}/clocking`, { clockMode: 'self', lat: 39.74, lng: -104.99, geofenceM: 200 })).status, 403);
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/clocking`, { clockMode: 'self', lat: 39.74, lng: null, geofenceM: 200 })).status, 400);
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/clocking`, { clockMode: 'self', lat: 39.74, lng: -104.99, geofenceM: 200 })).status, 200);
+  assert.equal((await call(c1.session, 'GET', '/api/my/shifts')).json.shifts[0].needs_location, true);
+
+  // no position, far away, then close by
+  const noPos = await call(c1.session, 'POST', '/api/time/clock-in', { assignmentId: asg });
+  assert.equal(noPos.status, 409);
+  assert.match(noPos.json.error, /location/);
+  const far = await call(c1.session, 'POST', '/api/time/clock-in', { assignmentId: asg, lat: 39.80, lng: -104.99, accuracy: 20 });
+  assert.equal(far.status, 409);
+  assert.equal(far.json.reason, 'geofence');
+  assert.match(far.json.error, /km from/);
+  const near = await call(c1.session, 'POST', '/api/time/clock-in', { assignmentId: asg, lat: 39.7405, lng: -104.99, accuracy: 15 });
+  assert.equal(near.status, 201, near.text);
+  assert.equal((await call(c1.session, 'POST', '/api/time/clock-out', { lat: 39.7405, lng: -104.99 })).status, 200);
+
+  // coordinator mode: crew cannot clock themselves in, the coordinator checks them in and out
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/clocking`, { clockMode: 'coordinator', lat: null, lng: null, geofenceM: null })).status, 200);
+  const blocked = await call(c1.session, 'POST', '/api/time/clock-in', { assignmentId: asg });
+  assert.equal(blocked.status, 409);
+  assert.match(blocked.json.error, /coordinator/);
+  assert.equal((await call(c1.session, 'POST', `/api/assignments/${asg}/check-in`)).status, 403);
+  assert.equal((await call(a, 'POST', `/api/assignments/${asg}/check-in`)).status, 201);
+  assert.equal((await call(a, 'POST', `/api/assignments/${asg}/check-in`)).status, 409);
+  const det = (await call(a, 'GET', `/api/events/${ev}`)).json.shifts[0].assignments[0];
+  assert.ok(det.clocked_in_at);
+  assert.equal((await call(a, 'POST', `/api/assignments/${asg}/check-out`)).status, 200);
+  assert.equal((await call(a, 'POST', `/api/assignments/${asg}/check-out`)).status, 409);
+  assert.equal((await call(a, 'GET', '/api/timesheets?status=submitted')).json.entries.length, 2);
+});

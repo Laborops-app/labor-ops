@@ -89,7 +89,9 @@ export async function eventRoutes(app: FastifyInstance) {
       const shifts = (await c.query('SELECT * FROM shifts WHERE event_id = $1 ORDER BY starts_at, role_name', [eventId])).rows;
       const assigns = (
         await c.query(
-          `SELECT a.id, a.shift_id, a.user_id, a.status, u.name AS user_name
+          `SELECT a.id, a.shift_id, a.user_id, a.status, u.name AS user_name,
+             (SELECT t.clock_in FROM time_entries t WHERE t.assignment_id = a.id AND t.clock_out IS NULL LIMIT 1) AS clocked_in_at,
+             (SELECT max(t.clock_out) FROM time_entries t WHERE t.assignment_id = a.id) AS last_clock_out
            FROM shift_assignments a JOIN users u ON u.id = a.user_id
            JOIN shifts s ON s.id = a.shift_id WHERE s.event_id = $1 ORDER BY u.name`,
           [eventId],

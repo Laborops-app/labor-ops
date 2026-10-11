@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
-import { api, fmtDateTime, fmtTime, money } from '@/lib/api';
+import { api, fmtDateTime, fmtTime, getPosition, money } from '@/lib/api';
 
 type MyShift = {
   assignment_id: string;
@@ -15,6 +15,9 @@ type MyShift = {
   venue: string | null;
   clocked_in: boolean;
   can_clock_in: boolean;
+  clock_mode: 'self' | 'coordinator';
+  needs_location: boolean;
+  geofence_m: number | null;
   swap_status: string | null;
   swap_id: string | null;
   can_offer_swap: boolean;
@@ -103,13 +106,28 @@ function Body() {
                   </button>
                 </>
               )}
-              {s.status === 'accepted' && !s.clocked_in && !s.can_clock_in && (
+              {s.status === 'accepted' && !s.clocked_in && s.clock_mode === 'coordinator' && (
+                <span className="muted small">Your labor coordinator will check you in when you arrive.</span>
+              )}
+              {s.status === 'accepted' && !s.clocked_in && s.clock_mode !== 'coordinator' && !s.can_clock_in && (
                 <span className="muted small">Clock-in opens 1 hour before the shift starts.</span>
               )}
-              {s.status === 'accepted' && !s.clocked_in && s.can_clock_in && (
-                <button className="btn primary big" disabled={!!busy || !!clockedIn} onClick={() => act(s.assignment_id, () => api('/api/time/clock-in', { body: { assignmentId: s.assignment_id } }))}>
-                  Clock in
-                </button>
+              {s.status === 'accepted' && !s.clocked_in && s.clock_mode !== 'coordinator' && s.can_clock_in && (
+                <>
+                  <button
+                    className="btn primary big"
+                    disabled={!!busy || !!clockedIn}
+                    onClick={() =>
+                      act(s.assignment_id, async () => {
+                        const pos = s.needs_location ? await getPosition() : await getPosition(4000).catch(() => null);
+                        await api('/api/time/clock-in', { body: { assignmentId: s.assignment_id, ...(pos ?? {}) } });
+                      })
+                    }
+                  >
+                    Clock in
+                  </button>
+                  {s.needs_location && <span className="muted small">Your location is checked: be within {s.geofence_m} m of the venue.</span>}
+                </>
               )}
               {s.status === 'pending' && <span className="muted small">Waiting for approval.</span>}
               {s.swap_status && s.swap_id && (
@@ -126,7 +144,7 @@ function Body() {
                 </button>
               )}
               {s.clocked_in && (
-                <button className="btn danger-solid big" disabled={!!busy} onClick={() => act(s.assignment_id, () => api('/api/time/clock-out', { body: {} }))}>
+                <button className="btn danger-solid big" disabled={!!busy} onClick={() => act(s.assignment_id, async () => api('/api/time/clock-out', { body: (await getPosition(4000).catch(() => null)) ?? {} }))}>
                   Clock out
                 </button>
               )}

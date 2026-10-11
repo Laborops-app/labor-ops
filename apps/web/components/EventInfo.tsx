@@ -1,8 +1,8 @@
 'use client';
 import { useState } from 'react';
-import { api, fmtDate } from '@/lib/api';
+import { api, fmtDate, getPosition } from '@/lib/api';
 
-export type EventFull = { id: string; name: string; client: string | null; venue: string | null; address: string | null; notes: string | null; start_date: string; end_date: string };
+export type EventFull = { id: string; name: string; client: string | null; venue: string | null; address: string | null; notes: string | null; start_date: string; end_date: string; clock_mode?: 'self' | 'coordinator'; geo_lat?: number | null; geo_lng?: number | null; geofence_m?: number | null };
 export type Phase = { id: string; label: string; starts_on: string; ends_on: string };
 
 const PRESETS = ['Load in', 'Setup', 'Rehearsal', 'Tech', 'Show day', 'Show days', 'Strike', 'Load out'];
@@ -208,6 +208,95 @@ export function Phases({ eventId, phases, onChanged, onError }: { eventId: strin
           <option key={p} value={p} />
         ))}
       </datalist>
+    </section>
+  );
+}
+
+/** Who clocks crew in at this event, and an optional geofence around the venue. */
+export function Clocking({ ev, onSaved, onError }: { ev: EventFull; onSaved: () => void; onError: (m: string) => void }) {
+  const [mode, setMode] = useState<'self' | 'coordinator'>(ev.clock_mode ?? 'self');
+  const [lat, setLat] = useState(ev.geo_lat != null ? String(ev.geo_lat) : '');
+  const [lng, setLng] = useState(ev.geo_lng != null ? String(ev.geo_lng) : '');
+  const [radius, setRadius] = useState(String(ev.geofence_m ?? 300));
+  const [fence, setFence] = useState(ev.geo_lat != null && ev.geofence_m != null);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState('');
+
+  const here = async () => {
+    onError('');
+    try {
+      const p = await getPosition();
+      setLat(p.lat.toFixed(6));
+      setLng(p.lng.toFixed(6));
+    } catch (e) {
+      onError((e as Error).message);
+    }
+  };
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    onError('');
+    setSaved('');
+    const la = lat.trim() === '' ? null : Number(lat);
+    const lo = lng.trim() === '' ? null : Number(lng);
+    if (fence && (la === null || lo === null || !Number.isFinite(la) || !Number.isFinite(lo))) return onError('Enter the venue latitude and longitude, or use your current location.');
+    setBusy(true);
+    try {
+      await api(`/api/events/${ev.id}/clocking`, {
+        method: 'PUT',
+        body: { clockMode: mode, lat: la, lng: lo, geofenceM: fence && la !== null ? Math.round(Number(radius)) : null },
+      });
+      setSaved('Saved.');
+      onSaved();
+    } catch (err) {
+      onError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="card">
+      <h2>Clock-in</h2>
+      <form onSubmit={save}>
+        <div className="grid2">
+          <label>
+            Who clocks crew in
+            <select value={mode} onChange={(e) => setMode(e.target.value as 'self' | 'coordinator')}>
+              <option value="self">Crew clock themselves in</option>
+              <option value="coordinator">Labor coordinator checks crew in on site</option>
+            </select>
+          </label>
+          {mode === 'self' && (
+            <label className="row" style={{ gap: '.5rem', alignItems: 'center' }}>
+              <input type="checkbox" checked={fence} onChange={(e) => setFence(e.target.checked)} style={{ width: 'auto' }} />
+              Only allow clock-in near the venue
+            </label>
+          )}
+        </div>
+        {mode === 'self' && fence && (
+          <div className="grid2">
+            <label>
+              Venue latitude
+              <input inputMode="decimal" value={lat} onChange={(e) => setLat(e.target.value)} placeholder="39.7392" />
+            </label>
+            <label>
+              Venue longitude
+              <input inputMode="decimal" value={lng} onChange={(e) => setLng(e.target.value)} placeholder="-104.9903" />
+            </label>
+            <label>
+              Allowed distance (metres)
+              <input type="number" min={25} max={20000} value={radius} onChange={(e) => setRadius(e.target.value)} />
+            </label>
+            <div>
+              <button type="button" className="btn" onClick={here}>Use my current location</button>
+              <div className="muted small">Stand at the venue and tap this to set the spot.</div>
+            </div>
+          </div>
+        )}
+        <div className="row">
+          <button className="btn primary" disabled={busy}>Save clock-in settings</button>
+          {saved && <span className="muted small">{saved}</span>}
+        </div>
+      </form>
     </section>
   );
 }

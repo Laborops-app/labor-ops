@@ -28,6 +28,14 @@ const ENTRY_SQL = `
   JOIN events e ON e.id = s.event_id
   LEFT JOIN users ap ON ap.id = t.approved_by`;
 
+/** Great-circle distance in metres. */
+export const distanceM = (lat1: number, lng1: number, lat2: number, lng2: number) => {
+  const R = 6371000, rad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * rad, dLng = (lng2 - lng1) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+};
+
 export async function timeRoutes(app: FastifyInstance) {
   // ----- crew: my shifts -----
   app.get('/api/my/shifts', { preHandler: authenticate }, async (req) =>
@@ -37,7 +45,8 @@ export async function timeRoutes(app: FastifyInstance) {
       const rows = (
         await c.query(
           `SELECT a.id AS assignment_id, a.status, s.id AS shift_id, s.role_name, s.starts_at, s.ends_at,
-             e.name AS event_name, e.venue,
+             e.name AS event_name, e.venue, e.clock_mode, e.geofence_m,
+             (e.geo_lat IS NOT NULL AND e.geofence_m IS NOT NULL) AS needs_location,
              (SELECT w.status FROM shift_swaps w WHERE w.assignment_id = a.id AND w.status IN ('open','pending') LIMIT 1) AS swap_status,
              (SELECT w.id FROM shift_swaps w WHERE w.assignment_id = a.id AND w.status IN ('open','pending') LIMIT 1) AS swap_id,
              (a.status = 'accepted' AND s.starts_at > now() AND NOT EXISTS (SELECT 1 FROM time_entries t WHERE t.assignment_id = a.id)) AS can_offer_swap,
@@ -113,8 +122,29 @@ export async function timeRoutes(app: FastifyInstance) {
   });
 
   // ----- crew: clock in / out -----
+  const geoIn = z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180), accuracy: z.number().min(0).max(100000).optional() }).partial();
+
+  // The event's clocking rules for one assignment, plus how far a reported position is from the venue.
+  const rulesFor = async (c: any, assignmentId: string) =>
+    (await c.query(
+      `SELECT e.clock_mode, e.geo_lat, e.geo_lng, e.geofence_m, e.name AS event_name FROM shift_assignments a
+         JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id WHERE a.id = $1`, [assignmentId])).rows[0] as
+    { clock_mode: string; geo_lat: number | null; geo_lng: number | null; geofence_m: number | null; event_name: string } | undefined;
+
+  // Returns an error message when the position is outside the fence, else the distance (or null when the event has no fence).
+  const checkFence = (r: NonNullable<Awaited<ReturnType<typeof rulesFor>>>, pos: { lat?: number; lng?: number; accuracy?: number }) => {
+    if (r.geo_lat === null || r.geo_lng === null || !r.geofence_m) return { distance: null as number | null };
+    if (pos.lat === undefined || pos.lng === undefined) return { error: 'This event checks your location. Allow location access and try again.' };
+    const distance = Math.round(distanceM(pos.lat, pos.lng, r.geo_lat, r.geo_lng));
+    // Be fair to a poor GPS fix, but only up to 100 m of it.
+    if (distance - Math.min(pos.accuracy ?? 0, 100) > r.geofence_m)
+      return { error: `You are about ${distance >= 1000 ? (distance / 1000).toFixed(1) + ' km' : distance + ' m'} from ${r.event_name}. You can clock in within ${r.geofence_m} m of the venue.`, distance };
+    return { distance };
+  };
+
   app.post('/api/time/clock-in', { preHandler: authenticate }, async (req, reply) => {
-    const { assignmentId } = z.object({ assignmentId: uuid }).parse(req.body);
+    const body = z.object({ assignmentId: uuid }).merge(geoIn).parse(req.body);
+    const { assignmentId } = body;
     const result = await withTenant(req.user.tid, async (c) => {
       const a = (
         await c.query(
@@ -125,34 +155,91 @@ export async function timeRoutes(app: FastifyInstance) {
         )
       ).rows[0];
       if (!a) return { code: 404, error: 'Accept the shift before clocking in' };
+      const rules = await rulesFor(c, assignmentId);
+      if (rules?.clock_mode === 'coordinator') return { code: 409, error: 'A labor coordinator checks crew in on site for this event. Find them when you arrive.' };
       if (!a.in_window) return { code: 409, error: 'Clock-in opens 1 hour before the shift starts' };
       if ((await c.query('SELECT 1 FROM time_entries WHERE user_id = $1 AND clock_out IS NULL', [req.user.sub])).rowCount)
         return { code: 409, error: 'You are already clocked in' };
+      const fence = rules ? checkFence(rules, body) : { distance: null };
+      if ('error' in fence && fence.error) return { code: 409, error: fence.error, reason: 'geofence', distance: fence.distance };
       const t = (
-        await c.query('INSERT INTO time_entries (tenant_id, assignment_id, user_id) VALUES ($1,$2,$3) RETURNING id, clock_in', [
+        await c.query('INSERT INTO time_entries (tenant_id, assignment_id, user_id, in_lat, in_lng, in_distance_m) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, clock_in', [
           req.user.tid,
           assignmentId,
           req.user.sub,
+          body.lat ?? null,
+          body.lng ?? null,
+          fence.distance ?? null,
         ])
       ).rows[0];
       await audit(c, req.user.tid, req.user.sub, 'time.clock_in', 'time_entry', t.id);
       return { code: 201, entry: t };
     });
-    const { code, ...body } = result as { code: number; [k: string]: unknown };
-    return reply.code(code).send(body);
+    const { code, ...rest } = result as { code: number; [k: string]: unknown };
+    return reply.code(code).send(rest);
   });
 
   app.post('/api/time/clock-out', { preHandler: authenticate }, async (req, reply) => {
+    const pos = geoIn.parse(req.body ?? {});
     const row = await withTenant(req.user.tid, async (c) => {
+      const open = (await c.query('SELECT id, assignment_id FROM time_entries WHERE user_id = $1 AND clock_out IS NULL', [req.user.sub])).rows[0];
+      if (!open) return null;
+      const rules = await rulesFor(c, open.assignment_id);
+      const dist = rules && rules.geo_lat !== null && rules.geo_lng !== null && pos.lat !== undefined && pos.lng !== undefined ? Math.round(distanceM(pos.lat, pos.lng, rules.geo_lat, rules.geo_lng)) : null;
       const r = await c.query(
-        "UPDATE time_entries SET clock_out = now(), status = 'submitted' WHERE user_id = $1 AND clock_out IS NULL RETURNING id, clock_in, clock_out",
-        [req.user.sub],
+        "UPDATE time_entries SET clock_out = now(), status = 'submitted', out_lat = $2, out_lng = $3, out_distance_m = $4 WHERE id = $1 RETURNING id, clock_in, clock_out",
+        [open.id, pos.lat ?? null, pos.lng ?? null, dist],
       );
-      if (r.rows[0]) await audit(c, req.user.tid, req.user.sub, 'time.clock_out', 'time_entry', r.rows[0].id);
+      await audit(c, req.user.tid, req.user.sub, 'time.clock_out', 'time_entry', r.rows[0].id);
       return r.rows[0];
     });
     if (!row) return reply.code(409).send({ error: 'You are not clocked in' });
     return { entry: row };
+  });
+
+  // ----- coordinator: check crew in and out on site -----
+  const mgrOnly = guard('admin', 'manager');
+  app.post('/api/assignments/:id/check-in', { preHandler: mgrOnly }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const r = await withTenant(req.user.tid, async (c) => {
+      const a = (await c.query("SELECT user_id FROM shift_assignments WHERE id = $1 AND status = 'accepted'", [id])).rows[0];
+      if (!a) return { code: 404, error: 'Only accepted shifts can be checked in' };
+      if ((await c.query('SELECT 1 FROM time_entries WHERE user_id = $1 AND clock_out IS NULL', [a.user_id])).rowCount) return { code: 409, error: 'Already checked in' };
+      const t = (await c.query('INSERT INTO time_entries (tenant_id, assignment_id, user_id, in_by) VALUES ($1,$2,$3,$4) RETURNING id, clock_in', [req.user.tid, id, a.user_id, req.user.sub])).rows[0];
+      await audit(c, req.user.tid, req.user.sub, 'time.check_in', 'time_entry', t.id, { assignmentId: id });
+      return { code: 201, entry: t };
+    });
+    const { code, ...rest } = r as { code: number; [k: string]: unknown };
+    return reply.code(code).send(rest);
+  });
+
+  app.post('/api/assignments/:id/check-out', { preHandler: mgrOnly }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const row = await withTenant(req.user.tid, async (c) => {
+      const r = await c.query("UPDATE time_entries SET clock_out = now(), status = 'submitted', out_by = $2 WHERE assignment_id = $1 AND clock_out IS NULL RETURNING id, clock_in, clock_out", [id, req.user.sub]);
+      if (r.rows[0]) await audit(c, req.user.tid, req.user.sub, 'time.check_out', 'time_entry', r.rows[0].id, { assignmentId: id });
+      return r.rows[0];
+    });
+    if (!row) return reply.code(409).send({ error: 'This person is not checked in' });
+    return { entry: row };
+  });
+
+  // ----- event clocking settings -----
+  app.put('/api/events/:id/clocking', { preHandler: mgrOnly }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const b = z.object({
+      clockMode: z.enum(['self', 'coordinator']),
+      lat: z.number().min(-90).max(90).nullable(),
+      lng: z.number().min(-180).max(180).nullable(),
+      geofenceM: z.number().int().min(25).max(20000).nullable(),
+    }).refine((v) => (v.lat === null) === (v.lng === null), { message: 'Give both latitude and longitude' })
+      .refine((v) => v.geofenceM === null || v.lat !== null, { message: 'Set the venue location to use a geofence' }).parse(req.body);
+    const row = await withTenant(req.user.tid, async (c) => {
+      const r = await c.query('UPDATE events SET clock_mode = $2, geo_lat = $3, geo_lng = $4, geofence_m = $5 WHERE id = $1 RETURNING id, clock_mode, geo_lat, geo_lng, geofence_m', [id, b.clockMode, b.lat, b.lng, b.lat === null ? null : b.geofenceM]);
+      if (r.rows[0]) await audit(c, req.user.tid, req.user.sub, 'event.clocking', 'event', id, b);
+      return r.rows[0];
+    });
+    return row ? { event: row } : reply.code(404).send({ error: 'Event not found' });
   });
 
   app.get('/api/my/time', { preHandler: authenticate }, async (req) =>
