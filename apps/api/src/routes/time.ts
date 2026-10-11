@@ -1,4 +1,4 @@
-import { loadRates, rateFor, estimate } from '../pay';
+import { loadRates, rateFor, loadRules, estimateShift } from '../pay';
 import { respondToAssignment } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -33,9 +33,10 @@ export async function timeRoutes(app: FastifyInstance) {
   app.get('/api/my/shifts', { preHandler: authenticate }, async (req) =>
     withTenant(req.user.tid, async (c) => {
       const rates = await loadRates(c);
+      const rules = await loadRules(c);
       const rows = (
         await c.query(
-          `SELECT a.id AS assignment_id, a.status, s.role_name, s.starts_at, s.ends_at,
+          `SELECT a.id AS assignment_id, a.status, s.id AS shift_id, s.role_name, s.starts_at, s.ends_at,
              e.name AS event_name, e.venue,
              (SELECT w.status FROM shift_swaps w WHERE w.assignment_id = a.id AND w.status IN ('open','pending') LIMIT 1) AS swap_status,
              (SELECT w.id FROM shift_swaps w WHERE w.assignment_id = a.id AND w.status IN ('open','pending') LIMIT 1) AS swap_id,
@@ -48,12 +49,12 @@ export async function timeRoutes(app: FastifyInstance) {
           [req.user.sub],
         )
       ).rows;
-      return {
-        shifts: rows.map((r) => {
-          const pay = estimate(rateFor(rates, r.role_name), r.starts_at, r.ends_at);
-          return { ...r, hours: pay.hours, hourly_rate: pay.rate, estimated_pay: pay.estimate };
-        }),
-      };
+      const shifts = [];
+      for (const r of rows) {
+        const pay = await estimateShift(c, rules, rates, r.role_name, r.starts_at, r.ends_at, req.user.sub, r.shift_id);
+        shifts.push({ ...r, hours: pay.hours, hourly_rate: pay.rate, estimated_pay: pay.estimate, pay_notes: pay.notes });
+      }
+      return { shifts };
     }),
   );
 
@@ -96,8 +97,8 @@ export async function timeRoutes(app: FastifyInstance) {
           [me.event_id, req.user.sub],
         )
       ).rows;
-      const pay = estimate(rateFor(await loadRates(c), me.role_name), me.starts_at, me.ends_at);
-      return { shift: { ...me, hours: pay.hours, hourly_rate: pay.rate, estimated_pay: pay.estimate }, coworkers };
+      const pay = await estimateShift(c, await loadRules(c), await loadRates(c), me.role_name, me.starts_at, me.ends_at, req.user.sub, me.shift_id);
+      return { shift: { ...me, hours: pay.hours, hourly_rate: pay.rate, estimated_pay: pay.estimate, pay_notes: pay.notes }, coworkers };
     });
     if (!out) return reply.code(404).send({ error: 'Shift not found' });
     return out;

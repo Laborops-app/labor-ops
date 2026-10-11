@@ -1,5 +1,5 @@
 export class ApiError extends Error {
-  constructor(message: string, public status: number) {
+  constructor(message: string, public status: number, public reason?: string) {
     super(message);
   }
 }
@@ -17,7 +17,7 @@ export async function api<T = any>(path: string, init: { method?: string; body?:
   } catch {
     /* empty body */
   }
-  if (!res.ok) throw new ApiError(data?.error ?? `Request failed (${res.status})`, res.status);
+  if (!res.ok) throw new ApiError(data?.error ?? `Request failed (${res.status})`, res.status, data?.reason);
   return data as T;
 }
 

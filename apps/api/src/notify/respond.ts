@@ -56,7 +56,7 @@ export async function respondToAssignment(
   if (!row) return null;
   await audit(c, tenantId, user.id, `assignment.${response}`, 'assignment', assignmentId);
   if (response === 'declined') {
-    const d = await describeShift(c, tenantId, row.shift_id);
+    const d = await describeShift(c, tenantId, row.shift_id, row.user_id);
     if (d) await notifyStaff(c, tenantId, { category: 'approval_request', title: `${user.name} declined ${d.role}`, body: `${user.name} declined a shift and may need replacing.\n\n${d.line}`, link: `/events` });
   }
   return { id: row.id as string, status: row.status as string };

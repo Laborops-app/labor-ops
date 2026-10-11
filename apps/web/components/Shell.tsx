@@ -95,6 +95,17 @@ const NAV: { href: string; label: string; roles: Role[]; icon: React.ReactNode }
     ),
   },
   {
+    href: '/rules',
+    label: 'Labor rules',
+    roles: ['admin'],
+    icon: icon(
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 7v5l3 2" />
+      </>,
+    ),
+  },
+  {
     href: '/chat',
     label: 'Chat',
     roles: ['admin', 'manager', 'crew'],

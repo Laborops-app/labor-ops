@@ -1,6 +1,6 @@
 import { notify, describeShift } from '../notify';
 import { syncEventChannel, sendDirectMessage } from './chat';
-import { loadRates, rateFor, estimate } from '../pay';
+import { loadRates, loadRules, estimateShift, checkRules } from '../pay';
 import { respondLinks } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -98,8 +98,9 @@ export async function eventRoutes(app: FastifyInstance) {
       const out = [];
       // Pay is shown to admins only (coordinators see names, not rates).
       const rates = req.user.role === 'admin' ? await loadRates(c) : null;
+      const rules = rates ? await loadRules(c) : null;
       for (const s of shifts) {
-        const pay = rates ? estimate(rateFor(rates, s.role_name), s.starts_at, s.ends_at) : null;
+        const pay = rates && rules ? await estimateShift(c, rules, rates, s.role_name, s.starts_at, s.ends_at) : null;
         out.push({ ...s, ...(pay ? { hours: pay.hours, hourly_rate: pay.rate, estimated_cost: pay.estimate ? Math.round(pay.estimate * s.headcount * 100) / 100 : null } : {}), assignments: assigns.filter((a) => a.shift_id === s.id), crew_status: await evaluateShift(c, s.id) });
       }
       const phases = (await c.query('SELECT id, label, starts_on, ends_on FROM event_phases WHERE event_id = $1 ORDER BY starts_on, ends_on, created_at', [eventId])).rows;
@@ -273,6 +274,10 @@ export async function eventRoutes(app: FastifyInstance) {
           reason: 'unavailable',
         };
 
+      const chk = await checkRules(c, await loadRules(c), userId, shiftId, shift.starts_at, shift.ends_at, user.name);
+      if (chk.blocks.length && !override)
+        return { code: 409, error: chk.blocks.join('. ') + '.', reason: 'rules' };
+
       const a = (
         await c.query(
           'INSERT INTO shift_assignments (tenant_id, shift_id, user_id) VALUES ($1,$2,$3) RETURNING *',
@@ -281,7 +286,7 @@ export async function eventRoutes(app: FastifyInstance) {
       ).rows[0];
       await audit(c, req.user.tid, req.user.sub, 'assignment.create', 'assignment', a.id, { shiftId, userId });
       await syncEventChannel(c, req.user.tid, shift.event_id, userId, true);
-      const d = await describeShift(c, req.user.tid, shiftId);
+      const d = await describeShift(c, req.user.tid, shiftId, userId);
       if (d) {
         const links = respondLinks(req.user.tid, a.id, userId);
         await notify(c, req.user.tid, {
@@ -293,7 +298,7 @@ export async function eventRoutes(app: FastifyInstance) {
         // The same offer lands in the crew member's chat, from the coordinator who sent it.
         await sendDirectMessage(c, req.user.tid, req.user.sub, userId, `New shift offered\n\n${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nAccept: ${links.accept}\nDecline: ${links.decline}`);
       }
-      return { code: 201, assignment: a };
+      return { code: 201, assignment: a, warnings: chk.warns };
     });
     const { code, ...body } = result as { code: number; [k: string]: unknown };
     return reply.code(code).send(body);

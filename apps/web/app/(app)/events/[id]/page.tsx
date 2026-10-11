@@ -4,7 +4,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
-import { api, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
+import { api, ApiError, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
 import { EventDetails, Phases, EventFull, Phase } from '@/components/EventInfo';
 import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 
@@ -184,7 +184,20 @@ function Body() {
     if (!raw) return;
     const override = raw.startsWith('o:');
     const userId = override ? raw.slice(2) : raw;
-    run(() => api(`/api/shifts/${shiftId}/assign`, { body: { userId, override: override || undefined } })).then(() => setPick((p) => ({ ...p, [shiftId]: '' })));
+    const send = async (ov: boolean) => {
+      setError('');
+      setNote('');
+      try {
+        const r = await api<{ warnings?: string[] }>(`/api/shifts/${shiftId}/assign`, { body: { userId, override: ov || undefined } });
+        setPick((p) => ({ ...p, [shiftId]: '' }));
+        if (r.warnings?.length) setNote(r.warnings.join(' '));
+        await load();
+      } catch (err) {
+        if (err instanceof ApiError && err.reason === 'rules' && !ov && confirm(`${err.message}\n\nAssign anyway?`)) return send(true);
+        setError((err as Error).message);
+      }
+    };
+    send(override);
   };
 
   if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;

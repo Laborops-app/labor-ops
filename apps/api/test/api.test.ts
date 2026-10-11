@@ -205,7 +205,7 @@ test('time: accept, clock in/out, approve, export CSV', async () => {
   assert.ok(lines[1].startsWith("'=Evil Name,"), 'formula-looking names are neutralised: ' + lines[1]);
 
   // A shift that is still hours away cannot be clocked in to yet.
-  const later = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Later', startsAt: start(10), endsAt: start(14), headcount: 1 })).json.shift.id;
+  const later = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Later', startsAt: start(20), endsAt: start(24), headcount: 1 })).json.shift.id;
   const laterAsg = (await call(a, 'POST', `/api/shifts/${later}/assign`, { userId: mem.json.member.id })).json.assignment.id;
   await call(crew, 'POST', `/api/assignments/${laterAsg}/respond`, { response: 'accepted' });
   const early = await call(crew, 'POST', '/api/time/clock-in', { assignmentId: laterAsg });
@@ -1196,4 +1196,64 @@ test('phases: shifts can be added to each phase, moved, and survive phase remova
   d = (await call(a, 'GET', `/api/events/${ev}`)).json;
   assert.equal(d.shifts.length, 3);
   assert.ok(d.shifts.every((s: any) => s.phase_id === null));
+});
+
+test('labor rules: rest and daily limits block (admin can override), weekly overtime warns, settings are admin only', async () => {
+  const a = await register('rules');
+  const c1 = await mkCrew(a, 'ru1');
+  assert.equal((await call(c1.session, 'GET', '/api/labor-rules')).status, 403);
+  const def = (await call(a, 'GET', '/api/labor-rules')).json;
+  assert.equal(def.minRestHours, 8);
+  const body = { ...def, minRestHours: 10, maxDailyHours: 12, weeklyOtAfter: 1 };
+  assert.equal((await call(c1.session, 'PUT', '/api/labor-rules', body)).status, 403);
+  assert.equal((await call(a, 'PUT', '/api/labor-rules', body)).status, 200);
+  assert.equal((await call(a, 'PUT', '/api/labor-rules', { ...body, otMultiplier: 0.5 })).status, 400);
+
+  const ev = await mkEvent(a);
+  const mk = async (s: number, e: number) => (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Tech', startsAt: start(s), endsAt: start(e), headcount: 1 })).json.shift.id as string;
+  const s1 = await mk(100, 106);
+  const s2 = await mk(110, 114); // 4 h after s1 ends: not enough rest
+  const s3 = await mk(130, 134); // 24 h after: fine
+  const r1 = await call(a, 'POST', `/api/shifts/${s1}/assign`, { userId: c1.id });
+  assert.equal(r1.status, 201, r1.text);
+  assert.match(r1.json.warnings[0], /overtime/);
+  const bad = await call(a, 'POST', `/api/shifts/${s2}/assign`, { userId: c1.id });
+  assert.equal(bad.status, 409);
+  assert.equal(bad.json.reason, 'rules');
+  assert.match(bad.json.error, /rest/);
+  const ok = await call(a, 'POST', `/api/shifts/${s2}/assign`, { userId: c1.id, override: true });
+  assert.equal(ok.status, 201, ok.text);
+  assert.ok(ok.json.warnings.length >= 1, 'weekly overtime warning');
+  assert.match(ok.json.warnings[0], /overtime/);
+  assert.equal((await call(a, 'POST', `/api/shifts/${s3}/assign`, { userId: c1.id })).status, 201);
+
+  // a 13 h day breaks the daily maximum
+  const long = await mk(200, 213);
+  const d = await call(a, 'POST', `/api/shifts/${long}/assign`, { userId: c1.id });
+  assert.equal(d.status, 409);
+  assert.match(d.json.error, /maximum/);
+});
+
+test('pay rules: weekly overtime and night / Sunday / holiday premiums', async () => {
+  const { priceShift } = await import('../src/pay');
+  const rules = { tz: 'UTC', minRest: 8, maxDaily: 14, dailyOt: 0, weeklyOt: 40, otMult: 1.5, nightStart: 22 * 60, nightEnd: 6 * 60, nightPct: 25, sundayPct: 50, holidayPct: 100, holidays: ['2030-01-02'] };
+  // plain weekday afternoon, no premium
+  assert.equal(priceShift(rules, 10, '2030-01-01T10:00:00Z', '2030-01-01T14:00:00Z').estimate, 40);
+  // 38 h already worked: the last 2 of 4 hours are overtime at 1.5x
+  const ot = priceShift(rules, 10, '2030-01-01T10:00:00Z', '2030-01-01T14:00:00Z', 38);
+  assert.equal(ot.estimate, 50);
+  assert.equal(ot.otHours, 2);
+  // 20:00-02:00 UTC: 2 h normal + 4 h night at +25% (2030-01-05 is a Saturday, then Sunday: 50% applies after midnight)
+  const night = priceShift(rules, 10, '2030-01-03T20:00:00Z', '2030-01-04T02:00:00Z');
+  assert.equal(night.estimate, 70);
+  assert.deepEqual(night.notes, ['night']);
+  // Sunday 2030-01-06
+  assert.equal(priceShift(rules, 10, '2030-01-06T10:00:00Z', '2030-01-06T12:00:00Z').estimate, 30);
+  // holiday doubles it
+  assert.equal(priceShift(rules, 10, '2030-01-02T10:00:00Z', '2030-01-02T12:00:00Z').estimate, 40);
+  // daily overtime after 8 h
+  const dly = priceShift({ ...rules, dailyOt: 8 }, 10, '2030-01-01T08:00:00Z', '2030-01-01T18:00:00Z');
+  assert.equal(dly.estimate, 80 + 30);
+  // no rate -> no estimate
+  assert.equal(priceShift(rules, undefined, '2030-01-01T10:00:00Z', '2030-01-01T14:00:00Z').estimate, null);
 });

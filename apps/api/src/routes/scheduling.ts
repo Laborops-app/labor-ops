@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { withTenant, audit } from '../db';
 import { guard, authenticate } from '../auth';
 import { notify, notifyStaff, describeShift } from '../notify';
+import { loadRules, checkRules } from '../pay';
 import { evaluateShift, findClash, filledCount, certMessage } from '../eligibility';
 
 const uuid = z.string().uuid();
@@ -411,6 +412,8 @@ export async function schedulingRoutes(app: FastifyInstance) {
       if (clash) return { code: 409, error: `You are already booked for ${clash.role_name} at ${clash.event_name} at that time` };
       const [el] = await evaluateShift(c, id, req.user.sub);
       if (el?.missing_certs.length) return { code: 409, error: `You need a valid ${el.missing_certs.join(', ')} certificate for this shift` };
+      const chk = await checkRules(c, await loadRules(c), req.user.sub, id, s.starts_at, s.ends_at, 'You');
+      if (chk.blocks.length) return { code: 409, error: chk.blocks.join('. ') + '. Ask your coordinator if this shift is needed.' };
       const a = (
         await c.query("INSERT INTO shift_assignments (tenant_id, shift_id, user_id, status) VALUES ($1,$2,$3,'pending') RETURNING id", [
           req.user.tid, id, req.user.sub,

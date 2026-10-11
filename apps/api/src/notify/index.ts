@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg';
 import { toE164 } from './providers';
 import { absUrl, renderEmail } from './templates';
-import { loadRates, rateFor, estimate, money } from '../pay';
+import { loadRates, loadRules, estimateShift, money } from '../pay';
 
 export type Category = 'assignment' | 'shift_change' | 'reminder' | 'approval_request' | 'approval_result' | 'open_shift' | 'chat' | 'cert' | 'account';
 
@@ -102,7 +102,7 @@ export async function enqueueAccountEmail(
 export type ShiftDesc = { role: string; event: string; venue: string | null; when: string; line: string; hours: number; rate: number | null; estimate: number | null; payLine: string | null };
 
 /** Human description of a shift, formatted in the tenant's time zone. */
-export async function describeShift(c: PoolClient, tenantId: string, shiftId: string): Promise<ShiftDesc | null> {
+export async function describeShift(c: PoolClient, tenantId: string, shiftId: string, userId?: string | null): Promise<ShiftDesc | null> {
   const { rows } = await c.query(
     `SELECT s.role_name, s.starts_at, s.ends_at, e.name AS event_name, e.venue, t.timezone
        FROM shifts s JOIN events e ON e.id = s.event_id JOIN tenants t ON t.id = s.tenant_id WHERE s.id = $1`,
@@ -112,12 +112,12 @@ export async function describeShift(c: PoolClient, tenantId: string, shiftId: st
   if (!r) return null;
   const { fmtWhen, fmtTimeOnly } = await import('./templates');
   const when = `${fmtWhen(r.starts_at, r.timezone)} – ${fmtTimeOnly(r.ends_at, r.timezone)}`;
-  const pay = estimate(rateFor(await loadRates(c), r.role_name), r.starts_at, r.ends_at);
+  const pay = await estimateShift(c, await loadRules(c), await loadRates(c), r.role_name, r.starts_at, r.ends_at, userId, shiftId);
   return {
     hours: pay.hours,
     rate: pay.rate,
     estimate: pay.estimate,
-    payLine: pay.rate ? `Pay: ${money(pay.rate)}/hr · est. ${money(pay.estimate!)} for ${pay.hours} h (before taxes)` : null,
+    payLine: pay.rate ? `Pay: ${money(pay.rate)}/hr · est. ${money(pay.estimate!)} for ${pay.hours} h${pay.notes.length ? ` incl. ${pay.notes.join(' + ')} pay` : ''} (before taxes)` : null,
     role: r.role_name,
     event: r.event_name,
     venue: r.venue,
