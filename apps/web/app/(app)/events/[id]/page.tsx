@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { api, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
+import { EventDetails, Phases, EventFull, Phase } from '@/components/EventInfo';
 import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 
 type Assignment = { id: string; user_id: string; user_name: string; status: string };
@@ -22,7 +23,7 @@ type Shift = {
   hourly_rate?: number | null;
   estimated_cost?: number | null;
 };
-type Detail = { event: { id: string; name: string; venue: string | null; start_date: string; end_date: string }; shifts: Shift[] };
+type Detail = { event: EventFull; shifts: Shift[]; phases: Phase[] };
 type Member = { id: string; name: string; role: string; skills: string[]; active: boolean };
 type TplItem = { role: string; dayOffset: number; start: string; end: string; headcount: number; isOpen: boolean; requiredCerts: string[] };
 type Template = { id: string; name: string; items: TplItem[] };
@@ -192,7 +193,8 @@ function Body() {
         <div>
           <h1>{ev.name}</h1>
           <div className="muted">
-            {ev.venue ? `${ev.venue} · ` : ''}
+            {[ev.client, ev.venue].filter(Boolean).join(' · ')}
+            {(ev.client || ev.venue) && ' · '}
             {fmtDate(ev.start_date.slice(0, 10))}
             {ev.end_date.slice(0, 10) !== ev.start_date.slice(0, 10) && <> – {fmtDate(ev.end_date.slice(0, 10))}</>}
           </div>
@@ -224,6 +226,9 @@ function Body() {
           {note}
         </Banner>
       )}
+
+      <EventDetails ev={ev} hasPhases={d.phases.length > 0} onSaved={load} onError={setError} />
+      <Phases eventId={id} phases={d.phases} onChanged={load} onError={setError} />
 
       <section className="card">
         <h2>Add a shift</h2>
@@ -319,6 +324,16 @@ function Body() {
                 </option>
               ))}
             </select>
+            {d.phases.length > 0 && (
+              <select value="" onChange={(e) => e.target.value && setTplStart(e.target.value)} aria-label="Start on a phase">
+                <option value="">Start on phase…</option>
+                {d.phases.map((p) => (
+                  <option key={p.id} value={p.starts_on.slice(0, 10)}>
+                    {p.label} ({fmtDate(p.starts_on.slice(0, 10))})
+                  </option>
+                ))}
+              </select>
+            )}
             <input type="date" value={tplStart} onChange={(e) => setTplStart(e.target.value)} aria-label="Template start date" />
             <button className="btn small primary" disabled={!tplId || !tplStart} onClick={applyTemplate}>
               Apply

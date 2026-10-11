@@ -5,13 +5,13 @@ import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, fmtDate } from '@/lib/api';
 
-type Ev = { id: string; name: string; venue: string | null; start_date: string; end_date: string; shift_count: number; slots: number; accepted: number };
+type Ev = { id: string; name: string; client: string | null; venue: string | null; start_date: string; end_date: string; shift_count: number; slots: number; accepted: number };
 const today = () => new Date().toISOString().slice(0, 10);
 
 function Body() {
   const [list, setList] = useState<Ev[] | null>(null);
   const [error, setError] = useState('');
-  const [f, setF] = useState({ name: '', venue: '', address: '', startDate: today(), endDate: today() });
+  const [f, setF] = useState({ name: '', client: '', venue: '', address: '', startDate: today(), endDate: today() });
 
   const load = () =>
     api<{ events: Ev[] }>('/api/events')
@@ -25,8 +25,8 @@ function Body() {
     e.preventDefault();
     setError('');
     try {
-      await api('/api/events', { body: { ...f, venue: f.venue || null, address: f.address || null } });
-      setF({ name: '', venue: '', address: '', startDate: today(), endDate: today() });
+      await api('/api/events', { body: { ...f, client: f.client || null, venue: f.venue || null, address: f.address || null } });
+      setF({ name: '', client: '', venue: '', address: '', startDate: today(), endDate: today() });
       load();
     } catch (err) {
       setError((err as Error).message);
@@ -43,6 +43,10 @@ function Body() {
           <label>
             Name
             <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required />
+          </label>
+          <label>
+            Client
+            <input value={f.client} onChange={(e) => setF({ ...f, client: e.target.value })} />
           </label>
           <label>
             Venue
@@ -86,6 +90,7 @@ function Body() {
                     {fmtDate(s0)}
                     {e0 !== s0 && <> – {fmtDate(e0)}</>}
                   </span>
+                  {ev.client && <span>{ev.client}</span>}
                   {ev.venue && <span>{ev.venue}</span>}
                 </div>
                 <div className="progress" aria-hidden="true">

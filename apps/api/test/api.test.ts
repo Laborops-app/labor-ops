@@ -1129,3 +1129,40 @@ test('role groups: create, assign roles, starter set with templates is idempoten
   assert.equal((await call(a, 'DELETE', `/api/skill-groups/${equip}`)).status, 200);
   assert.ok((await call(a, 'GET', '/api/skills')).json.skills.some((s: any) => s.name === 'Boom Op' && s.groupId === null));
 });
+
+test('events: client and address editing, phases (load-in, show, strike) drive the event dates', async () => {
+  const a = await register('evp');
+  const c1 = await mkCrew(a, 'ep1');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Gala', client: 'Acme Corp', venue: 'Hall', address: '1 Main St', startDate: '2030-05-10', endDate: '2030-05-10' })).json.event;
+  assert.equal(ev.client, 'Acme Corp');
+  assert.equal((await call(c1.session, 'PATCH', `/api/events/${ev.id}`, { client: 'x' })).status, 403);
+  const up = await call(a, 'PATCH', `/api/events/${ev.id}`, { name: 'Gala 2030', client: 'Acme Inc', address: '' });
+  assert.equal(up.json.event.name, 'Gala 2030');
+  assert.equal(up.json.event.client, 'Acme Inc');
+  assert.equal(up.json.event.address, null);
+  assert.equal(up.json.event.venue, 'Hall', 'untouched fields stay');
+  assert.equal((await call(a, 'PATCH', `/api/events/${ev.id}`, { startDate: '2030-06-01' })).status, 400, 'end before start');
+
+  const li = await call(a, 'POST', `/api/events/${ev.id}/phases`, { label: 'Load in', startDate: '2030-05-08', endDate: '2030-05-09' });
+  assert.equal(li.status, 201, li.text);
+  await call(a, 'POST', `/api/events/${ev.id}/phases`, { label: 'Show days', startDate: '2030-05-10', endDate: '2030-05-12' });
+  const st = (await call(a, 'POST', `/api/events/${ev.id}/phases`, { label: 'Strike', startDate: '2030-05-13', endDate: '2030-05-13' })).json.phase;
+  assert.equal((await call(a, 'POST', `/api/events/${ev.id}/phases`, { label: 'Bad', startDate: '2030-05-13', endDate: '2030-05-12' })).status, 400);
+  let d = (await call(a, 'GET', `/api/events/${ev.id}`)).json;
+  assert.deepEqual(d.phases.map((p: any) => p.label), ['Load in', 'Show days', 'Strike']);
+  assert.equal(d.event.start_date.slice(0, 10), '2030-05-08');
+  assert.equal(d.event.end_date.slice(0, 10), '2030-05-13');
+  // dates follow phases, direct date edits are ignored while phases exist
+  await call(a, 'PATCH', `/api/events/${ev.id}`, { startDate: '2030-01-01', endDate: '2030-01-02' });
+  assert.equal((await call(a, 'GET', `/api/events/${ev.id}`)).json.event.start_date.slice(0, 10), '2030-05-08');
+  await call(a, 'PATCH', `/api/event-phases/${st.id}`, { label: 'Strike', startDate: '2030-05-14', endDate: '2030-05-15' });
+  assert.equal((await call(a, 'GET', `/api/events/${ev.id}`)).json.event.end_date.slice(0, 10), '2030-05-15');
+  await call(a, 'DELETE', `/api/event-phases/${st.id}`);
+  assert.equal((await call(a, 'GET', `/api/events/${ev.id}`)).json.event.end_date.slice(0, 10), '2030-05-12');
+
+  // other companies cannot touch them
+  const b = await register('evpB');
+  assert.equal((await call(b, 'PATCH', `/api/event-phases/${li.json.phase.id}`, { label: 'x', startDate: '2030-01-01', endDate: '2030-01-01' })).status, 404);
+  assert.equal((await call(b, 'DELETE', `/api/event-phases/${li.json.phase.id}`)).status, 404);
+  assert.equal((await call(b, 'POST', `/api/events/${ev.id}/phases`, { label: 'x', startDate: '2030-01-01', endDate: '2030-01-01' })).status, 404);
+});

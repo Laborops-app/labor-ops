@@ -11,6 +11,7 @@ import { evaluateShift } from '../eligibility';
 const id = z.object({ id: z.string().uuid() });
 const eventBody = z.object({
   name: z.string().trim().min(1).max(150),
+  client: z.string().trim().max(200).optional().nullable(),
   venue: z.string().trim().max(200).optional().nullable(),
   address: z.string().trim().max(300).optional().nullable(),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -33,7 +34,7 @@ export async function eventRoutes(app: FastifyInstance) {
     withTenant(req.user.tid, async (c) => ({
       events: (
         await c.query(`
-          SELECT e.id, e.name, e.venue, e.start_date, e.end_date,
+          SELECT e.id, e.name, e.client, e.venue, e.start_date, e.end_date,
             (SELECT count(*)::int FROM shifts s WHERE s.event_id = e.id) AS shift_count,
             (SELECT COALESCE(sum(s.headcount),0)::int FROM shifts s WHERE s.event_id = e.id) AS slots,
             (SELECT count(*)::int FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id
@@ -69,9 +70,9 @@ export async function eventRoutes(app: FastifyInstance) {
     if (b.endDate < b.startDate) return reply.code(400).send({ error: 'End date is before the start date' });
     const row = await withTenant(req.user.tid, async (c) => {
       const r = await c.query(
-        `INSERT INTO events (tenant_id, name, venue, address, start_date, end_date, notes, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-        [req.user.tid, b.name, b.venue ?? null, b.address || null, b.startDate, b.endDate, b.notes ?? null, req.user.sub],
+        `INSERT INTO events (tenant_id, name, client, venue, address, start_date, end_date, notes, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+        [req.user.tid, b.name, b.client || null, b.venue || null, b.address || null, b.startDate, b.endDate, b.notes ?? null, req.user.sub],
       );
       await audit(c, req.user.tid, req.user.sub, 'event.create', 'event', r.rows[0].id);
       return r.rows[0];
@@ -100,10 +101,83 @@ export async function eventRoutes(app: FastifyInstance) {
         const pay = rates ? estimate(rateFor(rates, s.role_name), s.starts_at, s.ends_at) : null;
         out.push({ ...s, ...(pay ? { hours: pay.hours, hourly_rate: pay.rate, estimated_cost: pay.estimate ? Math.round(pay.estimate * s.headcount * 100) / 100 : null } : {}), assignments: assigns.filter((a) => a.shift_id === s.id), crew_status: await evaluateShift(c, s.id) });
       }
-      return { event: ev, shifts: out };
+      const phases = (await c.query('SELECT id, label, starts_on, ends_on FROM event_phases WHERE event_id = $1 ORDER BY starts_on, ends_on, created_at', [eventId])).rows;
+      return { event: ev, shifts: out, phases };
     });
     if (!out) return reply.code(404).send({ error: 'Event not found' });
     return out;
+  });
+
+  // Edit the event's details. While phases exist the overall dates follow them.
+  app.patch('/api/events/:id', { preHandler: mgr }, async (req, reply) => {
+    const { id: eventId } = id.parse(req.params);
+    const b = eventBody.partial().parse(req.body);
+    const row = await withTenant(req.user.tid, async (c) => {
+      const cur = (await c.query("SELECT *, to_char(start_date,'YYYY-MM-DD') AS sd, to_char(end_date,'YYYY-MM-DD') AS ed FROM events WHERE id = $1", [eventId])).rows[0];
+      if (!cur) return null;
+      const hasPhases = !!(await c.query('SELECT 1 FROM event_phases WHERE event_id = $1', [eventId])).rowCount;
+      const startDate: string = hasPhases ? cur.sd : b.startDate ?? cur.sd;
+      const endDate: string = hasPhases ? cur.ed : b.endDate ?? cur.ed;
+      if (endDate < startDate) return { error: 'End date is before the start date' };
+      const pick = <T>(v: T | undefined, old: T) => (v === undefined ? old : v);
+      const r = await c.query(
+        `UPDATE events SET name = $2, client = $3, venue = $4, address = $5, start_date = $6, end_date = $7, notes = $8 WHERE id = $1 RETURNING *`,
+        [eventId, b.name ?? cur.name, pick(b.client, cur.client) || null, pick(b.venue, cur.venue) || null, pick(b.address, cur.address) || null, startDate, endDate, pick(b.notes, cur.notes)],
+      );
+      await audit(c, req.user.tid, req.user.sub, 'event.update', 'event', eventId, b);
+      return r.rows[0];
+    });
+    if (!row) return reply.code(404).send({ error: 'Event not found' });
+    if ((row as any).error) return reply.code(400).send(row);
+    return { event: row };
+  });
+
+  // ---------- phases: several dated stretches per event (load-in, show days, strike ...) ----------
+  const phaseBody = z.object({
+    label: z.string().trim().min(1).max(80),
+    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  });
+  const syncRange = async (c: import('pg').PoolClient, eventId: string) => {
+    await c.query(
+      `UPDATE events e SET start_date = p.s, end_date = p.e
+         FROM (SELECT min(starts_on) AS s, max(ends_on) AS e FROM event_phases WHERE event_id = $1) p
+        WHERE e.id = $1 AND p.s IS NOT NULL`,
+      [eventId],
+    );
+  };
+  app.post('/api/events/:id/phases', { preHandler: mgr }, async (req, reply) => {
+    const { id: eventId } = id.parse(req.params);
+    const b = phaseBody.parse(req.body);
+    if (b.endDate < b.startDate) return reply.code(400).send({ error: 'End date is before the start date' });
+    const row = await withTenant(req.user.tid, async (c) => {
+      if (!(await c.query('SELECT 1 FROM events WHERE id = $1', [eventId])).rowCount) return null;
+      const r = await c.query('INSERT INTO event_phases (tenant_id, event_id, label, starts_on, ends_on) VALUES ($1,$2,$3,$4,$5) RETURNING id, label, starts_on, ends_on', [req.user.tid, eventId, b.label, b.startDate, b.endDate]);
+      await syncRange(c, eventId);
+      await audit(c, req.user.tid, req.user.sub, 'event.phase_add', 'event', eventId, b);
+      return r.rows[0];
+    });
+    return row ? reply.code(201).send({ phase: row }) : reply.code(404).send({ error: 'Event not found' });
+  });
+  app.patch('/api/event-phases/:id', { preHandler: mgr }, async (req, reply) => {
+    const { id: phaseId } = id.parse(req.params);
+    const b = phaseBody.parse(req.body);
+    if (b.endDate < b.startDate) return reply.code(400).send({ error: 'End date is before the start date' });
+    const row = await withTenant(req.user.tid, async (c) => {
+      const r = await c.query('UPDATE event_phases SET label = $2, starts_on = $3, ends_on = $4 WHERE id = $1 RETURNING id, event_id, label, starts_on, ends_on', [phaseId, b.label, b.startDate, b.endDate]);
+      if (r.rows[0]) await syncRange(c, r.rows[0].event_id);
+      return r.rows[0];
+    });
+    return row ? { phase: row } : reply.code(404).send({ error: 'Phase not found' });
+  });
+  app.delete('/api/event-phases/:id', { preHandler: mgr }, async (req, reply) => {
+    const { id: phaseId } = id.parse(req.params);
+    const n = await withTenant(req.user.tid, async (c) => {
+      const r = await c.query('DELETE FROM event_phases WHERE id = $1 RETURNING event_id', [phaseId]);
+      if (r.rows[0]) await syncRange(c, r.rows[0].event_id);
+      return r.rowCount;
+    });
+    return n ? { ok: true } : reply.code(404).send({ error: 'Phase not found' });
   });
 
   app.delete('/api/events/:id', { preHandler: mgr }, async (req, reply) => {
