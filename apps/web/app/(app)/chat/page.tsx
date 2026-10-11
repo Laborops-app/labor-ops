@@ -10,6 +10,18 @@ type Msg = { id: string; seq: number; user_id: string | null; user_name: string 
 type Person = { id: string; name: string; role: string };
 type Detail = { channel: { id: string; kind: string; name: string; eventId: string | null; muted: boolean; canManage: boolean }; members: Person[] };
 
+const URL_RE = /(https?:\/\/[^\s<]+)/g;
+/** Turn links in a message into tappable links (Accept / Decline links from shift offers arrive this way). */
+const linkify = (text: string, mine: boolean) =>
+  text.split(URL_RE).map((part, i) => {
+    if (i % 2 === 0) return part;
+    const label = /respond\?t=.*a=accept/.test(part) ? 'Tap to accept' : /respond\?t=.*a=decline/.test(part) ? 'Tap to decline' : part;
+    return (
+      <a key={i} href={part} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', fontWeight: 700, textDecoration: 'underline', wordBreak: 'break-all' }}>
+        {label}
+      </a>
+    );
+  });
 const short = (s: string | null, n = 48) => (s && s.length > n ? s.slice(0, n - 1) + '…' : s ?? '');
 const sameDay = (a: string, b: string) => new Date(a).toDateString() === new Date(b).toDateString();
 
@@ -309,7 +321,7 @@ function Thread({ me, id, onBack, onChanged }: { me: Me; id: string; onBack: () 
                     </div>
                   )}
                   <div className={`bubble ${m.deleted ? 'gone' : ''}`} title={fmtDateTime(m.created_at)}>
-                    {m.deleted ? 'Message deleted' : m.body}
+                    {m.deleted ? 'Message deleted' : linkify(m.body, mine)}
                     {!m.deleted && (mine || me.role !== 'crew') && (
                       <button className="msg-del" onClick={() => del(m)} aria-label="Delete message">✕</button>
                     )}

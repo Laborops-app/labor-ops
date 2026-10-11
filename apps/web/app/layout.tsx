@@ -1,9 +1,12 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
+import PwaRegister from '@/components/PwaRegister';
 
 export const metadata: Metadata = {
   title: 'LaborOps · Run every shift with precision',
   description: 'Crew scheduling and time tracking for production and event companies.',
+  manifest: '/manifest.webmanifest',
+  appleWebApp: { capable: true, title: 'LaborOps', statusBarStyle: 'black-translucent' },
   icons: { icon: '/brand/icon-192.png', apple: '/brand/icon-192.png' },
 };
 export const viewport: Viewport = { width: 'device-width', initialScale: 1, themeColor: [{ media: '(prefers-color-scheme: light)', color: '#f5f7fb' }, { media: '(prefers-color-scheme: dark)', color: '#0b1220' }] };
@@ -20,7 +23,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           }}
         />
       </head>
-      <body>{children}</body>
+      <body>
+        <PwaRegister />
+        {children}
+      </body>
     </html>
   );
 }

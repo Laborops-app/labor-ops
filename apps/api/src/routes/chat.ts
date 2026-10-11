@@ -45,6 +45,19 @@ async function myChannel(c: PoolClient, channelId: string, userId: string) {
   ).rows[0] as { id: string; kind: string; name: string | null; event_id: string | null; created_by: string | null; muted: boolean } | undefined;
 }
 
+/** Post a message into the direct conversation between two people (creating it if needed), without a bell notification. */
+export async function sendDirectMessage(c: PoolClient, tenantId: string, fromId: string, toId: string, body: string) {
+  const key = [fromId, toId].sort().join(':');
+  let ch = (await c.query("SELECT id FROM chat_channels WHERE kind = 'dm' AND dm_key = $1", [key])).rows[0];
+  if (!ch) {
+    ch = (await c.query("INSERT INTO chat_channels (tenant_id, kind, dm_key, created_by) VALUES ($1,'dm',$2,$3) RETURNING id", [tenantId, key, fromId])).rows[0];
+    await addMembers(c, tenantId, ch.id, [fromId, toId]);
+  }
+  const msg = (await c.query('INSERT INTO chat_messages (tenant_id, channel_id, user_id, body) VALUES ($1,$2,$3,$4) RETURNING seq', [tenantId, ch.id, fromId, body.slice(0, 4000)])).rows[0];
+  await c.query('UPDATE chat_channels SET last_message_at = now() WHERE id = $1', [ch.id]);
+  await c.query('UPDATE chat_members SET last_read_seq = $3 WHERE channel_id = $1 AND user_id = $2', [ch.id, fromId, msg.seq]);
+}
+
 const chatLink = (id: string) => `/chat?c=${id}`;
 
 export async function chatRoutes(app: FastifyInstance) {

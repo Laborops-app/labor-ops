@@ -17,6 +17,10 @@ export type NotifyInput = {
   sms?: string;
   /** In-app + browser push only: no email or text message (used for chat). */
   quiet?: boolean;
+  /** Link used in the text message instead of `link`. */
+  smsLink?: string;
+  /** Extra buttons in the email (e.g. Accept / Decline). */
+  actions?: { label: string; url: string; kind: 'accept' | 'decline' }[];
 };
 
 type Target = { id: string; email: string; phone: string | null; notify_email: boolean; notify_sms: boolean; sms_consent_at: Date | null };
@@ -52,7 +56,7 @@ export async function notify(c: PoolClient, tenantId: string, input: NotifyInput
       );
     }
     if (!n.quiet && u.notify_email && u.email) {
-      const m = renderEmail({ title: n.title, body: n.body, link: n.link });
+      const m = renderEmail({ title: n.title, body: n.body, link: n.link, linkLabel: n.actions?.length ? 'Open the shift in LaborOps' : undefined, actions: n.actions });
       await c.query(
         `INSERT INTO deliveries (tenant_id, user_id, notification_id, channel, category, to_addr, subject, body, html)
          VALUES ($1,$2,$3,'email',$4,$5,$6,$7,$8)`,
@@ -61,7 +65,7 @@ export async function notify(c: PoolClient, tenantId: string, input: NotifyInput
     }
     const phone = toE164(u.phone);
     if (!n.quiet && SMS_CATEGORIES.has(n.category) && u.notify_sms && u.sms_consent_at && phone) {
-      const text = `LaborOps: ${n.sms ?? n.title}${n.link ? ' ' + absUrl(n.link) : ''} Reply STOP to opt out.`;
+      const text = `LaborOps: ${n.sms ?? n.title}${n.smsLink || n.link ? ' ' + absUrl(n.smsLink ?? n.link) : ''} Reply STOP to opt out.`;
       await c.query(
         `INSERT INTO deliveries (tenant_id, user_id, notification_id, channel, category, to_addr, body)
          VALUES ($1,$2,$3,'sms',$4,$5,$6)`,

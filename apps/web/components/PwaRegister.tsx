@@ -1,0 +1,10 @@
+'use client';
+import { useEffect } from 'react';
+
+/** Registers the service worker on every page so the app is installable and push works. */
+export default function PwaRegister() {
+  useEffect(() => {
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => undefined);
+  }, []);
+  return null;
+}

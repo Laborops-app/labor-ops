@@ -520,3 +520,4 @@ table.rates td input[type=text], table.rates td input:not([type]) { width: 100%;
   .msg { max-width: 88%; }
 }
 @media (hover: none) { .msg-del { display: block; opacity: .7; } }
+@media (max-width: 480px) { .install-btn { padding: 0.3rem 0.5rem; font-size: 0.78rem; } }

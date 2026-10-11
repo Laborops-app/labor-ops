@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import { InstallCard } from '@/components/InstallApp';
 import NotificationSettings from '@/components/NotificationSettings';
 import Shell, { initials } from '@/components/Shell';
 import { Banner } from '@/components/ui';
@@ -296,6 +297,8 @@ function Body({ role }: { role: string }) {
           </form>
         </section>
       )}
+
+      <InstallCard />
 
       <NotificationSettings phone={u?.phone} />
 

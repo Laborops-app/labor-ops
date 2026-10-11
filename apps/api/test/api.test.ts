@@ -54,6 +54,9 @@ async function login(email: string, password: string): Promise<Session> {
   return { cookie: `lo_token=${c.value}`, id: r.json.user.id };
 }
 
+async function tenantOf(s: Session): Promise<string> {
+  return JSON.parse(Buffer.from(s.cookie.split('=')[1].split('.')[1], 'base64url').toString()).tid;
+}
 const start = (h: number) => new Date(Date.now() + h * 3600_000).toISOString();
 
 test('auth: wrong password and unauthenticated access are rejected', async () => {
@@ -1006,4 +1009,47 @@ test('chat: message rate limit', async () => {
   let last = 0;
   for (let i = 0; i < 42; i++) last = (await call(c1.session, 'POST', `/api/chat/channels/${ch}/messages`, { body: `m${i}` })).status;
   assert.equal(last, 429);
+});
+
+test('shift offer: email with accept/decline links, chat message, one-click response without signing in', async () => {
+  const { respondToken } = await import('../src/notify/respond');
+  const a = await register('offr');
+  const b = await register('offrB');
+  const c1 = await mkCrew(a, 'of1');
+  const ev = await mkEvent(a);
+  const mk = async (h: number) => (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Tech', startsAt: start(h), endsAt: start(h + 4), headcount: 1 })).json.shift.id;
+  const sh = await mk(30);
+  const asg = await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id });
+  assert.equal(asg.status, 201, asg.text);
+
+  // email carries both links
+  const mail = await withTenant(await tenantOf(a), (c) => c.query("SELECT body, html FROM deliveries WHERE channel = 'email' AND user_id = $1 ORDER BY created_at DESC LIMIT 1", [c1.id]));
+  assert.match(mail.rows[0].body, /Accept shift: .*\/respond\?t=.*&a=accept/);
+  assert.match(mail.rows[0].html, /Decline<\/a>/);
+
+  // chat message from the coordinator
+  const chats = (await call(c1.session, 'GET', '/api/chat/channels')).json.channels;
+  assert.equal(chats.length, 1);
+  const m = (await call(c1.session, 'GET', `/api/chat/channels/${chats[0].id}/messages`)).json.messages[0];
+  const t = /respond\?t=([\w.-]+)&a=accept/.exec(m.body)![1];
+  assert.match(m.body, /Decline: /);
+  assert.equal(m.user_id, a.id);
+
+  // public preview + respond (no cookie)
+  const pre = await call(null, 'GET', `/api/respond/preview?t=${t}`);
+  assert.equal(pre.status, 200, pre.text);
+  assert.equal(pre.json.shift.status, 'offered');
+  assert.equal(pre.json.shift.canRespond, true);
+  assert.equal((await call(null, 'GET', `/api/respond/preview?t=${t}x`)).status, 400, 'tampered token');
+  assert.equal((await call(null, 'POST', '/api/respond', { t: 'junk', response: 'accepted' })).status, 400);
+  assert.equal((await call(null, 'POST', '/api/respond', { t, response: 'accepted' })).json.status, 'accepted');
+  assert.equal((await call(c1.session, 'GET', `/api/my/assignments/${asg.json.assignment.id}`)).json.shift.status, 'accepted');
+  // changing your mind is allowed until the shift is over; declining tells the coordinators
+  assert.equal((await call(null, 'POST', '/api/respond', { t, response: 'declined' })).json.status, 'declined');
+  const staffNotes = (await call(a, 'GET', '/api/notifications')).json.items.filter((n: any) => /declined Tech/.test(n.title));
+  assert.equal(staffNotes.length, 1);
+
+  // a token for another person's shift, or an expired one, is refused
+  const forged = respondToken(await tenantOf(b), asg.json.assignment.id, c1.id);
+  assert.equal((await call(null, 'GET', `/api/respond/preview?t=${forged}`)).status, 404, 'wrong company cannot see it');
 });

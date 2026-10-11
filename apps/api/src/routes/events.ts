@@ -1,5 +1,6 @@
 import { notify, describeShift } from '../notify';
-import { syncEventChannel } from './chat';
+import { syncEventChannel, sendDirectMessage } from './chat';
+import { respondLinks } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
@@ -200,12 +201,17 @@ export async function eventRoutes(app: FastifyInstance) {
       await audit(c, req.user.tid, req.user.sub, 'assignment.create', 'assignment', a.id, { shiftId, userId });
       await syncEventChannel(c, req.user.tid, shift.event_id, userId, true);
       const d = await describeShift(c, req.user.tid, shiftId);
-      if (d)
+      if (d) {
+        const links = respondLinks(req.user.tid, a.id, userId);
         await notify(c, req.user.tid, {
           userId, category: 'assignment', title: `New shift offered: ${d.role}`,
-          body: `${d.line}\n\nOpen the shift to accept or decline.`,
-          link: `/my-shifts/${a.id}`, sms: `New shift offered: ${d.role}, ${d.event}, ${d.when}. Open the app to accept.`,
+          body: `${d.line}\n\nPlease accept or decline this shift.`,
+          link: `/my-shifts/${a.id}`, sms: `New shift offered: ${d.role}, ${d.event}, ${d.when}. Accept or decline:`, smsLink: links.accept.replace('&a=accept', ''),
+          actions: [{ label: 'Accept shift', url: links.accept, kind: 'accept' }, { label: 'Decline', url: links.decline, kind: 'decline' }],
         });
+        // The same offer lands in the crew member's chat, from the coordinator who sent it.
+        await sendDirectMessage(c, req.user.tid, req.user.sub, userId, `New shift offered\n\n${d.line}\n\nAccept: ${links.accept}\nDecline: ${links.decline}`);
+      }
       return { code: 201, assignment: a };
     });
     const { code, ...body } = result as { code: number; [k: string]: unknown };

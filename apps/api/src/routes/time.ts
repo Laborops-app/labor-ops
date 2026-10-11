@@ -1,3 +1,4 @@
+import { respondToAssignment } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { notifyStaff, describeShift } from '../notify';
@@ -96,24 +97,7 @@ export async function timeRoutes(app: FastifyInstance) {
   app.post('/api/assignments/:id/respond', { preHandler: authenticate }, async (req, reply) => {
     const { id } = z.object({ id: uuid }).parse(req.params);
     const { response } = z.object({ response: z.enum(['accepted', 'declined']) }).parse(req.body);
-    const row = await withTenant(req.user.tid, async (c) => {
-      const r = await c.query(
-        `UPDATE shift_assignments SET status = $3
-         WHERE id = $1 AND user_id = $2
-           AND NOT EXISTS (SELECT 1 FROM time_entries t WHERE t.assignment_id = $1)
-         RETURNING id, status`,
-        [id, req.user.sub, response],
-      );
-      if (r.rows[0]) {
-        await audit(c, req.user.tid, req.user.sub, `assignment.${response}`, 'assignment', id);
-        if (response === 'declined') {
-          const sh = (await c.query('SELECT shift_id FROM shift_assignments WHERE id = $1', [id])).rows[0];
-          const d = sh && (await describeShift(c, req.user.tid, sh.shift_id));
-          if (d) await notifyStaff(c, req.user.tid, { category: 'approval_request', title: `${req.user.name} declined ${d.role}`, body: `${req.user.name} declined a shift and may need replacing.\n\n${d.line}`, link: `/events` });
-        }
-      }
-      return r.rows[0];
-    });
+    const row = await withTenant(req.user.tid, (c) => respondToAssignment(c, req.user.tid, { id: req.user.sub, name: req.user.name }, id, response));
     if (!row) return reply.code(404).send({ error: 'Shift not found, or already worked' });
     return { assignment: row };
   });

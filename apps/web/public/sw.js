@@ -1,5 +1,15 @@
 // LaborOps service worker: shows push notifications and opens the right page when one is tapped.
-self.addEventListener('install', () => self.skipWaiting());
+const OFFLINE = '/offline.html';
+self.addEventListener('install', (e) => {
+  e.waitUntil(caches.open('lo-shell-v1').then((c) => c.add(OFFLINE)).catch(() => undefined));
+  self.skipWaiting();
+});
+
+// Required for installability. Pages and the API always go to the network; only a failed page load falls back to the offline notice.
+self.addEventListener('fetch', (event) => {
+  if (event.request.mode !== 'navigate') return;
+  event.respondWith(fetch(event.request).catch(() => caches.match(OFFLINE).then((r) => r || Response.error())));
+});
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
 self.addEventListener('push', (event) => {
