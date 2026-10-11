@@ -32,6 +32,7 @@ export async function notify(c: PoolClient, tenantId: string, input: NotifyInput
     [ids],
   );
   const byId = new Map(rows.map((r) => [r.id, r]));
+  const subs = (await c.query('SELECT id, user_id FROM push_subscriptions WHERE user_id = ANY($1::uuid[])', [ids])).rows as { id: string; user_id: string }[];
   for (const n of list) {
     const u = byId.get(n.userId);
     if (!u) continue;
@@ -40,6 +41,14 @@ export async function notify(c: PoolClient, tenantId: string, input: NotifyInput
       [tenantId, u.id, n.category, n.title, n.body, n.link ?? null],
     );
     const nid = nr[0].id;
+    for (const sub of subs.filter((x) => x.user_id === u.id).slice(0, 5)) {
+      const payload = JSON.stringify({ title: n.title, body: n.body.split('\n').filter(Boolean).slice(0, 3).join('\n'), url: n.link ?? '/', tag: n.category });
+      await c.query(
+        `INSERT INTO deliveries (tenant_id, user_id, notification_id, channel, category, to_addr, subject, body)
+         VALUES ($1,$2,$3,'push',$4,$5,$6,$7)`,
+        [tenantId, u.id, nid, n.category, sub.id, n.title, payload],
+      );
+    }
     if (u.notify_email && u.email) {
       const m = renderEmail({ title: n.title, body: n.body, link: n.link });
       await c.query(

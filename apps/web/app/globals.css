@@ -453,3 +453,15 @@ table.rates td input[type=text], table.rates td input:not([type]) { width: 100%;
 .pill.queued, .pill.sending { background: var(--warn-bg); color: var(--warn); }
 .pill.skipped { background: var(--surface-2); color: var(--muted); }
 .cols-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem; align-items: start; }
+.cols-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; }
+.copy-row { display: flex; align-items: center; gap: 0.5rem; margin: 4px 0 10px; padding: 6px 8px; background: var(--surface-2); border-radius: 8px; }
+.copy-row code { flex: 1; overflow-wrap: anywhere; }
+.test-row { margin-top: 14px; }
+.seg { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; background: var(--surface-2); border-radius: 10px; margin: 6px 0; }
+.seg-btn { border: 0; background: transparent; color: var(--text); padding: 7px 14px; border-radius: 8px; font: inherit; cursor: pointer; }
+.seg-btn.on { background: var(--surface); box-shadow: 0 1px 3px rgba(0,0,0,.18); font-weight: 600; }
+.seg-btn:disabled { opacity: .6; cursor: default; }
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.85rem; align-items: start; }
+.settings-grid .form-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.settings-grid label { display: block; }
+.settings-grid label input { display: block; margin-top: 4px; }

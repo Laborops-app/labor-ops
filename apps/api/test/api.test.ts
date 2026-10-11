@@ -719,25 +719,196 @@ test('twilio inbound webhook: signature is required, STOP switches SMS off', asy
   }
 });
 
-test('sms provider: SNS mode reports connected only with credentials and shows in admin status', async () => {
+test('messaging settings: per-company, encrypted, secrets never returned, admin only', async () => {
+  const a = await register('set');
+  const c1 = await mkCrew(a, 'set1');
+  assert.equal((await call(c1.session, 'PUT', '/api/messaging/settings/ses', { host: 'h', user: 'u', pass: 'p', from: 'f' })).status, 403);
+  const bad = await call(a, 'PUT', '/api/messaging/settings/ses', { host: 'email-smtp.us-west-2.amazonaws.com', user: 'AKIAUSER', pass: 'super-secret-ses-pass', from: 'LaborOps <no-reply@laborops.app>', evil: 1 });
+  assert.equal(bad.status, 400);
+  const ok = await call(a, 'PUT', '/api/messaging/settings/ses', { host: 'email-smtp.us-west-2.amazonaws.com', user: 'AKIAUSER', pass: 'super-secret-ses-pass', from: 'LaborOps <no-reply@laborops.app>' });
+  assert.equal(ok.status, 200, ok.text);
+  let m = await call(a, 'GET', '/api/messaging');
+  assert.equal(m.json.email.live, true);
+  assert.equal(m.json.email.source, 'company');
+  assert.equal(m.json.settings.ses.passSet, true);
+  assert.ok(!m.text.includes('super-secret-ses-pass'), 'secret must not be returned');
+  // stored encrypted
+  const tid = (await pool.query('SELECT tenant_id FROM auth_find_user($1)', [`admin-set-${run}@test.example`])).rows[0].tenant_id;
+  const raw = await withTenant(tid, async (c) => (await c.query("SELECT config_enc FROM integration_settings WHERE provider = 'ses'")).rows[0].config_enc);
+  assert.ok(raw.startsWith('v1.') && !raw.includes('super-secret') && !raw.includes('AKIAUSER'));
+  // blank secret keeps the old one
+  await call(a, 'PUT', '/api/messaging/settings/ses', { host: 'email-smtp.us-west-2.amazonaws.com', user: 'AKIAUSER2', pass: '', from: 'x@laborops.app' });
+  m = await call(a, 'GET', '/api/messaging');
+  assert.equal(m.json.settings.ses.user, 'AKIAUSER2');
+  assert.equal(m.json.settings.ses.passSet, true);
+  // SNS texting
+  await call(a, 'PUT', '/api/messaging/settings/sns', { region: 'us-west-2', accessKeyId: 'AKIASNS', secretAccessKey: 'sns-secret', originationNumber: '+18015550100', senderId: '' });
+  assert.equal((await call(a, 'PUT', '/api/messaging/sms-provider', { provider: 'nope' })).status, 400);
+  await call(a, 'PUT', '/api/messaging/sms-provider', { provider: 'sns' });
+  m = await call(a, 'GET', '/api/messaging');
+  assert.equal(m.json.sms.provider, 'sns');
+  assert.equal(m.json.sms.live, true);
+  assert.equal(m.json.sms.from, '+18015550100');
+  // another company is unaffected
+  const other = await register('set2');
+  const om = await call(other, 'GET', '/api/messaging');
+  assert.equal(om.json.sms.live, false);
+  assert.equal(om.json.email.source, 'server');
+  // clearing reverts to the server default
+  await call(a, 'DELETE', '/api/messaging/settings/ses');
+  assert.equal((await call(a, 'GET', '/api/messaging')).json.email.source, 'server');
+});
+
+test('podium: connect, send a text, signed webhook replies, STOP, bad signatures', async () => {
+  const crypto = await import('node:crypto');
+  const { processQueue } = await import('../src/notify/worker');
   const { config } = await import('../src/config');
-  const a = await register('sns');
-  const prev = { ...config.sms.sns, provider: config.sms.provider };
+  const a = await register('pod');
+  const c1 = await mkCrew(a, 'pd1');
+  await call(a, 'PATCH', `/api/crew/${c1.id}`, { phone: '(435) 555-0123' });
+  await call(c1.session, 'PUT', '/api/my/notification-prefs', { email: false, sms: true, smsConsent: true });
+  const tid = (await pool.query('SELECT tenant_id FROM auth_find_user($1)', [`admin-pod-${run}@test.example`])).rows[0].tenant_id;
+
+  // connect needs credentials first
+  assert.equal((await call(a, 'GET', '/api/podium/connect')).status, 400);
+  assert.equal((await call(a, 'PUT', '/api/messaging/settings/podium', { clientId: 'cid', clientSecret: 'csecret', locationUid: 'loc-123456' })).status, 200);
+  const url = new URL((await call(a, 'GET', '/api/podium/connect')).json.url);
+  assert.equal(url.origin + url.pathname, 'https://api.podium.com/oauth/authorize');
+  assert.equal(url.searchParams.get('client_id'), 'cid');
+  assert.match(url.searchParams.get('scope')!, /write_messages/);
+  assert.equal(url.searchParams.get('redirect_uri'), `${config.appUrl}/api/podium/callback`);
+  const state = url.searchParams.get('state')!;
+
+  const realFetch = globalThis.fetch;
+  const calls: { url: string; init: any }[] = [];
+  globalThis.fetch = (async (u: any, init: any) => {
+    calls.push({ url: String(u), init });
+    if (String(u).endsWith('/oauth/token')) return new Response(JSON.stringify({ access_token: 'AT1', refresh_token: 'RT1', expires_in: 36000 }), { status: 200 });
+    if (String(u).endsWith('/v4/messages')) return new Response(JSON.stringify({ data: { uid: 'msg-uid-1' } }), { status: 200 });
+    return new Response('{}', { status: 404 });
+  }) as typeof fetch;
   try {
-    config.sms.provider = 'sns';
-    config.sms.sns.accessKeyId = '';
-    config.sms.sns.secretAccessKey = '';
-    let m = (await call(a, 'GET', '/api/messaging')).json;
-    assert.equal(m.sms.provider, 'sns');
-    assert.equal(m.sms.live, false);
-    config.sms.sns.accessKeyId = 'AKIATEST';
-    config.sms.sns.secretAccessKey = 'secret';
-    config.sms.sns.originationNumber = '+18015550100';
-    m = (await call(a, 'GET', '/api/messaging')).json;
-    assert.equal(m.sms.live, true);
-    assert.equal(m.sms.from, '+18015550100');
+    // a forged / foreign state is refused; a real one connects
+    const forged = await call(a, 'GET', `/api/podium/callback?code=abcdefgh&state=${encodeURIComponent(state.slice(0, -3) + 'xxx')}`);
+    assert.match(String(forged.res.headers.location), /podium=invalid/);
+    const cb = await call(a, 'GET', `/api/podium/callback?code=abcdefgh&state=${encodeURIComponent(state)}`);
+    assert.match(String(cb.res.headers.location), /podium=connected/);
+    assert.equal(JSON.parse(calls[0].init.body).grant_type, 'authorization_code');
+    const m = await call(a, 'GET', '/api/messaging');
+    assert.equal(m.json.settings.podium.connected, true);
+    assert.ok(!m.text.includes('AT1') && !m.text.includes('RT1') && !m.text.includes('csecret'));
+
+    // texting goes through Podium
+    await call(a, 'PUT', '/api/messaging/sms-provider', { provider: 'podium' });
+    const ev = (await call(a, 'POST', '/api/events', { name: 'PGig', venue: 'Hall', startDate: '2030-01-01', endDate: '2030-01-02' })).json.event.id;
+    const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Rigger', startsAt: start(30), endsAt: start(36), headcount: 1 })).json.shift.id;
+    await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id });
+    await processQueue(100);
+    const send = calls.find((c) => c.url.endsWith('/v4/messages'))!;
+    assert.ok(send, 'Podium send called');
+    assert.equal(send.init.headers.authorization, 'Bearer AT1');
+    const sent = JSON.parse(send.init.body);
+    assert.deepEqual(sent.channel, { type: 'phone', identifier: '+14355550123' });
+    assert.equal(sent.locationUid, 'loc-123456');
+    assert.match(sent.body, /New shift offered/);
+    const log = (await call(a, 'GET', '/api/messaging')).json.deliveries.find((d: any) => d.channel === 'sms');
+    assert.equal(log.status, 'sent');
+
+    // webhooks: secret, signature, replies
+    const hook = (await call(a, 'GET', '/api/podium/webhook-secret')).json;
+    assert.equal(hook.url, `${config.appUrl}/api/podium/webhook/${tid}`);
+    const post = (payload: object, secret = hook.secret, tsOffset = 0, sigOverride?: string) => {
+      const raw = JSON.stringify(payload);
+      const ts = String(Date.now() + tsOffset);
+      const sig = sigOverride ?? crypto.createHmac('sha256', secret).update(`${ts}.${raw}`).digest('hex');
+      return app.inject({ method: 'POST', url: `/api/podium/webhook/${tid}`, payload: raw, headers: { 'content-type': 'application/json', 'podium-timestamp': ts, 'podium-signature': sig } });
+    };
+    const reply = (uid: string, body: string) => ({
+      data: { uid, body, contact: { name: 'Crew pd1' }, conversation: { channel: { type: 'phone', identifier: '+14355550123' } } },
+      metadata: { eventType: 'message.received', version: '2021.04.01' },
+    });
+    assert.equal((await post(reply('r0', 'hi'), 'wrong-secret')).statusCode, 401);
+    assert.equal((await post(reply('r0', 'hi'), hook.secret, -10 * 60_000)).statusCode, 401, 'stale timestamp');
+    assert.equal((await post(reply('r0', 'hi'), hook.secret, 0, 'deadbeef')).statusCode, 401);
+    assert.equal((await post(reply('r1', 'Can I swap Friday?'))).statusCode, 200);
+    assert.equal((await post(reply('r1', 'Can I swap Friday?'))).statusCode, 200); // duplicate delivery
+    const replies = (await call(a, 'GET', '/api/messaging')).json.replies;
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].user_name, 'Crew pd1');
+    assert.equal((await call(a, 'GET', '/api/notifications')).json.items.filter((i: any) => /Text reply/.test(i.title)).length, 1);
+    assert.equal((await call(c1.session, 'GET', '/api/my/notification-prefs')).json.sms, true);
+    assert.equal((await post(reply('r2', ' stop '))).statusCode, 200);
+    assert.equal((await call(c1.session, 'GET', '/api/my/notification-prefs')).json.sms, false);
+    // delivery failure (e.g. landline) is recorded
+    assert.equal((await post({ data: { uid: 'msg-uid-1', failureReason: 'landline', conversation: { channel: { identifier: '+14355550123' } } }, metadata: { eventType: 'message.failed' } })).statusCode, 200);
+    const failed = (await call(a, 'GET', '/api/messaging')).json.deliveries.find((d: any) => d.channel === 'sms');
+    assert.equal(failed.status, 'failed');
+    assert.match(failed.last_error, /landline/);
+
+    // disconnect wipes tokens
+    await call(a, 'POST', '/api/podium/disconnect', {});
+    assert.equal((await call(a, 'GET', '/api/messaging')).json.settings.podium.connected, false);
   } finally {
-    config.sms.provider = prev.provider;
-    Object.assign(config.sms.sns, { accessKeyId: prev.accessKeyId, secretAccessKey: prev.secretAccessKey, originationNumber: prev.originationNumber });
+    globalThis.fetch = realFetch;
   }
+});
+
+test('podium signature helper accepts hex or base64 and rejects tampering', async () => {
+  const crypto = await import('node:crypto');
+  const { verifyPodiumSignature } = await import('../src/notify/podium');
+  const raw = '{"a":1}';
+  const ts = String(Date.now());
+  const hex = crypto.createHmac('sha256', 's').update(`${ts}.${raw}`).digest('hex');
+  const b64 = crypto.createHmac('sha256', 's').update(`${ts}.${raw}`).digest('base64');
+  assert.equal(verifyPodiumSignature('s', ts, raw, hex), true);
+  assert.equal(verifyPodiumSignature('s', ts, raw, b64), true);
+  assert.equal(verifyPodiumSignature('s', ts, raw + ' ', hex), false);
+  assert.equal(verifyPodiumSignature('', ts, raw, hex), false);
+  assert.equal(verifyPodiumSignature('s', String(Math.floor(Date.now() / 1000)), raw, crypto.createHmac('sha256', 's').update(`${Math.floor(Date.now() / 1000)}.${raw}`).digest('hex')), true, 'seconds timestamp');
+});
+
+test('browser push: subscribe, queue a push delivery, send, drop expired subscriptions', async () => {
+  const { processQueue } = await import('../src/notify/worker');
+  const webpush = (await import('web-push')).default as any;
+  const a = await register('psh');
+  const c1 = await mkCrew(a, 'ps1');
+  const key = await call(c1.session, 'GET', '/api/push/key');
+  assert.equal(key.status, 200);
+  assert.ok(key.json.publicKey.length > 40);
+  assert.equal((await call(null, 'GET', '/api/push/key')).status, 401);
+  assert.equal((await call(c1.session, 'POST', '/api/push/subscribe', { endpoint: 'not a url', keys: { p256dh: 'x', auth: 'y' } })).status, 400);
+  const sub = (n: string) => ({ endpoint: `https://push.example.test/send/${run}-${n}`, keys: { p256dh: 'B'.repeat(87), auth: 'a'.repeat(22) } });
+  assert.equal((await call(c1.session, 'POST', '/api/push/subscribe', sub('a'))).status, 200);
+  assert.equal((await call(c1.session, 'POST', '/api/push/subscribe', sub('a'))).status, 200); // idempotent
+  assert.equal((await call(c1.session, 'GET', '/api/push/status')).json.devices.length, 1);
+
+  const ev = (await call(a, 'POST', '/api/events', { name: 'PushGig', venue: 'Hall', startDate: '2030-01-01', endDate: '2030-01-02' })).json.event.id;
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Rigger', startsAt: start(30), endsAt: start(36), headcount: 1 })).json.shift.id;
+  const sent: any[] = [];
+  const orig = webpush.sendNotification;
+  webpush.sendNotification = async (s: any, payload: string) => { sent.push({ s, payload: JSON.parse(payload) }); return {}; };
+  try {
+    await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id });
+    await processQueue(100);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].s.endpoint, sub('a').endpoint);
+    assert.match(sent[0].payload.title, /New shift offered/);
+    assert.match(sent[0].payload.url, /^\/my-shifts\//);
+    const log = (await call(a, 'GET', '/api/messaging')).json.deliveries.find((d: any) => d.channel === 'push');
+    assert.equal(log.status, 'sent');
+    assert.equal(log.to_addr, 'browser', 'push endpoints are not exposed');
+
+    // an expired subscription is removed
+    webpush.sendNotification = async () => { throw Object.assign(new Error('gone'), { statusCode: 410, body: 'gone' }); };
+    const sh2 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Grip', startsAt: start(60), endsAt: start(64), headcount: 1 })).json.shift.id;
+    await call(a, 'POST', `/api/shifts/${sh2}/assign`, { userId: c1.id });
+    await processQueue(100);
+    assert.equal((await call(c1.session, 'GET', '/api/push/status')).json.devices.length, 0);
+  } finally {
+    webpush.sendNotification = orig;
+  }
+  // unsubscribe
+  await call(c1.session, 'POST', '/api/push/subscribe', sub('b'));
+  assert.equal((await call(c1.session, 'POST', '/api/push/unsubscribe', {})).status, 200);
+  assert.equal((await call(c1.session, 'GET', '/api/push/status')).json.devices.length, 0);
 });

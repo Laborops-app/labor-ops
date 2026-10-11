@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { Banner } from '@/components/ui';
+import BrowserPush from '@/components/BrowserPush';
 
 type Prefs = { email: boolean; sms: boolean; phone: string | null; phoneValid: boolean; consentAt: string | null };
 
@@ -50,6 +51,7 @@ export default function NotificationSettings({ phone }: { phone?: string | null 
     <form className="card" onSubmit={save}>
       <h2>Notifications</h2>
       <p className="muted small">New shifts, changes, approvals and reminders always show in the bell at the top. Choose where else we reach you.</p>
+      <BrowserPush />
       {error && <Banner onClose={() => setError('')}>{error}</Banner>}
       {ok && (
         <Banner kind="ok" onClose={() => setOk('')}>

@@ -33,9 +33,9 @@ export const config = {
   sms: {
     provider: (process.env.SMS_PROVIDER ?? 'twilio').toLowerCase() === 'sns' ? ('sns' as const) : ('twilio' as const),
     sns: {
-      region: process.env.SNS_REGION ?? process.env.AWS_REGION ?? 'us-west-2',
-      accessKeyId: process.env.SNS_ACCESS_KEY_ID ?? process.env.AWS_ACCESS_KEY_ID ?? '',
-      secretAccessKey: process.env.SNS_SECRET_ACCESS_KEY ?? process.env.AWS_SECRET_ACCESS_KEY ?? '',
+      region: process.env.SNS_REGION ?? 'us-west-2',
+      accessKeyId: process.env.SNS_ACCESS_KEY_ID ?? '',
+      secretAccessKey: process.env.SNS_SECRET_ACCESS_KEY ?? '',
       // Optional: the registered 10DLC / toll-free number to send from (E.164), or an alphanumeric sender ID where allowed.
       originationNumber: process.env.SNS_ORIGINATION_NUMBER ?? '',
       senderId: process.env.SNS_SENDER_ID ?? '',
