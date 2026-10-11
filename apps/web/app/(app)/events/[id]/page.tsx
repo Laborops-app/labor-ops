@@ -4,7 +4,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
-import { api, fmtDate, fmtDateTime, fmtTime } from '@/lib/api';
+import { api, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
 import { useSkillNames } from '@/components/SkillPicker';
 
 type Assignment = { id: string; user_id: string; user_name: string; status: string };
@@ -19,6 +19,8 @@ type Shift = {
   required_certs: string[];
   assignments: Assignment[];
   crew_status: Elig[];
+  hourly_rate?: number | null;
+  estimated_cost?: number | null;
 };
 type Detail = { event: { id: string; name: string; venue: string | null; start_date: string; end_date: string }; shifts: Shift[] };
 type Member = { id: string; name: string; role: string; skills: string[]; active: boolean };
@@ -354,6 +356,13 @@ function Body() {
                   <h2>{s.role_name}</h2>
                   <div className="muted small">
                     {fmtDateTime(s.starts_at)} – {fmtTime(s.ends_at)}
+                    {s.hourly_rate != null && (
+                      <>
+                        {' · '}
+                        {money(s.hourly_rate)}/hr
+                        {s.estimated_cost != null && ` · est. cost ${money(s.estimated_cost)} for ${s.headcount}`}
+                      </>
+                    )}
                   </div>
                   <div className="shift-flags">
                     {s.is_open && <span className="chip open">Open for claiming</span>}

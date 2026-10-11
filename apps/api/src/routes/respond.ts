@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant } from '../db';
+import { loadRates, rateFor, estimate } from '../pay';
 import { readRespondToken, respondToAssignment } from '../notify/respond';
 
 /** Public endpoints behind the Accept / Decline links in shift emails and chat. The signed token is the credential. */
@@ -13,14 +14,17 @@ export async function respondRoutes(app: FastifyInstance) {
     if (!tok) return reply.code(400).send({ error: 'This link is invalid or has expired. Open LaborOps to answer the shift.' });
     const out = await withTenant(tok.tid, async (c) => {
       const r = await c.query(
-        `SELECT a.status, u.name AS person, s.role_name, s.starts_at, s.ends_at, e.name AS event_name, e.venue, tn.timezone,
+        `SELECT a.id AS assignment_id, a.status, u.name AS person, s.role_name, s.starts_at, s.ends_at, e.name AS event_name, e.venue, tn.timezone,
                 (s.ends_at > now()) AS open, EXISTS (SELECT 1 FROM time_entries x WHERE x.assignment_id = a.id) AS worked
            FROM shift_assignments a JOIN users u ON u.id = a.user_id JOIN shifts s ON s.id = a.shift_id
            JOIN events e ON e.id = s.event_id JOIN tenants tn ON tn.id = s.tenant_id
           WHERE a.id = $1 AND a.user_id = $2`,
         [tok.aid, tok.uid],
       );
-      return r.rows[0];
+      const row = r.rows[0];
+      if (!row) return row;
+      const pay = estimate(rateFor(await loadRates(c), row.role_name), row.starts_at, row.ends_at);
+      return { ...row, hours: pay.hours, hourly_rate: pay.rate, estimated_pay: pay.estimate };
     });
     if (!out) return reply.code(404).send({ error: 'This shift is no longer available.' });
     return { shift: { ...out, canRespond: out.open && !out.worked } };

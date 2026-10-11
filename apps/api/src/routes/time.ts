@@ -1,3 +1,4 @@
+import { loadRates, rateFor, estimate } from '../pay';
 import { respondToAssignment } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -30,8 +31,9 @@ const ENTRY_SQL = `
 export async function timeRoutes(app: FastifyInstance) {
   // ----- crew: my shifts -----
   app.get('/api/my/shifts', { preHandler: authenticate }, async (req) =>
-    withTenant(req.user.tid, async (c) => ({
-      shifts: (
+    withTenant(req.user.tid, async (c) => {
+      const rates = await loadRates(c);
+      const rows = (
         await c.query(
           `SELECT a.id AS assignment_id, a.status, s.role_name, s.starts_at, s.ends_at,
              e.name AS event_name, e.venue,
@@ -45,8 +47,14 @@ export async function timeRoutes(app: FastifyInstance) {
            ORDER BY s.starts_at`,
           [req.user.sub],
         )
-      ).rows,
-    })),
+      ).rows;
+      return {
+        shifts: rows.map((r) => {
+          const pay = estimate(rateFor(rates, r.role_name), r.starts_at, r.ends_at);
+          return { ...r, hours: pay.hours, hourly_rate: pay.rate, estimated_pay: pay.estimate };
+        }),
+      };
+    }),
   );
 
   app.get('/api/my/calendar', { preHandler: authenticate }, async (req, reply) => {
@@ -88,7 +96,8 @@ export async function timeRoutes(app: FastifyInstance) {
           [me.event_id, req.user.sub],
         )
       ).rows;
-      return { shift: me, coworkers };
+      const pay = estimate(rateFor(await loadRates(c), me.role_name), me.starts_at, me.ends_at);
+      return { shift: { ...me, hours: pay.hours, hourly_rate: pay.rate, estimated_pay: pay.estimate }, coworkers };
     });
     if (!out) return reply.code(404).send({ error: 'Shift not found' });
     return out;

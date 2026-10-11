@@ -1,6 +1,7 @@
 import type { PoolClient } from 'pg';
 import { toE164 } from './providers';
 import { absUrl, renderEmail } from './templates';
+import { loadRates, rateFor, estimate, money } from '../pay';
 
 export type Category = 'assignment' | 'shift_change' | 'reminder' | 'approval_request' | 'approval_result' | 'open_shift' | 'chat' | 'cert' | 'account';
 
@@ -98,7 +99,7 @@ export async function enqueueAccountEmail(
   );
 }
 
-export type ShiftDesc = { role: string; event: string; venue: string | null; when: string; line: string };
+export type ShiftDesc = { role: string; event: string; venue: string | null; when: string; line: string; hours: number; rate: number | null; estimate: number | null; payLine: string | null };
 
 /** Human description of a shift, formatted in the tenant's time zone. */
 export async function describeShift(c: PoolClient, tenantId: string, shiftId: string): Promise<ShiftDesc | null> {
@@ -111,7 +112,12 @@ export async function describeShift(c: PoolClient, tenantId: string, shiftId: st
   if (!r) return null;
   const { fmtWhen, fmtTimeOnly } = await import('./templates');
   const when = `${fmtWhen(r.starts_at, r.timezone)} – ${fmtTimeOnly(r.ends_at, r.timezone)}`;
+  const pay = estimate(rateFor(await loadRates(c), r.role_name), r.starts_at, r.ends_at);
   return {
+    hours: pay.hours,
+    rate: pay.rate,
+    estimate: pay.estimate,
+    payLine: pay.rate ? `Pay: ${money(pay.rate)}/hr · est. ${money(pay.estimate!)} for ${pay.hours} h (before taxes)` : null,
     role: r.role_name,
     event: r.event_name,
     venue: r.venue,

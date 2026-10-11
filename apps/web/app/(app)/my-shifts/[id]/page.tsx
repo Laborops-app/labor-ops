@@ -4,7 +4,7 @@ import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import Shell, { initials } from '@/components/Shell';
 import { Banner, Pill } from '@/components/ui';
-import { api, fmtDate, fmtDateTime, fmtTime } from '@/lib/api';
+import { api, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
 
 type Detail = {
   shift: {
@@ -21,6 +21,9 @@ type Detail = {
     notes: string | null;
     start_date: string;
     end_date: string;
+    hours: number;
+    hourly_rate: number | null;
+    estimated_pay: number | null;
   };
   coworkers: { user_id: string; name: string; phone: string | null; shift_id: string; role_name: string; starts_at: string; ends_at: string; status: string }[];
 };
@@ -84,6 +87,21 @@ function Body() {
             Event runs {fmtDate(s.start_date.slice(0, 10))}
             {s.end_date.slice(0, 10) !== s.start_date.slice(0, 10) && <> – {fmtDate(s.end_date.slice(0, 10))}</>}
           </p>
+          {s.hourly_rate != null && s.estimated_pay != null && (
+            <div className="pay-box">
+              <div>
+                <span className="muted small">Hourly rate</span>
+                <b>{money(s.hourly_rate)}/hr</b>
+              </div>
+              <div>
+                <span className="muted small">Estimated earnings</span>
+                <b>{money(s.estimated_pay)}</b>
+              </div>
+              <div className="muted small" style={{ gridColumn: '1 / -1' }}>
+                {s.hours} scheduled hours, before taxes. Final pay follows approved time.
+              </div>
+            </div>
+          )}
           {s.required_certs?.length > 0 && (
             <div className="shift-flags">
               {s.required_certs.map((c) => (

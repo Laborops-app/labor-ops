@@ -521,3 +521,10 @@ table.rates td input[type=text], table.rates td input:not([type]) { width: 100%;
 }
 @media (hover: none) { .msg-del { display: block; opacity: .7; } }
 @media (max-width: 480px) { .install-btn { padding: 0.3rem 0.5rem; font-size: 0.78rem; } }
+
+/* ---- pay ---- */
+.pay-box { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 1rem; margin: 0.8rem 0; padding: 0.7rem 0.9rem; border-radius: 12px; background: var(--good-bg); color: var(--good); }
+.pay-box > div { display: grid; }
+.pay-box b { font-size: 1.25rem; }
+.pay-box .muted { color: inherit; opacity: 0.8; }
+.pay-line { color: var(--good); margin-top: 2px; }

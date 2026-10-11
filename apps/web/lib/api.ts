@@ -25,6 +25,8 @@ export type Role = 'admin' | 'manager' | 'crew';
 export const roleLabel = (r: string) => (r === 'manager' ? 'Labor Coordinator' : r === 'admin' ? 'Admin' : r === 'crew' ? 'Crew' : r);
 export type Me = { id: string; name: string; role: Role; company?: string };
 
+export const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+
 export const fmtDateTime = (iso: string) =>
   new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 export const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });

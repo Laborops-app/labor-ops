@@ -5,9 +5,9 @@ import Link from 'next/link';
 import Logo from '@/components/Logo';
 import ThemeToggle from '@/components/ThemeToggle';
 import { Banner } from '@/components/ui';
-import { api } from '@/lib/api';
+import { api, money } from '@/lib/api';
 
-type Shift = { status: string; person: string; role_name: string; starts_at: string; ends_at: string; event_name: string; venue: string | null; timezone: string; canRespond: boolean };
+type Shift = { assignment_id: string; hours: number; hourly_rate: number | null; estimated_pay: number | null; status: string; person: string; role_name: string; starts_at: string; ends_at: string; event_name: string; venue: string | null; timezone: string; canRespond: boolean };
 
 const when = (s: Shift) => {
   const o = { timeZone: s.timezone };
@@ -69,6 +69,21 @@ function Respond() {
                 </>
               )}
             </p>
+            {shift.hourly_rate != null && shift.estimated_pay != null && (
+              <div className="pay-box">
+                <div>
+                  <span className="muted small">Hourly rate</span>
+                  <b>{money(shift.hourly_rate)}/hr</b>
+                </div>
+                <div>
+                  <span className="muted small">Estimated earnings</span>
+                  <b>{money(shift.estimated_pay)}</b>
+                </div>
+                <div className="muted small" style={{ gridColumn: '1 / -1' }}>
+                  {shift.hours} scheduled hours, before taxes. Final pay follows approved time.
+                </div>
+              </div>
+            )}
             {done ? (
               <Banner kind="ok">{done === 'accepted' ? 'You accepted this shift. See you there!' : 'You declined this shift. Your coordinator has been told.'}</Banner>
             ) : shift.canRespond ? (
@@ -91,7 +106,7 @@ function Respond() {
           </>
         )}
         <p className="muted small center-text">
-          <Link href="/login">Open LaborOps</Link>
+          <Link href={shift ? `/my-shifts/${shift.assignment_id}` : '/my-shifts'}>{done === 'accepted' ? 'View this shift in LaborOps' : 'Open LaborOps'}</Link>
         </p>
       </div>
     </div>

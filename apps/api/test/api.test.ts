@@ -1053,3 +1053,39 @@ test('shift offer: email with accept/decline links, chat message, one-click resp
   const forged = respondToken(await tenantOf(b), asg.json.assignment.id, c1.id);
   assert.equal((await call(null, 'GET', `/api/respond/preview?t=${forged}`)).status, 404, 'wrong company cannot see it');
 });
+
+test('shift pay: hourly rate and estimated earnings for crew, cost for admins only', async () => {
+  const a = await register('payx');
+  const c1 = await mkCrew(a, 'px1');
+  assert.equal((await call(a, 'POST', '/api/crew', { name: 'Pay Mgr', email: `pxm-${run}@test.example`, role: 'manager', password: 'password123' })).status, 201);
+  const mgr = { session: await login(`pxm-${run}@test.example`, 'password123') };
+  assert.equal((await call(a, 'POST', '/api/skills', { name: 'Tech', payRate: 20.5 })).status, 201);
+  const ev = await mkEvent(a);
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Tech (Lead)', startsAt: start(30), endsAt: start(38), headcount: 2 })).json.shift.id;
+  const asg = await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id });
+  assert.equal(asg.status, 201, asg.text);
+
+  const mail = await withTenant(await tenantOf(a), (c) => c.query("SELECT body FROM deliveries WHERE channel = 'email' AND user_id = $1 ORDER BY created_at DESC LIMIT 1", [c1.id]));
+  assert.match(mail.rows[0].body, /Pay: \$20\.50\/hr · est\. \$164\.00 for 8 h/);
+
+  const mine = await call(c1.session, 'GET', `/api/my/assignments/${asg.json.assignment.id}`);
+  assert.equal(mine.json.shift.hourly_rate, 20.5);
+  assert.equal(mine.json.shift.estimated_pay, 164);
+  const list = (await call(c1.session, 'GET', '/api/my/shifts')).json.shifts[0];
+  assert.equal(list.estimated_pay, 164);
+
+  // admin sees rate and total cost for 2 people; others do not
+  const adm = (await call(a, 'GET', `/api/events/${ev}`)).json.shifts[0];
+  assert.equal(adm.hourly_rate, 20.5);
+  assert.equal(adm.estimated_cost, 328);
+  assert.equal((await call(mgr.session, 'GET', `/api/events/${ev}`)).json.shifts[0].hourly_rate, undefined);
+
+  // no rate set -> no pay shown
+  const sh2 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Unlisted', startsAt: start(60), endsAt: start(64), headcount: 1 })).json.shift.id;
+  const a2 = await call(a, 'POST', `/api/shifts/${sh2}/assign`, { userId: c1.id });
+  const m2 = await call(c1.session, 'GET', `/api/my/assignments/${a2.json.assignment.id}`);
+  assert.equal(m2.json.shift.estimated_pay, null);
+  const pre = await call(null, 'GET', `/api/respond/preview?t=${(await import('../src/notify/respond')).respondToken(await tenantOf(a), asg.json.assignment.id, c1.id)}`);
+  assert.equal(pre.json.shift.estimated_pay, 164);
+  assert.equal(pre.json.shift.assignment_id, asg.json.assignment.id);
+});

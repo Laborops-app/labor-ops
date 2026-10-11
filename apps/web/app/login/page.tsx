@@ -26,7 +26,8 @@ export default function Login() {
     setError('');
     try {
       const { user } = await api<{ user: { role: string } }>('/api/auth/login', { body: { email: e, password: p } });
-      router.replace(user.role === 'crew' ? '/my-shifts' : '/dashboard');
+      const next = new URLSearchParams(location.search).get('next');
+      router.replace(next && /^\/(?!\/)/.test(next) ? next : user.role === 'crew' ? '/my-shifts' : '/dashboard');
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);

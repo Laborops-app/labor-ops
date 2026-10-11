@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
-import { api, fmtDateTime, fmtTime } from '@/lib/api';
+import { api, fmtDateTime, fmtTime, money } from '@/lib/api';
 
 type MyShift = {
   assignment_id: string;
@@ -18,6 +18,9 @@ type MyShift = {
   swap_status: string | null;
   swap_id: string | null;
   can_offer_swap: boolean;
+  hourly_rate: number | null;
+  estimated_pay: number | null;
+  hours: number;
 };
 type Entry = { id: string; status: string; clock_in: string; clock_out: string | null; hours: number; event_name: string; role_name: string };
 
@@ -78,6 +81,11 @@ function Body() {
                   {fmtDateTime(s.starts_at)} – {fmtTime(s.ends_at)}
                   {s.venue ? ` · ${s.venue}` : ''}
                 </div>
+                {s.hourly_rate != null && s.estimated_pay != null && (
+                  <div className="small pay-line">
+                    {money(s.hourly_rate)}/hr · est. <b>{money(s.estimated_pay)}</b>
+                  </div>
+                )}
               </div>
               <Pill status={s.clocked_in ? 'clocked in' : s.status} />
             </div>

@@ -1,5 +1,6 @@
 import { notify, describeShift } from '../notify';
 import { syncEventChannel, sendDirectMessage } from './chat';
+import { loadRates, rateFor, estimate } from '../pay';
 import { respondLinks } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -93,8 +94,11 @@ export async function eventRoutes(app: FastifyInstance) {
         )
       ).rows;
       const out = [];
+      // Pay is shown to admins only (coordinators see names, not rates).
+      const rates = req.user.role === 'admin' ? await loadRates(c) : null;
       for (const s of shifts) {
-        out.push({ ...s, assignments: assigns.filter((a) => a.shift_id === s.id), crew_status: await evaluateShift(c, s.id) });
+        const pay = rates ? estimate(rateFor(rates, s.role_name), s.starts_at, s.ends_at) : null;
+        out.push({ ...s, ...(pay ? { hours: pay.hours, hourly_rate: pay.rate, estimated_cost: pay.estimate ? Math.round(pay.estimate * s.headcount * 100) / 100 : null } : {}), assignments: assigns.filter((a) => a.shift_id === s.id), crew_status: await evaluateShift(c, s.id) });
       }
       return { event: ev, shifts: out };
     });
@@ -205,12 +209,12 @@ export async function eventRoutes(app: FastifyInstance) {
         const links = respondLinks(req.user.tid, a.id, userId);
         await notify(c, req.user.tid, {
           userId, category: 'assignment', title: `New shift offered: ${d.role}`,
-          body: `${d.line}\n\nPlease accept or decline this shift.`,
+          body: `${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nPlease accept or decline this shift.`,
           link: `/my-shifts/${a.id}`, sms: `New shift offered: ${d.role}, ${d.event}, ${d.when}. Accept or decline:`, smsLink: links.accept.replace('&a=accept', ''),
           actions: [{ label: 'Accept shift', url: links.accept, kind: 'accept' }, { label: 'Decline', url: links.decline, kind: 'decline' }],
         });
         // The same offer lands in the crew member's chat, from the coordinator who sent it.
-        await sendDirectMessage(c, req.user.tid, req.user.sub, userId, `New shift offered\n\n${d.line}\n\nAccept: ${links.accept}\nDecline: ${links.decline}`);
+        await sendDirectMessage(c, req.user.tid, req.user.sub, userId, `New shift offered\n\n${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nAccept: ${links.accept}\nDecline: ${links.decline}`);
       }
       return { code: 201, assignment: a };
     });

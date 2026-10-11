@@ -184,7 +184,7 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
         if (!roles.includes(user.role)) router.replace(user.role === 'crew' ? '/my-shifts' : '/dashboard');
         else setMe(user);
       })
-      .catch(() => router.replace('/login'));
+      .catch(() => router.replace(`/login?next=${encodeURIComponent(location.pathname + location.search)}`));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
