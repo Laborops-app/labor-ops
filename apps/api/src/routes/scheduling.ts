@@ -25,6 +25,7 @@ export const shiftInput = z.object({
   headcount: z.number().int().min(1).max(500).default(1),
   isOpen: z.boolean().default(false),
   requiredCerts: certList.default([]),
+  phaseId: z.string().uuid().nullable().optional(),
 });
 
 export async function schedulingRoutes(app: FastifyInstance) {
@@ -35,12 +36,14 @@ export async function schedulingRoutes(app: FastifyInstance) {
     for (const s of shifts) if (new Date(s.endsAt) <= new Date(s.startsAt)) return reply.code(400).send({ error: 'Every shift must end after it starts' });
     const created = await withTenant(req.user.tid, async (c) => {
       if (!(await c.query('SELECT 1 FROM events WHERE id = $1', [eventId])).rowCount) return null;
+      const phaseIds = [...new Set(shifts.map((s) => s.phaseId).filter(Boolean))] as string[];
+      if (phaseIds.length && (await c.query('SELECT count(*)::int AS n FROM event_phases WHERE event_id = $1 AND id = ANY($2::uuid[])', [eventId, phaseIds])).rows[0].n !== phaseIds.length) return 'bad-phase' as const;
       const ids: string[] = [];
       for (const s of shifts) {
         const r = await c.query(
-          `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-          [req.user.tid, eventId, s.roleName, s.startsAt, s.endsAt, s.headcount, s.isOpen, s.requiredCerts],
+          `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs, phase_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+          [req.user.tid, eventId, s.roleName, s.startsAt, s.endsAt, s.headcount, s.isOpen, s.requiredCerts, s.phaseId ?? null],
         );
         ids.push(r.rows[0].id);
       }
@@ -48,13 +51,14 @@ export async function schedulingRoutes(app: FastifyInstance) {
       return ids;
     });
     if (!created) return reply.code(404).send({ error: 'Event not found' });
+    if (created === 'bad-phase') return reply.code(400).send({ error: 'That phase belongs to a different event' });
     return reply.code(201).send({ created: created.length });
   });
 
   app.patch('/api/shifts/:id', { preHandler: mgr }, async (req, reply) => {
     const { id } = idParam.parse(req.params);
     const b = z
-      .object({ isOpen: z.boolean().optional(), requiredCerts: certList.optional(), headcount: z.number().int().min(1).max(500).optional() })
+      .object({ isOpen: z.boolean().optional(), requiredCerts: certList.optional(), headcount: z.number().int().min(1).max(500).optional(), phaseId: z.string().uuid().nullable().optional() })
       .parse(req.body);
     const row = await withTenant(req.user.tid, async (c) => {
       if (b.headcount !== undefined) {
@@ -62,10 +66,12 @@ export async function schedulingRoutes(app: FastifyInstance) {
         if (b.headcount < filled) return { error: `${filled} people are already on this shift` };
       }
       const wasOpen = (await c.query('SELECT is_open FROM shifts WHERE id = $1', [id])).rows[0]?.is_open;
+      if (b.phaseId && !(await c.query('SELECT 1 FROM event_phases p JOIN shifts s ON s.event_id = p.event_id WHERE p.id = $1 AND s.id = $2', [b.phaseId, id])).rowCount) return { error: 'That phase belongs to a different event' };
       const r = await c.query(
-        `UPDATE shifts SET is_open = COALESCE($2, is_open), required_certs = COALESCE($3, required_certs), headcount = COALESCE($4, headcount)
+        `UPDATE shifts SET is_open = COALESCE($2, is_open), required_certs = COALESCE($3, required_certs), headcount = COALESCE($4, headcount),
+                phase_id = CASE WHEN $5::boolean THEN $6::uuid ELSE phase_id END
          WHERE id = $1 RETURNING *`,
-        [id, b.isOpen ?? null, b.requiredCerts ?? null, b.headcount ?? null],
+        [id, b.isOpen ?? null, b.requiredCerts ?? null, b.headcount ?? null, b.phaseId !== undefined, b.phaseId ?? null],
       );
       if (r.rows[0]) await audit(c, req.user.tid, req.user.sub, 'shift.update', 'shift', id, b);
       if (r.rows[0] && b.isOpen === true && wasOpen === false) {

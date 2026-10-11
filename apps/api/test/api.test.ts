@@ -1166,3 +1166,34 @@ test('events: client and address editing, phases (load-in, show, strike) drive t
   assert.equal((await call(b, 'DELETE', `/api/event-phases/${li.json.phase.id}`)).status, 404);
   assert.equal((await call(b, 'POST', `/api/events/${ev.id}/phases`, { label: 'x', startDate: '2030-01-01', endDate: '2030-01-01' })).status, 404);
 });
+
+test('phases: shifts can be added to each phase, moved, and survive phase removal', async () => {
+  const a = await register('phs');
+  const ev = await mkEvent(a);
+  const ev2 = await mkEvent(a);
+  const li = (await call(a, 'POST', `/api/events/${ev}/phases`, { label: 'Load in', startDate: '2030-03-01', endDate: '2030-03-01' })).json.phase;
+  const sd = (await call(a, 'POST', `/api/events/${ev}/phases`, { label: 'Show', startDate: '2030-03-02', endDate: '2030-03-03' })).json.phase;
+  const other = (await call(a, 'POST', `/api/events/${ev2}/phases`, { label: 'Other', startDate: '2030-03-02', endDate: '2030-03-03' })).json.phase;
+
+  const one = await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Fork Lift Op', startsAt: start(24), endsAt: start(30), headcount: 2, phaseId: li.id });
+  assert.equal(one.status, 201, one.text);
+  assert.equal(one.json.shift.phase_id, li.id);
+  assert.equal((await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'X', startsAt: start(24), endsAt: start(30), phaseId: other.id })).status, 400, 'phase from another event');
+  const bulk = await call(a, 'POST', `/api/events/${ev}/shifts/bulk`, { shifts: [1, 2].map((n) => ({ roleName: 'Audio', startsAt: start(40 + n), endsAt: start(46 + n), headcount: 1, phaseId: sd.id })) });
+  assert.equal(bulk.json.created, 2);
+  assert.equal((await call(a, 'POST', `/api/events/${ev}/shifts/bulk`, { shifts: [{ roleName: 'Audio', startsAt: start(5), endsAt: start(9), phaseId: other.id }] })).status, 400);
+
+  let d = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  assert.equal(d.shifts.filter((s: any) => s.phase_id === sd.id).length, 2);
+  // move a shift to another phase, or to none
+  assert.equal((await call(a, 'PATCH', `/api/shifts/${one.json.shift.id}`, { phaseId: sd.id })).json.shift.phase_id, sd.id);
+  assert.equal((await call(a, 'PATCH', `/api/shifts/${one.json.shift.id}`, { phaseId: null })).json.shift.phase_id, null);
+  assert.equal((await call(a, 'PATCH', `/api/shifts/${one.json.shift.id}`, { phaseId: other.id })).status, 409);
+  assert.equal((await call(a, 'PATCH', `/api/shifts/${one.json.shift.id}`, { headcount: 3 })).json.shift.headcount, 3, 'other edits leave the phase alone');
+
+  // removing a phase keeps its shifts
+  await call(a, 'DELETE', `/api/event-phases/${sd.id}`);
+  d = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  assert.equal(d.shifts.length, 3);
+  assert.ok(d.shifts.every((s: any) => s.phase_id === null));
+});

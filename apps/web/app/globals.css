@@ -537,3 +537,7 @@ table.rates td select { max-width: 11rem; }
 .info-grid dd { margin: 2px 0 0; font-weight: 500; overflow-wrap: anywhere; }
 .phase-list { list-style: none; margin: 0.6rem 0; padding: 0; display: grid; gap: 2px; }
 .phase-list li { padding: 0.5rem 0.6rem; border-radius: 10px; background: var(--surface-2); }
+.phase-group { margin-top: 1.4rem; }
+.phase-head { display: flex; justify-content: space-between; align-items: center; gap: 0.8rem; flex-wrap: wrap; padding: 0.2rem 0 0.6rem; border-bottom: 2px solid var(--primary-soft); margin-bottom: 0.7rem; }
+.phase-head h2 { margin: 0; }
+.move-phase { max-width: 9rem; padding: 0.3rem 0.5rem; font-size: 0.85rem; }

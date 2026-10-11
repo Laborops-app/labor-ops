@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { api, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
@@ -20,6 +20,7 @@ type Shift = {
   required_certs: string[];
   assignments: Assignment[];
   crew_status: Elig[];
+  phase_id: string | null;
   hourly_rate?: number | null;
   estimated_cost?: number | null;
 };
@@ -68,6 +69,7 @@ function Body() {
       headcount: 1,
       certs: '',
       isOpen: false,
+      phaseId: '',
       repeat: false,
       days: [] as number[],
       until: '',
@@ -77,6 +79,10 @@ function Body() {
   const skillSections = useSkillSections();
   const [otherRole, setOtherRole] = useState(false);
   const [tplId, setTplId] = useState('');
+  const [tplPhase, setTplPhase] = useState('');
+  const [tplOpen, setTplOpen] = useState(false);
+  const tplBox = useRef<HTMLDetailsElement>(null);
+  const shiftForm = useRef<HTMLElement>(null);
   const [tplStart, setTplStart] = useState('');
   const [tplName, setTplName] = useState('');
 
@@ -113,7 +119,7 @@ function Body() {
     e.preventDefault();
     const start = new Date(f.startsAt);
     const end = new Date(f.endsAt);
-    const base = { roleName: f.roleName, headcount: Number(f.headcount), isOpen: f.isOpen, requiredCerts: certs(f.certs) };
+    const base = { roleName: f.roleName, headcount: Number(f.headcount), isOpen: f.isOpen, requiredCerts: certs(f.certs), phaseId: f.phaseId || null };
     let ok: boolean;
     if (f.repeat) {
       if (!f.until || f.days.length === 0) return setError('Choose the days to repeat on and an end date.');
@@ -144,7 +150,7 @@ function Body() {
       const s = at(day, it.start);
       let e = at(day, it.end);
       if (e <= s) e = at(addDays(day, 1), it.end);
-      return { roleName: it.role, startsAt: s.toISOString(), endsAt: e.toISOString(), headcount: it.headcount, isOpen: it.isOpen, requiredCerts: it.requiredCerts };
+      return { roleName: it.role, startsAt: s.toISOString(), endsAt: e.toISOString(), headcount: it.headcount, isOpen: it.isOpen, requiredCerts: it.requiredCerts, phaseId: tplPhase || null };
     });
     run(() => api(`/api/events/${id}/shifts/bulk`, { body: { shifts } }), `Added ${shifts.length} shifts from “${t.name}”.`);
   };
@@ -184,182 +190,8 @@ function Body() {
   if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
   const ev = d.event;
 
-  return (
-    <>
-      <p className="small">
-        <Link href="/events">← Events</Link>
-      </p>
-      <div className="row space">
-        <div>
-          <h1>{ev.name}</h1>
-          <div className="muted">
-            {[ev.client, ev.venue].filter(Boolean).join(' · ')}
-            {(ev.client || ev.venue) && ' · '}
-            {fmtDate(ev.start_date.slice(0, 10))}
-            {ev.end_date.slice(0, 10) !== ev.start_date.slice(0, 10) && <> – {fmtDate(ev.end_date.slice(0, 10))}</>}
-          </div>
-        </div>
-        <div className="row" style={{ gap: '0.4rem' }}>
-        <button
-          className="btn small"
-          onClick={() =>
-            api<{ id: string }>('/api/chat/channels', { body: { eventId: id } })
-              .then((r) => router.push(`/chat?c=${r.id}`))
-              .catch((e) => setError(e.message))
-          }
-        >
-          Event chat
-        </button>
-        <button
-          className="btn ghost small danger"
-          onClick={() => {
-            if (confirm(`Delete "${ev.name}" and all its shifts?`)) api(`/api/events/${id}`, { method: 'DELETE' }).then(() => router.replace('/events'));
-          }}
-        >
-          Delete event
-        </button>
-        </div>
-      </div>
-      {error && <Banner onClose={() => setError('')}>{error}</Banner>}
-      {note && (
-        <Banner kind="ok" onClose={() => setNote('')}>
-          {note}
-        </Banner>
-      )}
-
-      <EventDetails ev={ev} hasPhases={d.phases.length > 0} onSaved={load} onError={setError} />
-      <Phases eventId={id} phases={d.phases} onChanged={load} onError={setError} />
-
-      <section className="card">
-        <h2>Add a shift</h2>
-        <form className="grid-form" onSubmit={addShift}>
-          <label>
-            Role
-            {skillNames.length > 0 && !otherRole ? (
-              <select
-                value={f.roleName}
-                required
-                onChange={(e) => {
-                  if (e.target.value === '__other') {
-                    setOtherRole(true);
-                    setF({ ...f, roleName: '' });
-                  } else setF({ ...f, roleName: e.target.value });
-                }}
-              >
-                <option value="">Choose a role…</option>
-                {skillSections.map((g) => (
-                  <optgroup key={g.label} label={g.label}>
-                    {g.roles.map((n) => (
-                      <option key={n} value={n}>
-                        {n}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-                <option value="__other">Other (type a name)…</option>
-              </select>
-            ) : (
-              <input value={f.roleName} onChange={(e) => setF({ ...f, roleName: e.target.value })} placeholder="Audio Tech" required />
-            )}
-          </label>
-          <label>
-            Starts
-            <input type="datetime-local" value={f.startsAt} onChange={(e) => setF({ ...f, startsAt: e.target.value })} required />
-          </label>
-          <label>
-            Ends
-            <input type="datetime-local" value={f.endsAt} min={f.startsAt} onChange={(e) => setF({ ...f, endsAt: e.target.value })} required />
-          </label>
-          <label>
-            People needed
-            <input type="number" min={1} max={500} value={f.headcount} onChange={(e) => setF({ ...f, headcount: Number(e.target.value) })} required />
-          </label>
-          <label>
-            Required certificates
-            <input value={f.certs} onChange={(e) => setF({ ...f, certs: e.target.value })} placeholder="Forklift, Rigging (comma separated)" />
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={f.isOpen} onChange={(e) => setF({ ...f, isOpen: e.target.checked })} />
-            Open for claiming
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={f.repeat} onChange={(e) => setF({ ...f, repeat: e.target.checked })} />
-            Repeat on certain days
-          </label>
-          {f.repeat && (
-            <div className="repeat-days">
-              {DAYS.map((n, i) => (
-                <label key={n} className="check">
-                  <input
-                    type="checkbox"
-                    checked={f.days.includes(i)}
-                    onChange={(e) => setF({ ...f, days: e.target.checked ? [...f.days, i] : f.days.filter((x) => x !== i) })}
-                  />
-                  {n}
-                </label>
-              ))}
-              <label>
-                Until
-                <input type="date" value={f.until} min={f.startsAt.slice(0, 10)} onChange={(e) => setF({ ...f, until: e.target.value })} required />
-              </label>
-            </div>
-          )}
-          <div className="form-actions">
-            <button className="btn primary">{f.repeat ? 'Add repeating shifts' : 'Add shift'}</button>
-          </div>
-        </form>
-      </section>
-
-      <details className="card">
-        <summary>
-          <b>Shift templates</b> <span className="muted small">Create a whole day or week of shifts in one step</span>
-        </summary>
-        <div className="adv">
-          <div className="row">
-            <select value={tplId} onChange={(e) => setTplId(e.target.value)} aria-label="Template">
-              <option value="">Choose a template…</option>
-              {templates.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name} ({t.items.length} shifts)
-                </option>
-              ))}
-            </select>
-            {d.phases.length > 0 && (
-              <select value="" onChange={(e) => e.target.value && setTplStart(e.target.value)} aria-label="Start on a phase">
-                <option value="">Start on phase…</option>
-                {d.phases.map((p) => (
-                  <option key={p.id} value={p.starts_on.slice(0, 10)}>
-                    {p.label} ({fmtDate(p.starts_on.slice(0, 10))})
-                  </option>
-                ))}
-              </select>
-            )}
-            <input type="date" value={tplStart} onChange={(e) => setTplStart(e.target.value)} aria-label="Template start date" />
-            <button className="btn small primary" disabled={!tplId || !tplStart} onClick={applyTemplate}>
-              Apply
-            </button>
-            {tplId && (
-              <button
-                className="btn ghost small danger"
-                onClick={() => confirm('Delete this template?') && run(() => api(`/api/templates/${tplId}`, { method: 'DELETE' })).then(() => (setTplId(''), loadTemplates()))}
-              >
-                Delete template
-              </button>
-            )}
-          </div>
-          <div className="row" style={{ marginTop: 12 }}>
-            <input value={tplName} onChange={(e) => setTplName(e.target.value)} placeholder="Name for a new template" aria-label="New template name" />
-            <button className="btn small" disabled={!tplName.trim() || d.shifts.length === 0} onClick={saveTemplate}>
-              Save this event’s shifts as template
-            </button>
-          </div>
-        </div>
-      </details>
-
-      {d.shifts.length === 0 ? (
-        <Empty>No shifts yet. Add the first one above.</Empty>
-      ) : (
-        d.shifts.map((s) => {
+  const renderShifts = (list: Shift[]) =>
+    list.map((s) => {
           const active = s.assignments.filter((a) => a.status !== 'declined');
           const pending = s.assignments.filter((a) => a.status === 'pending');
           const assignedIds = new Set(s.assignments.map((a) => a.user_id));
@@ -397,6 +229,21 @@ function Body() {
                   <span className={`pill ${full ? 'accepted' : 'offered'}`}>
                     {active.length} / {s.headcount} filled
                   </span>
+                  {d.phases.length > 0 && (
+                    <select
+                      className="move-phase"
+                      value={s.phase_id ?? ''}
+                      aria-label="Move shift to a phase"
+                      onChange={(e) => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { phaseId: e.target.value || null } }), 'Shift moved.')}
+                    >
+                      <option value="">No phase</option>
+                      {d.phases.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   <button className="btn ghost small" onClick={() => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { isOpen: !s.is_open } }))}>
                     {s.is_open ? 'Close to claims' : 'Open for claiming'}
                   </button>
@@ -460,8 +307,256 @@ function Body() {
               )}
             </section>
           );
-        })
+    });
+
+  const groups: { key: string; phase: Phase | null; shifts: Shift[] }[] = [
+    ...d.phases.map((p) => ({ key: p.id, phase: p as Phase | null, shifts: d.shifts.filter((s) => s.phase_id === p.id) })),
+    ...(d.phases.length === 0 || d.shifts.some((s) => !s.phase_id || !d.phases.some((p) => p.id === s.phase_id))
+      ? [{ key: 'none', phase: null as Phase | null, shifts: d.shifts.filter((s) => !s.phase_id || !d.phases.some((p) => p.id === s.phase_id)) }]
+      : []),
+  ];
+  const addToPhase = (p: Phase) => {
+    const day = p.starts_on.slice(0, 10);
+    const swap = (v: string) => `${day}T${v.slice(11)}`;
+    setF((x) => ({ ...x, phaseId: p.id, startsAt: swap(x.startsAt), endsAt: swap(x.endsAt) }));
+    shiftForm.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+  const templateForPhase = (p: Phase) => {
+    setTplPhase(p.id);
+    setTplStart(p.starts_on.slice(0, 10));
+    setTplOpen(true);
+    setTimeout(() => tplBox.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+  };
+  const groupSection = (g: { key: string; phase: Phase | null; shifts: Shift[] }) => (
+    <div key={g.key} className="phase-group">
+      {(g.phase || d.phases.length > 0) && (
+        <div className="phase-head">
+          <div>
+            <h2>{g.phase ? g.phase.label : 'Not in a phase'}</h2>
+            {g.phase && (
+              <span className="muted small">
+                {g.phase.starts_on.slice(0, 10) === g.phase.ends_on.slice(0, 10) ? fmtDate(g.phase.starts_on.slice(0, 10)) : `${fmtDate(g.phase.starts_on.slice(0, 10))} – ${fmtDate(g.phase.ends_on.slice(0, 10))}`} · {g.shifts.length} shift{g.shifts.length === 1 ? '' : 's'}
+              </span>
+            )}
+          </div>
+          {g.phase && (
+            <div className="row" style={{ gap: 6 }}>
+              <button className="btn small primary" onClick={() => addToPhase(g.phase!)}>
+                + Add shift
+              </button>
+              <button className="btn small" onClick={() => templateForPhase(g.phase!)}>
+                Use template
+              </button>
+            </div>
+          )}
+        </div>
       )}
+      {g.shifts.length === 0 ? <Empty>{g.phase ? `No shifts in ${g.phase.label} yet.` : 'No shifts yet. Add the first one above.'}</Empty> : renderShifts(g.shifts)}
+    </div>
+  );
+
+  return (
+    <>
+      <p className="small">
+        <Link href="/events">← Events</Link>
+      </p>
+      <div className="row space">
+        <div>
+          <h1>{ev.name}</h1>
+          <div className="muted">
+            {[ev.client, ev.venue].filter(Boolean).join(' · ')}
+            {(ev.client || ev.venue) && ' · '}
+            {fmtDate(ev.start_date.slice(0, 10))}
+            {ev.end_date.slice(0, 10) !== ev.start_date.slice(0, 10) && <> – {fmtDate(ev.end_date.slice(0, 10))}</>}
+          </div>
+        </div>
+        <div className="row" style={{ gap: '0.4rem' }}>
+        <button
+          className="btn small"
+          onClick={() =>
+            api<{ id: string }>('/api/chat/channels', { body: { eventId: id } })
+              .then((r) => router.push(`/chat?c=${r.id}`))
+              .catch((e) => setError(e.message))
+          }
+        >
+          Event chat
+        </button>
+        <button
+          className="btn ghost small danger"
+          onClick={() => {
+            if (confirm(`Delete "${ev.name}" and all its shifts?`)) api(`/api/events/${id}`, { method: 'DELETE' }).then(() => router.replace('/events'));
+          }}
+        >
+          Delete event
+        </button>
+        </div>
+      </div>
+      {error && <Banner onClose={() => setError('')}>{error}</Banner>}
+      {note && (
+        <Banner kind="ok" onClose={() => setNote('')}>
+          {note}
+        </Banner>
+      )}
+
+      <EventDetails ev={ev} hasPhases={d.phases.length > 0} onSaved={load} onError={setError} />
+      <Phases eventId={id} phases={d.phases} onChanged={load} onError={setError} />
+
+      <section className="card" ref={shiftForm}>
+        <h2>Add a shift</h2>
+        <form className="grid-form" onSubmit={addShift}>
+          <label>
+            Role
+            {skillNames.length > 0 && !otherRole ? (
+              <select
+                value={f.roleName}
+                required
+                onChange={(e) => {
+                  if (e.target.value === '__other') {
+                    setOtherRole(true);
+                    setF({ ...f, roleName: '' });
+                  } else setF({ ...f, roleName: e.target.value });
+                }}
+              >
+                <option value="">Choose a role…</option>
+                {skillSections.map((g) => (
+                  <optgroup key={g.label} label={g.label}>
+                    {g.roles.map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+                <option value="__other">Other (type a name)…</option>
+              </select>
+            ) : (
+              <input value={f.roleName} onChange={(e) => setF({ ...f, roleName: e.target.value })} placeholder="Audio Tech" required />
+            )}
+          </label>
+          {d.phases.length > 0 && (
+            <label>
+              Phase
+              <select
+                value={f.phaseId}
+                onChange={(e) => {
+                  const p = d.phases.find((x) => x.id === e.target.value);
+                  if (p) addToPhase(p);
+                  else setF({ ...f, phaseId: '' });
+                }}
+              >
+                <option value="">No phase</option>
+                {d.phases.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label>
+            Starts
+            <input type="datetime-local" value={f.startsAt} onChange={(e) => setF({ ...f, startsAt: e.target.value })} required />
+          </label>
+          <label>
+            Ends
+            <input type="datetime-local" value={f.endsAt} min={f.startsAt} onChange={(e) => setF({ ...f, endsAt: e.target.value })} required />
+          </label>
+          <label>
+            People needed
+            <input type="number" min={1} max={500} value={f.headcount} onChange={(e) => setF({ ...f, headcount: Number(e.target.value) })} required />
+          </label>
+          <label>
+            Required certificates
+            <input value={f.certs} onChange={(e) => setF({ ...f, certs: e.target.value })} placeholder="Forklift, Rigging (comma separated)" />
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={f.isOpen} onChange={(e) => setF({ ...f, isOpen: e.target.checked })} />
+            Open for claiming
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={f.repeat} onChange={(e) => setF({ ...f, repeat: e.target.checked })} />
+            Repeat on certain days
+          </label>
+          {f.repeat && (
+            <div className="repeat-days">
+              {DAYS.map((n, i) => (
+                <label key={n} className="check">
+                  <input
+                    type="checkbox"
+                    checked={f.days.includes(i)}
+                    onChange={(e) => setF({ ...f, days: e.target.checked ? [...f.days, i] : f.days.filter((x) => x !== i) })}
+                  />
+                  {n}
+                </label>
+              ))}
+              <label>
+                Until
+                <input type="date" value={f.until} min={f.startsAt.slice(0, 10)} onChange={(e) => setF({ ...f, until: e.target.value })} required />
+              </label>
+            </div>
+          )}
+          <div className="form-actions">
+            <button className="btn primary">{f.repeat ? 'Add repeating shifts' : 'Add shift'}</button>
+          </div>
+        </form>
+      </section>
+
+      <details className="card" ref={tplBox} open={tplOpen} onToggle={(e) => setTplOpen((e.target as HTMLDetailsElement).open)}>
+        <summary>
+          <b>Shift templates</b> <span className="muted small">Create a whole day or week of shifts in one step</span>
+        </summary>
+        <div className="adv">
+          <div className="row">
+            <select value={tplId} onChange={(e) => setTplId(e.target.value)} aria-label="Template">
+              <option value="">Choose a template…</option>
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.items.length} shifts)
+                </option>
+              ))}
+            </select>
+            {d.phases.length > 0 && (
+              <select
+                value={tplPhase}
+                onChange={(e) => {
+                  setTplPhase(e.target.value);
+                  const p = d.phases.find((x) => x.id === e.target.value);
+                  if (p) setTplStart(p.starts_on.slice(0, 10));
+                }}
+                aria-label="Add the shifts to a phase"
+              >
+                <option value="">No phase</option>
+                {d.phases.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label} ({fmtDate(p.starts_on.slice(0, 10))})
+                  </option>
+                ))}
+              </select>
+            )}
+            <input type="date" value={tplStart} onChange={(e) => setTplStart(e.target.value)} aria-label="Template start date" />
+            <button className="btn small primary" disabled={!tplId || !tplStart} onClick={applyTemplate}>
+              Apply
+            </button>
+            {tplId && (
+              <button
+                className="btn ghost small danger"
+                onClick={() => confirm('Delete this template?') && run(() => api(`/api/templates/${tplId}`, { method: 'DELETE' })).then(() => (setTplId(''), loadTemplates()))}
+              >
+                Delete template
+              </button>
+            )}
+          </div>
+          <div className="row" style={{ marginTop: 12 }}>
+            <input value={tplName} onChange={(e) => setTplName(e.target.value)} placeholder="Name for a new template" aria-label="New template name" />
+            <button className="btn small" disabled={!tplName.trim() || d.shifts.length === 0} onClick={saveTemplate}>
+              Save this event’s shifts as template
+            </button>
+          </div>
+        </div>
+      </details>
+
+      {(
+        <>{groups.map((g) => groupSection(g))}</>      )}
     </>
   );
 }

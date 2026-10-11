@@ -25,6 +25,7 @@ const shiftBody = z.object({
   headcount: z.number().int().min(1).max(500).default(1),
   isOpen: z.boolean().default(false),
   requiredCerts: z.array(z.string().trim().min(1).max(60)).max(10).default([]),
+  phaseId: z.string().uuid().nullable().optional(),
 });
 
 const mgr = guard('admin', 'manager');
@@ -196,15 +197,17 @@ export async function eventRoutes(app: FastifyInstance) {
     if (new Date(b.endsAt) <= new Date(b.startsAt)) return reply.code(400).send({ error: 'Shift must end after it starts' });
     const row = await withTenant(req.user.tid, async (c) => {
       if (!(await c.query('SELECT 1 FROM events WHERE id = $1', [eventId])).rowCount) return null;
+      if (b.phaseId && !(await c.query('SELECT 1 FROM event_phases WHERE id = $1 AND event_id = $2', [b.phaseId, eventId])).rowCount) return { error: 'That phase belongs to a different event' };
       const r = await c.query(
-        `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-        [req.user.tid, eventId, b.roleName, b.startsAt, b.endsAt, b.headcount, b.isOpen, b.requiredCerts],
+        `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs, phase_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+        [req.user.tid, eventId, b.roleName, b.startsAt, b.endsAt, b.headcount, b.isOpen, b.requiredCerts, b.phaseId ?? null],
       );
       await audit(c, req.user.tid, req.user.sub, 'shift.create', 'shift', r.rows[0].id);
       return r.rows[0];
     });
     if (!row) return reply.code(404).send({ error: 'Event not found' });
+    if ((row as any).error) return reply.code(400).send(row);
     return reply.code(201).send({ shift: row });
   });
 
