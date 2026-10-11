@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import Shell, { initials } from '@/components/Shell';
 import { Banner } from '@/components/ui';
 import { api, ApiError, roleLabel } from '@/lib/api';
-import SkillPicker, { useSkillNames } from '@/components/SkillPicker';
+import SkillPicker, { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 
 type Member = {
   id: string;
@@ -56,6 +56,7 @@ function Body() {
   const [d, setD] = useState<Detail | null>(null);
   const [f, setF] = useState({ name: '', email: '', phone: '', address: '', emergencyName: '', emergencyPhone: '', bio: '', coordinatorNotes: '', skills: [] as string[] });
   const skillNames = useSkillNames();
+  const skillSections = useSkillSections();
   const [cf, setCf] = useState<{ name: string; expiresOn: string; file: File | null }>({ name: '', expiresOn: '', file: null });
   const router = useRouter();
   const [error, setError] = useState('');
@@ -202,7 +203,7 @@ function Body() {
           </label>
           <label style={{ gridColumn: '1 / -1' }}>
             Skills
-            <SkillPicker value={f.skills} onChange={(skills) => setF({ ...f, skills })} options={skillNames} />
+            <SkillPicker value={f.skills} onChange={(skills) => setF({ ...f, skills })} options={skillNames} sections={skillSections} />
           </label>
           <label style={{ gridColumn: '1 / -1' }}>
             About <span className="muted small">(what the person wrote about themselves)</span>

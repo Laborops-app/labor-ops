@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { api, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
-import { useSkillNames } from '@/components/SkillPicker';
+import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 
 type Assignment = { id: string; user_id: string; user_name: string; status: string };
 type Elig = { user_id: string; missing_certs: string[]; time_off: boolean; outside_availability: boolean };
@@ -73,6 +73,7 @@ function Body() {
     };
   });
   const skillNames = useSkillNames();
+  const skillSections = useSkillSections();
   const [otherRole, setOtherRole] = useState(false);
   const [tplId, setTplId] = useState('');
   const [tplStart, setTplStart] = useState('');
@@ -241,10 +242,14 @@ function Body() {
                 }}
               >
                 <option value="">Choose a role…</option>
-                {skillNames.map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
+                {skillSections.map((g) => (
+                  <optgroup key={g.label} label={g.label}>
+                    {g.roles.map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
                 <option value="__other">Other (type a name)…</option>
               </select>

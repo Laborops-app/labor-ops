@@ -4,7 +4,7 @@ import { Fragment, useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, Me, roleLabel } from '@/lib/api';
-import SkillPicker, { useSkillNames } from '@/components/SkillPicker';
+import SkillPicker, { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 
 type Cert = { id: string; name: string; expires_on: string | null; verified: boolean; has_file: boolean };
 type Member = { id: string; name: string; email: string; role: string; phone: string | null; skills: string[]; active: boolean; certs: Cert[]; has_availability: boolean };
@@ -23,6 +23,7 @@ function Body({ me }: { me: Me }) {
   const [notice, setNotice] = useState('');
   const [f, setF] = useState({ name: '', email: '', phone: '', skills: [] as string[], role: 'crew' });
   const skillNames = useSkillNames();
+  const skillSections = useSkillSections();
   const [open, setOpen] = useState<string | null>(null);
   const [cf, setCf] = useState({ name: '', expiresOn: '' });
 
@@ -122,7 +123,7 @@ function Body({ me }: { me: Me }) {
           </label>
           <label>
             Skills
-            <SkillPicker value={f.skills} onChange={(skills) => setF({ ...f, skills })} options={skillNames} />
+            <SkillPicker value={f.skills} onChange={(skills) => setF({ ...f, skills })} options={skillNames} sections={skillSections} />
           </label>
           {me.role === 'admin' && (
             <label>

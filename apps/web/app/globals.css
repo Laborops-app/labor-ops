@@ -528,3 +528,5 @@ table.rates td input[type=text], table.rates td input:not([type]) { width: 100%;
 .pay-box b { font-size: 1.25rem; }
 .pay-box .muted { color: inherit; opacity: 0.8; }
 .pay-line { color: var(--good); margin-top: 2px; }
+table.rates tr.group-row td { background: var(--surface-2); padding-top: 0.55rem; padding-bottom: 0.55rem; }
+table.rates td select { max-width: 11rem; }

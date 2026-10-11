@@ -1089,3 +1089,43 @@ test('shift pay: hourly rate and estimated earnings for crew, cost for admins on
   assert.equal(pre.json.shift.estimated_pay, 164);
   assert.equal(pre.json.shift.assignment_id, asg.json.assignment.id);
 });
+
+test('role groups: create, assign roles, starter set with templates is idempotent, admin only', async () => {
+  const a = await register('grp');
+  const c1 = await mkCrew(a, 'gr1');
+  assert.equal((await call(c1.session, 'POST', '/api/skill-groups', { name: 'X' })).status, 403);
+  const g = await call(a, 'POST', '/api/skill-groups', { name: 'Riggers' });
+  assert.equal(g.status, 201, g.text);
+  assert.equal((await call(a, 'POST', '/api/skill-groups', { name: 'riggers' })).status, 409);
+  const sk = await call(a, 'POST', '/api/skills', { name: 'Head Rigger', payRate: 40, groupId: g.json.group.id });
+  assert.equal(sk.json.skill.groupId, g.json.group.id);
+  assert.equal((await call(a, 'PATCH', `/api/skills/${sk.json.skill.id}`, { groupId: null })).json.skill.groupId, null);
+  assert.equal((await call(a, 'PATCH', `/api/skills/${sk.json.skill.id}`, { groupId: g.json.group.id })).json.skill.groupId, g.json.group.id);
+  assert.equal((await call(a, 'PATCH', `/api/skill-groups/${g.json.group.id}`, { name: 'Rigging' })).json.group.name, 'Rigging');
+
+  // crew can read groups (for drop-downs) but not rates
+  const seen = (await call(c1.session, 'GET', '/api/skills')).json;
+  assert.ok(seen.groups.some((x: any) => x.name === 'Rigging'));
+  assert.equal(seen.skills[0].payRate, undefined);
+
+  // starter set
+  assert.equal((await call(c1.session, 'POST', '/api/skills/starter')).status, 403);
+  const first = await call(a, 'POST', '/api/skills/starter');
+  assert.deepEqual(first.json.added, { groups: 5, roles: 10, templates: 7 });
+  assert.deepEqual((await call(a, 'POST', '/api/skills/starter')).json.added, { groups: 0, roles: 0, templates: 0 });
+  const all = (await call(a, 'GET', '/api/skills')).json;
+  const equip = all.groups.find((x: any) => x.name === 'Equipment Ops').id;
+  assert.deepEqual(all.skills.filter((s: any) => s.groupId === equip).map((s: any) => s.name).sort(), ['Boom Op', 'Fork Lift Op', 'High Lift Op', 'Lull Op', 'Scissor Lift Op']);
+  const tpls = (await call(a, 'GET', '/api/templates')).json.templates;
+  assert.ok(tpls.find((t: any) => t.name === 'Load-in').items.some((i: any) => i.role === 'Fork Lift Op'));
+
+  // a template builds real shifts
+  const ev = await mkEvent(a);
+  const t = tpls.find((x: any) => x.name === 'Equipment ops');
+  const shifts = t.items.map((i: any) => ({ roleName: i.role, startsAt: start(24), endsAt: start(32), headcount: i.headcount, isOpen: false, requiredCerts: [] }));
+  assert.equal((await call(a, 'POST', `/api/events/${ev}/shifts/bulk`, { shifts })).json.created, 5);
+
+  // deleting a group keeps its roles
+  assert.equal((await call(a, 'DELETE', `/api/skill-groups/${equip}`)).status, 200);
+  assert.ok((await call(a, 'GET', '/api/skills')).json.skills.some((s: any) => s.name === 'Boom Op' && s.groupId === null));
+});
