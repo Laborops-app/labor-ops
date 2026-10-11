@@ -1257,3 +1257,17 @@ test('pay rules: weekly overtime and night / Sunday / holiday premiums', async (
   // no rate -> no estimate
   assert.equal(priceShift(rules, undefined, '2030-01-01T10:00:00Z', '2030-01-01T14:00:00Z').estimate, null);
 });
+
+test('ratings: coordinators rate crew per position, crew cannot, base role name is used', async () => {
+  const a = await register('rate');
+  const c1 = await mkCrew(a, 'rt1');
+  assert.equal((await call(c1.session, 'PUT', `/api/crew/${c1.id}/ratings`, { role: 'Audio', stars: 5 })).status, 403);
+  assert.equal((await call(a, 'PUT', `/api/crew/${c1.id}/ratings`, { role: 'Audio (Lead)', stars: 4 })).json.ratings.audio, 4);
+  assert.equal((await call(a, 'PUT', `/api/crew/${c1.id}/ratings`, { role: 'Audio', stars: 5 })).json.ratings.audio, 5);
+  assert.equal((await call(a, 'PUT', `/api/crew/${c1.id}/ratings`, { role: 'Lighting', stars: 3 })).status, 200);
+  assert.equal((await call(a, 'PUT', `/api/crew/${c1.id}/ratings`, { role: 'Audio', stars: 6 })).status, 400);
+  const row = (await call(a, 'GET', '/api/crew')).json.crew.find((m: any) => m.id === c1.id);
+  assert.deepEqual(row.ratings, { audio: 5, lighting: 3 });
+  assert.deepEqual((await call(a, 'PUT', `/api/crew/${c1.id}/ratings`, { role: 'Lighting', stars: null })).json.ratings, { audio: 5 });
+  assert.equal((await call(a, 'PUT', `/api/crew/${crypto.randomUUID()}/ratings`, { role: 'Audio', stars: 3 })).status, 404);
+});

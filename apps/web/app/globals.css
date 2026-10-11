@@ -544,3 +544,9 @@ table.rates td select { max-width: 11rem; }
 
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1rem; margin-bottom: 0.75rem; }
 .grid2 label { display: flex; flex-direction: column; gap: 0.25rem; }
+
+.stars { display: inline-flex; gap: 0; margin-left: 0.35rem; vertical-align: middle; }
+.star { background: none; border: 0; padding: 0 0.05rem; font-size: 0.95rem; line-height: 1; color: var(--border, #c9ced6); cursor: pointer; }
+span.star { cursor: default; }
+.star.on { color: #e5a50a; }
+button.star:hover, button.star:focus-visible { color: #e5a50a; }

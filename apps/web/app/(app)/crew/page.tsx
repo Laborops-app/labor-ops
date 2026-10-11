@@ -1,13 +1,14 @@
 'use client';
 import Link from 'next/link';
 import { Fragment, useEffect, useState } from 'react';
+import { Stars, roleKey } from '@/components/Stars';
 import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, Me, roleLabel } from '@/lib/api';
 import SkillPicker, { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 
 type Cert = { id: string; name: string; expires_on: string | null; verified: boolean; has_file: boolean };
-type Member = { id: string; name: string; email: string; role: string; phone: string | null; skills: string[]; active: boolean; certs: Cert[]; has_availability: boolean };
+type Member = { id: string; name: string; email: string; role: string; phone: string | null; skills: string[]; active: boolean; certs: Cert[]; has_availability: boolean; ratings?: Record<string, number> };
 
 const certState = (c: Cert) => {
   if (!c.expires_on) return '';
@@ -171,6 +172,17 @@ function Body({ me }: { me: Me }) {
                         {m.skills.map((s) => (
                           <span key={s} className="chip">
                             {s}
+                            {m.role === 'crew' && (
+                              <Stars
+                                label={`${m.name} as ${s}`}
+                                value={m.ratings?.[roleKey(s)]}
+                                onChange={(n) =>
+                                  api<{ ratings: Record<string, number> }>(`/api/crew/${m.id}/ratings`, { method: 'PUT', body: { role: s, stars: n } })
+                                    .then((r) => setList((l) => l && l.map((x) => (x.id === m.id ? { ...x, ratings: r.ratings } : x))))
+                                    .catch((e) => setError(e.message))
+                                }
+                              />
+                            )}
                           </span>
                         ))}
                       </td>

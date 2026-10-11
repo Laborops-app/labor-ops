@@ -4,6 +4,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
+import { roleKey } from '@/components/Stars';
 import { api, ApiError, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
 import { EventDetails, Phases, EventFull, Phase } from '@/components/EventInfo';
 import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
@@ -25,7 +26,7 @@ type Shift = {
   estimated_cost?: number | null;
 };
 type Detail = { event: EventFull; shifts: Shift[]; phases: Phase[] };
-type Member = { id: string; name: string; role: string; skills: string[]; active: boolean };
+type Member = { id: string; name: string; role: string; skills: string[]; active: boolean; ratings?: Record<string, number> };
 type TplItem = { role: string; dayOffset: number; start: string; end: string; headcount: number; isOpen: boolean; requiredCerts: string[] };
 type Template = { id: string; name: string; items: TplItem[] };
 
@@ -211,7 +212,10 @@ function Body() {
           const full = active.length >= s.headcount;
           const st = new Map(s.crew_status.map((x) => [x.user_id, x]));
           const candidates = crew.filter((m) => !assignedIds.has(m.id)).map((m) => ({ m, e: st.get(m.id) }));
-          const ok = candidates.filter((c) => !c.e?.missing_certs.length && !c.e?.time_off && !c.e?.outside_availability);
+          const rk = roleKey(s.role_name);
+          const stars = (m: Member) => m.ratings?.[rk] ?? 0;
+          const best = (a: { m: Member }, b: { m: Member }) => stars(b.m) - stars(a.m) || a.m.name.localeCompare(b.m.name);
+          const ok = candidates.filter((c) => !c.e?.missing_certs.length && !c.e?.time_off && !c.e?.outside_availability).sort(best);
           const blocked = candidates.filter((c) => c.e?.missing_certs.length);
           const soft = candidates.filter((c) => !c.e?.missing_certs.length && (c.e?.time_off || c.e?.outside_availability));
           return (
@@ -290,6 +294,7 @@ function Body() {
                     <option value="">Choose crew…</option>
                     {ok.map(({ m }) => (
                       <option key={m.id} value={m.id}>
+                        {stars(m) ? `${'★'.repeat(stars(m))}${'☆'.repeat(5 - stars(m))} ` : ''}
                         {m.name}
                         {m.skills.length ? ` — ${m.skills.join(', ')}` : ''}
                       </option>
