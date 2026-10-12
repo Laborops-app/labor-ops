@@ -1,9 +1,11 @@
+import type { PoolClient } from 'pg';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
 import { guard, authenticate } from '../auth';
 import { notify, notifyStaff, describeShift } from '../notify';
 import { loadRules, checkRules } from '../pay';
+import { claimLinks } from '../notify/respond';
 import { evaluateShift, findClash, filledCount, certMessage } from '../eligibility';
 
 const uuid = z.string().uuid();
@@ -28,6 +30,32 @@ export const shiftInput = z.object({
   requiredCerts: certList.default([]),
   phaseId: z.string().uuid().nullable().optional(),
 });
+
+/** A crew member asks for an open shift (held as pending until a coordinator approves). Shared by the app and the email links. */
+export async function claimShift(c: PoolClient, tid: string, user: { id: string; name: string }, id: string): Promise<Out> {
+  const s = (await c.query('SELECT * FROM shifts WHERE id = $1 FOR UPDATE', [id])).rows[0];
+  if (!s || !s.is_open || new Date(s.ends_at) <= new Date()) return { code: 404, error: 'This shift is not open for claiming' };
+  if (s.offer_group_id && !(await c.query('SELECT 1 FROM crew_group_members WHERE group_id = $1 AND user_id = $2', [s.offer_group_id, user.id])).rowCount)
+    return { code: 404, error: 'This shift is not open for claiming' };
+  if ((await filledCount(c, id)) >= s.headcount) return { code: 409, error: 'Someone else just took the last spot' };
+  if ((await c.query('SELECT 1 FROM shift_assignments WHERE shift_id = $1 AND user_id = $2', [id, user.id])).rowCount)
+    return { code: 409, error: 'You are already on this shift' };
+  const clash = await findClash(c, user.id, id, s.starts_at, s.ends_at);
+  if (clash) return { code: 409, error: `You are already booked for ${clash.role_name} at ${clash.event_name} at that time` };
+  const [el] = await evaluateShift(c, id, user.id);
+  if (el?.missing_certs.length) return { code: 409, error: `You need a valid ${el.missing_certs.join(', ')} certificate for this shift` };
+  const chk = await checkRules(c, await loadRules(c), user.id, id, s.starts_at, s.ends_at, 'You');
+  if (chk.blocks.length) return { code: 409, error: chk.blocks.join('. ') + '. Ask your coordinator if this shift is needed.' };
+  const a = (
+    await c.query("INSERT INTO shift_assignments (tenant_id, shift_id, user_id, status) VALUES ($1,$2,$3,'pending') RETURNING id", [
+      tid, id, user.id,
+    ])
+  ).rows[0];
+  await audit(c, tid, user.id, 'claim.create', 'assignment', a.id, { shiftId: id });
+  const d = await describeShift(c, tid, id);
+  if (d) await notifyStaff(c, tid, { category: 'approval_request', title: `${user.name} wants ${d.role}`, body: `${user.name} asked to take a shift.\n\n${d.line}`, link: '/requests' });
+  return { code: 201, assignmentId: a.id };
+}
 
 export async function schedulingRoutes(app: FastifyInstance) {
   // ---------- manager: bulk-create shifts (repeat / templates) ----------
@@ -81,10 +109,14 @@ export async function schedulingRoutes(app: FastifyInstance) {
         const onShift = new Set((await c.query('SELECT user_id FROM shift_assignments WHERE shift_id = $1', [id])).rows.map((x) => x.user_id));
         const who = elig.filter((e) => !e.missing_certs.length && !e.time_off && !onShift.has(e.user_id));
         if (d && who.length)
-          await notify(c, req.user.tid, who.map((e) => ({
-            userId: e.user_id, category: 'open_shift' as const, title: `Open shift: ${d.role}`,
-            body: `${d.line}\n\nThis shift is open. Claim it if you are available.`, link: '/open-shifts',
-          })));
+          await notify(c, req.user.tid, who.map((e) => {
+            const l = claimLinks(req.user.tid, id, e.user_id);
+            return {
+              userId: e.user_id, category: 'open_shift' as const, title: `Open shift: ${d.role}`,
+              body: `${d.line}\n\nThis shift is open. Claim it if you are available.`, link: '/open-shifts', smsLink: l.bare,
+              actions: [{ label: 'Claim this shift', url: l.accept, kind: 'accept' as const }, { label: 'No thanks', url: l.decline, kind: 'decline' as const }],
+            };
+          }));
       }
       return { shift: r.rows[0] };
     });
@@ -403,30 +435,7 @@ export async function schedulingRoutes(app: FastifyInstance) {
 
   app.post('/api/shifts/:id/claim', { preHandler: authenticate }, async (req, reply) => {
     const { id } = idParam.parse(req.params);
-    const r = await withTenant(req.user.tid, async (c): Promise<Out> => {
-      const s = (await c.query('SELECT * FROM shifts WHERE id = $1 FOR UPDATE', [id])).rows[0];
-      if (!s || !s.is_open || new Date(s.ends_at) <= new Date()) return { code: 404, error: 'This shift is not open for claiming' };
-      if (s.offer_group_id && !(await c.query('SELECT 1 FROM crew_group_members WHERE group_id = $1 AND user_id = $2', [s.offer_group_id, req.user.sub])).rowCount)
-        return { code: 404, error: 'This shift is not open for claiming' };
-      if ((await filledCount(c, id)) >= s.headcount) return { code: 409, error: 'Someone else just took the last spot' };
-      if ((await c.query('SELECT 1 FROM shift_assignments WHERE shift_id = $1 AND user_id = $2', [id, req.user.sub])).rowCount)
-        return { code: 409, error: 'You are already on this shift' };
-      const clash = await findClash(c, req.user.sub, id, s.starts_at, s.ends_at);
-      if (clash) return { code: 409, error: `You are already booked for ${clash.role_name} at ${clash.event_name} at that time` };
-      const [el] = await evaluateShift(c, id, req.user.sub);
-      if (el?.missing_certs.length) return { code: 409, error: `You need a valid ${el.missing_certs.join(', ')} certificate for this shift` };
-      const chk = await checkRules(c, await loadRules(c), req.user.sub, id, s.starts_at, s.ends_at, 'You');
-      if (chk.blocks.length) return { code: 409, error: chk.blocks.join('. ') + '. Ask your coordinator if this shift is needed.' };
-      const a = (
-        await c.query("INSERT INTO shift_assignments (tenant_id, shift_id, user_id, status) VALUES ($1,$2,$3,'pending') RETURNING id", [
-          req.user.tid, id, req.user.sub,
-        ])
-      ).rows[0];
-      await audit(c, req.user.tid, req.user.sub, 'claim.create', 'assignment', a.id, { shiftId: id });
-      const d = await describeShift(c, req.user.tid, id);
-      if (d) await notifyStaff(c, req.user.tid, { category: 'approval_request', title: `${req.user.name} wants ${d.role}`, body: `${req.user.name} asked to take a shift.\n\n${d.line}`, link: '/requests' });
-      return { code: 201, assignmentId: a.id };
-    });
+    const r = await withTenant(req.user.tid, (c) => claimShift(c, req.user.tid, { id: req.user.sub, name: req.user.name }, id));
     return send(reply, r);
   });
 

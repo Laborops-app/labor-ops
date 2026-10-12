@@ -27,9 +27,42 @@ export function readRespondToken(t: string): { tid: string; aid: string; uid: st
   const want = Buffer.from(mac(payload));
   const got = Buffer.from(sig);
   if (want.length !== got.length || !timingSafeEqual(want, got)) return null;
-  const [tid, aid, uid, exp] = payload.split('.');
+  const parts = payload.split('.');
+  if (parts.length !== 4) return null;
+  const [tid, aid, uid, exp] = parts;
   if (!tid || !aid || !uid || Number(exp) < Date.now() / 1000) return null;
   return { tid, aid, uid };
+}
+
+/** Same idea for an open shift offered to a group: the link lets one person claim (or pass on) one shift. */
+export function claimToken(tenantId: string, shiftId: string, userId: string): string {
+  const exp = Math.floor(Date.now() / 1000) + TTL_DAYS * 86400;
+  const payload = `claim.${tenantId}.${shiftId}.${userId}.${exp}`;
+  return Buffer.from(payload).toString('base64url') + '.' + mac(payload);
+}
+
+export function readClaimToken(t: string): { tid: string; sid: string; uid: string } | null {
+  const [p, sig] = String(t).split('.');
+  if (!p || !sig) return null;
+  let payload: string;
+  try {
+    payload = Buffer.from(p, 'base64url').toString();
+  } catch {
+    return null;
+  }
+  const want = Buffer.from(mac(payload));
+  const got = Buffer.from(sig);
+  if (want.length !== got.length || !timingSafeEqual(want, got)) return null;
+  const parts = payload.split('.');
+  if (parts.length !== 5 || parts[0] !== 'claim') return null;
+  const [, tid, sid, uid, exp] = parts;
+  if (!tid || !sid || !uid || Number(exp) < Date.now() / 1000) return null;
+  return { tid, sid, uid };
+}
+
+export function claimLinks(tenantId: string, shiftId: string, userId: string) {
+  const t = claimToken(tenantId, shiftId, userId);
+  return { accept: absUrl(`/respond?t=${t}&a=accept`), decline: absUrl(`/respond?t=${t}&a=decline`), bare: absUrl(`/respond?t=${t}`) };
 }
 
 export function respondLinks(tenantId: string, assignmentId: string, userId: string) {

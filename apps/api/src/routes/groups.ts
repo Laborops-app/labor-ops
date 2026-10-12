@@ -6,6 +6,7 @@ import { groupCandidates } from '../groups';
 import { assignCrew } from './events';
 import { notify, describeShift } from '../notify';
 import { filledCount } from '../eligibility';
+import { claimLinks } from '../notify/respond';
 
 const uuid = z.string().uuid();
 const mgr = guard('admin', 'manager');
@@ -115,10 +116,14 @@ export async function groupRoutes(app: FastifyInstance) {
       await c.query('UPDATE shifts SET is_open = true, offer_group_id = $2 WHERE id = $1', [id, b.groupId]);
       const d = await describeShift(c, req.user.tid, id);
       if (d)
-        await notify(c, req.user.tid, cand.candidates.map((p) => ({
-          userId: p.user_id, category: 'open_shift' as const, title: `Open shift for ${group.name}: ${d.role}`,
-          body: `${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nThis shift is offered to your group first-come, first-served. Claim it if you are available.`, link: '/open-shifts',
-        })));
+        await notify(c, req.user.tid, cand.candidates.map((p) => {
+          const l = claimLinks(req.user.tid, id, p.user_id);
+          return {
+            userId: p.user_id, category: 'open_shift' as const, title: `Open shift for ${group.name}: ${d.role}`,
+            body: `${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nThis shift is offered to your group first-come, first-served. Claim it if you are available.`, link: '/open-shifts', smsLink: l.bare,
+            actions: [{ label: 'Claim this shift', url: l.accept, kind: 'accept' as const }, { label: 'No thanks', url: l.decline, kind: 'decline' as const }],
+          };
+        }));
       await audit(c, req.user.tid, req.user.sub, 'shift.offer_group', 'shift', id, { groupId: b.groupId, notified: cand.candidates.length });
       return { code: 200, notified: cand.candidates.length, skipped: cand.skipped };
     });

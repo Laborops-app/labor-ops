@@ -7,7 +7,7 @@ import ThemeToggle from '@/components/ThemeToggle';
 import { Banner } from '@/components/ui';
 import { api, money } from '@/lib/api';
 
-type Shift = { assignment_id: string; hours: number; hourly_rate: number | null; estimated_pay: number | null; status: string; person: string; role_name: string; starts_at: string; ends_at: string; event_name: string; venue: string | null; timezone: string; canRespond: boolean };
+type Shift = { kind?: 'claim'; assignment_id?: string; hours: number; hourly_rate: number | null; estimated_pay: number | null; status: string; person: string; role_name: string; starts_at: string; ends_at: string; event_name: string; venue: string | null; timezone: string; canRespond: boolean };
 
 const when = (s: Shift) => {
   const o = { timeZone: s.timezone };
@@ -51,7 +51,7 @@ function Respond() {
       </div>
       <div className="auth-card">
         <Logo width={200} className="auth-logo" />
-        <h1>Shift offer</h1>
+        <h1>{shift?.kind === 'claim' ? 'Open shift' : 'Shift offer'}</h1>
         {error && <Banner>{error}</Banner>}
         {shift && (
           <>
@@ -85,28 +85,47 @@ function Respond() {
               </div>
             )}
             {done ? (
-              <Banner kind="ok">{done === 'accepted' ? 'You accepted this shift. See you there!' : 'You declined this shift. Your coordinator has been told.'}</Banner>
+              <Banner kind="ok">
+                {done === 'pending'
+                  ? 'Request sent. Your coordinator will confirm the shift and you will be notified.'
+                  : done === 'passed'
+                    ? 'No problem. Thanks for letting us know.'
+                    : done === 'accepted'
+                      ? 'You accepted this shift. See you there!'
+                      : 'You declined this shift. Your coordinator has been told.'}
+              </Banner>
             ) : shift.canRespond ? (
               <>
                 <p className="muted small">
-                  Hi {shift.person.split(' ')[0]}, {shift.status === 'offered' ? 'can you work this shift?' : `you currently have this shift marked as ${shift.status}. You can change your answer.`}
+                  Hi {shift.person.split(' ')[0]},{' '}
+                  {shift.kind === 'claim'
+                    ? 'this shift is open to you, first come, first served. Want it?'
+                    : shift.status === 'offered'
+                      ? 'can you work this shift?'
+                      : `you currently have this shift marked as ${shift.status}. You can change your answer.`}
                 </p>
                 <div className="row" style={{ gap: '0.6rem' }}>
                   <button className={`btn big ${pre === 'decline' ? '' : 'primary'}`} style={{ flex: 1 }} disabled={busy} onClick={() => send('accepted')}>
-                    Accept
+                    {shift.kind === 'claim' ? 'Claim this shift' : 'Accept'}
                   </button>
                   <button className={`btn big ${pre === 'decline' ? 'primary' : ''}`} style={{ flex: 1 }} disabled={busy} onClick={() => send('declined')}>
-                    Decline
+                    {shift.kind === 'claim' ? 'No thanks' : 'Decline'}
                   </button>
                 </div>
               </>
             ) : (
-              <Banner kind="info">This shift can no longer be changed here. Contact your coordinator.</Banner>
+              <Banner kind="info">
+                {shift.kind === 'claim'
+                  ? shift.status !== 'open'
+                    ? `You already asked for this shift (${shift.status}).`
+                    : 'This shift has been filled or is no longer open.'
+                  : 'This shift can no longer be changed here. Contact your coordinator.'}
+              </Banner>
             )}
           </>
         )}
         <p className="muted small center-text">
-          <Link href={shift ? `/my-shifts/${shift.assignment_id}` : '/my-shifts'}>{done === 'accepted' ? 'View this shift in LaborOps' : 'Open LaborOps'}</Link>
+          <Link href={shift?.kind === 'claim' ? '/open-shifts' : shift?.assignment_id ? `/my-shifts/${shift.assignment_id}` : '/my-shifts'}>{done === 'accepted' ? 'View this shift in LaborOps' : 'Open LaborOps'}</Link>
         </p>
       </div>
     </div>

@@ -1387,3 +1387,28 @@ test('trainings: announce, apply, capacity waitlist, promotion, completion grant
   assert.deepEqual(cert.rows[0], { verified: true, has_exp: true });
   assert.equal((await call(a, 'POST', `/api/trainings/${t}/complete`)).status, 409);
 });
+
+test('open shift for a group: the email carries claim links that work without signing in', async () => {
+  const a = await register('clk');
+  const [c1, c2] = [await mkCrew(a, 'gclm1'), await mkCrew(a, 'gclm2')];
+  const tid = await tenantOf(a);
+  const g = (await call(a, 'POST', '/api/crew-groups', { name: 'Team' })).json.group.id;
+  await call(a, 'PUT', `/api/crew-groups/${g}/members`, { userIds: [c1.id] });
+  const ev = await mkEvent(a);
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Tech', startsAt: start(60), endsAt: start(66), headcount: 1 })).json.shift.id;
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/fill-from-group`, { groupId: g, mode: 'offer' })).status, 200);
+  const mail = await withTenant(tid, (c) => c.query("SELECT body, html FROM deliveries WHERE channel = 'email' AND user_id = $1 ORDER BY created_at DESC LIMIT 1", [c1.id]));
+  const url = /\/respond\?t=([\w.-]+)&(?:amp;)?a=accept/.exec(mail.rows[0].html)!;
+  const t = url[1];
+  const pre = await call(null, 'GET', `/api/respond/preview?t=${t}`);
+  assert.equal(pre.status, 200, pre.text);
+  assert.equal(pre.json.shift.kind, 'claim');
+  assert.equal(pre.json.shift.canRespond, true);
+  // another person's token for a group they are not in cannot claim
+  const { claimToken } = await import('../src/notify/respond');
+  const bad = await call(null, 'POST', '/api/respond', { t: claimToken(tid, sh, c2.id), response: 'accepted' });
+  assert.equal(bad.status, 409);
+  assert.equal((await call(null, 'POST', '/api/respond', { t, response: 'accepted' })).json.status, 'pending');
+  assert.equal((await call(null, 'GET', `/api/respond/preview?t=${t}`)).json.shift.canRespond, false);
+  assert.equal((await call(null, 'POST', '/api/respond', { t: 'x.y', response: 'accepted' })).status, 400);
+});
