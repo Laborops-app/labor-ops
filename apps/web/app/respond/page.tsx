@@ -7,7 +7,7 @@ import ThemeToggle from '@/components/ThemeToggle';
 import { Banner } from '@/components/ui';
 import { api, money } from '@/lib/api';
 
-type Shift = { kind?: 'claim'; assignment_id?: string; hours: number; hourly_rate: number | null; estimated_pay: number | null; status: string; person: string; role_name: string; starts_at: string; ends_at: string; event_name: string; venue: string | null; timezone: string; canRespond: boolean };
+type Shift = { kind?: 'claim'; assignment_id?: string; hours: number; hourly_rate: number | null; estimated_pay: number | null; status: string; person: string; role_name: string; starts_at: string; ends_at: string; event_name: string; venue: string | null; timezone: string; canRespond: boolean; reason?: string | null };
 
 const when = (s: Shift) => {
   const o = { timeZone: s.timezone };
@@ -115,11 +115,7 @@ function Respond() {
               </>
             ) : (
               <Banner kind="info">
-                {shift.kind === 'claim'
-                  ? shift.status !== 'open'
-                    ? `You already asked for this shift (${shift.status}).`
-                    : 'This shift has been filled or is no longer open.'
-                  : 'This shift can no longer be changed here. Contact your coordinator.'}
+                {shift.reason ?? 'This shift can no longer be changed here. Contact your coordinator.'}
               </Banner>
             )}
           </>

@@ -16,6 +16,7 @@ export async function respondRoutes(app: FastifyInstance) {
       const out = await withTenant(claim.tid, async (c) => {
         const r = await c.query(
           `SELECT s.id AS shift_id, u.name AS person, s.role_name, s.starts_at, s.ends_at, e.name AS event_name, e.venue, tn.timezone,
+                  (s.ends_at <= now()) AS ended,
                   (s.is_open AND s.ends_at > now() AND (s.offer_group_id IS NULL OR EXISTS (SELECT 1 FROM crew_group_members gm WHERE gm.group_id = s.offer_group_id AND gm.user_id = u.id))
                    AND (SELECT count(*) FROM shift_assignments x WHERE x.shift_id = s.id AND x.status <> 'declined') < s.headcount) AS open,
                   (SELECT x.status FROM shift_assignments x WHERE x.shift_id = s.id AND x.user_id = u.id) AS mine
@@ -28,7 +29,8 @@ export async function respondRoutes(app: FastifyInstance) {
         return { ...row, kind: 'claim', status: row.mine ?? 'open', hours: pay.hours, hourly_rate: pay.rate, estimated_pay: pay.estimate, pay_notes: pay.notes };
       });
       if (!out) return reply.code(404).send({ error: 'This shift is no longer available.' });
-      return { shift: { ...out, canRespond: out.open && !out.mine } };
+      const reason = out.ended ? 'This shift has already ended.' : out.mine ? `You already asked for this shift (${out.mine}).` : !out.open ? 'This shift has been filled or is no longer open.' : null;
+      return { shift: { ...out, canRespond: out.open && !out.mine, reason } };
     }
     const tok = readRespondToken(t);
     if (!tok) return reply.code(400).send({ error: 'This link is invalid or has expired. Open LaborOps to answer the shift.' });
@@ -47,7 +49,7 @@ export async function respondRoutes(app: FastifyInstance) {
       return { ...row, hours: pay.hours, hourly_rate: pay.rate, estimated_pay: pay.estimate, pay_notes: pay.notes };
     });
     if (!out) return reply.code(404).send({ error: 'This shift is no longer available.' });
-    return { shift: { ...out, canRespond: out.open && !out.worked } };
+    return { shift: { ...out, canRespond: out.open && !out.worked, reason: !out.open ? 'This shift has already ended.' : out.worked ? 'You have already clocked in for this shift.' : null } };
   });
 
   app.post('/api/respond', { config: limit }, async (req, reply) => {
