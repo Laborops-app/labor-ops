@@ -320,6 +320,7 @@ export async function schedulingRoutes(app: FastifyInstance) {
         dayOffset: z.number().int().min(0).max(60),
         start: hhmm,
         end: hhmm,
+        section: z.string().trim().max(80).optional(),
         headcount: z.number().int().min(1).max(500),
         isOpen: z.boolean().default(false),
         requiredCerts: certList.default([]),
@@ -327,19 +328,24 @@ export async function schedulingRoutes(app: FastifyInstance) {
     )
     .min(1)
     .max(60);
-  app.get('/api/templates', { preHandler: mgr }, async (req) =>
-    withTenant(req.user.tid, async (c) => ({ templates: (await c.query('SELECT id, name, items FROM shift_templates ORDER BY name')).rows })),
-  );
+  // Company-wide templates, plus the ones saved for one customer when `customerId` is given.
+  app.get('/api/templates', { preHandler: mgr }, async (req) => {
+    const { customerId } = z.object({ customerId: z.string().uuid().optional() }).parse(req.query);
+    return withTenant(req.user.tid, async (c) => ({
+      templates: (await c.query('SELECT id, name, items, customer_id FROM shift_templates WHERE customer_id IS NULL OR customer_id = $1 ORDER BY (customer_id IS NULL), name', [customerId ?? null])).rows,
+    }));
+  });
   app.post('/api/templates', { preHandler: mgr }, async (req, reply) => {
-    const b = z.object({ name: z.string().trim().min(1).max(100), items: tplItems }).parse(req.body);
+    const b = z.object({ name: z.string().trim().min(1).max(100), items: tplItems, customerId: z.string().uuid().nullable().optional() }).parse(req.body);
     const row = await withTenant(req.user.tid, async (c) => {
-      const r = await c.query('INSERT INTO shift_templates (tenant_id, name, items) VALUES ($1,$2,$3) RETURNING id, name, items', [
-        req.user.tid, b.name, JSON.stringify(b.items),
+      if (b.customerId && !(await c.query('SELECT 1 FROM customers WHERE id = $1', [b.customerId])).rowCount) return null;
+      const r = await c.query('INSERT INTO shift_templates (tenant_id, name, items, customer_id) VALUES ($1,$2,$3,$4) RETURNING id, name, items, customer_id', [
+        req.user.tid, b.name, JSON.stringify(b.items), b.customerId ?? null,
       ]);
       await audit(c, req.user.tid, req.user.sub, 'template.create', 'template', r.rows[0].id);
       return r.rows[0];
     });
-    return reply.code(201).send({ template: row });
+    return row ? reply.code(201).send({ template: row }) : reply.code(404).send({ error: 'Customer not found' });
   });
   app.delete('/api/templates/:id', { preHandler: mgr }, async (req, reply) => {
     const { id } = idParam.parse(req.params);

@@ -1707,3 +1707,78 @@ test('customers: several contacts and locations, main ones are kept, quotes use 
   const q = (await call(a, 'POST', '/api/quotes', { title: 'T', customerId: cu.id, lines: [{ description: 'x', qty: 1, hours: 1, rate: 10 }] })).json.quote;
   assert.equal(q.customer_email, 'pat@multi.example');
 });
+
+test('quote layout: lines grouped by phase with times, PDF output, admin-designed layouts, customer-only templates', async () => {
+  const a = await register('qly');
+  const c1 = await mkCrew(a, 'qlyc1');
+  const tid = await tenantOf(a);
+  await call(a, 'POST', '/api/skills', { name: 'Audio A1', payRate: 30, billRate: 80 });
+  const cu = (await call(a, 'POST', '/api/customers', { name: 'Layout Co', email: 'buyer@layout.example' })).json.customer.id;
+  const other = (await call(a, 'POST', '/api/customers', { name: 'Other Co' })).json.customer.id;
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Expo', customerId: cu, startDate: '2030-05-09', endDate: '2030-05-10' })).json.event.id;
+  const li = (await call(a, 'POST', `/api/events/${ev}/phases`, { label: 'Load in', startDate: '2030-05-09', endDate: '2030-05-09' })).json.phase.id;
+  const sh = (await call(a, 'POST', `/api/events/${ev}/phases`, { label: 'Show', startDate: '2030-05-10', endDate: '2030-05-10' })).json.phase.id;
+  await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Audio A1', startsAt: '2030-05-10T17:00:00Z', endsAt: '2030-05-11T01:00:00Z', headcount: 2, phaseId: sh });
+  await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Audio A1', startsAt: '2030-05-09T15:00:00Z', endsAt: '2030-05-09T23:00:00Z', headcount: 1, phaseId: li });
+
+  const q = await call(a, 'POST', '/api/quotes', { eventId: ev });
+  assert.equal(q.status, 201, q.text);
+  assert.deepEqual(q.json.lines.map((l: any) => l.section), ['Load in', 'Show'], 'phases come first, in date order');
+  assert.equal(q.json.lines[1].hours, 8);
+  assert.equal(q.json.lines[1].rate, 80);
+  assert.match(q.json.lines[1].startTime, /^\d\d:\d\d$/);
+  assert.match(q.json.lines[1].day, /^2030-05-1[01]$/);
+  const id = q.json.quote.id;
+
+  // times drive hours (and an end before the start means past midnight)
+  const ed = await call(a, 'PUT', `/api/quotes/${id}`, { lines: [{ section: 'Show', description: 'Audio A1', day: '2030-05-10', startTime: '18:00', endTime: '02:00', qty: 1, hours: 99, rate: 80 }] });
+  assert.equal(ed.json.lines[0].hours, 8);
+  assert.equal((await call(a, 'PUT', `/api/quotes/${id}`, { lines: [{ description: 'x', startTime: '25:00', qty: 1, hours: 1, rate: 1 }] })).status, 400);
+
+  // PDF
+  const res = await call(a, 'GET', `/api/quotes/${id}/pdf`);
+  assert.equal(res.status, 200);
+  assert.ok(res.text.startsWith('%PDF'), 'a real PDF');
+  assert.equal((await call(c1.session, 'GET', `/api/quotes/${id}/pdf`)).status, 403);
+
+  // layouts: admin only, validated, one default, preview renders unsaved settings, a quote can choose one
+  const cfg = (await call(a, 'GET', '/api/quote-layouts')).json.builtIn;
+  assert.equal((await call(c1.session, 'POST', '/api/quote-layouts', { name: 'x', config: cfg })).status, 403);
+  assert.equal((await call(a, 'POST', '/api/quote-layouts', { name: 'Bad', config: { ...cfg, accent: 'red' } })).status, 400);
+  const l1 = await call(a, 'POST', '/api/quote-layouts', { name: 'Classic', config: cfg });
+  assert.equal(l1.status, 201, l1.text);
+  assert.equal(l1.json.layout.is_default, true, 'the first layout is the default');
+  const l2 = await call(a, 'POST', '/api/quote-layouts', { name: 'Bold', config: { ...cfg, accent: '#cc0000', font: 'Times', blocks: [...cfg.blocks.slice(0, 3), { id: 'x1', type: 'text', heading: 'Hello', body: 'Hi {{customer}} - total {{total}}', align: 'center' }, { id: 'x2', type: 'lines', groupBySection: false, showDate: false, showPeople: true, showHours: true, showRate: false, zebra: false }, { id: 'x3', type: 'totals' }] } });
+  assert.equal((await call(a, 'POST', '/api/quote-layouts', { name: 'bold', config: cfg })).status, 409);
+  assert.equal((await call(c1.session, 'GET', '/api/quote-layouts')).status, 403);
+  assert.equal((await call(a, 'GET', '/api/quote-layouts')).json.layouts.length, 2);
+  assert.ok((await call(a, 'POST', '/api/quote-layouts/preview', { config: cfg })).text.startsWith('%PDF'));
+  assert.ok((await call(a, 'POST', '/api/quote-layouts/preview', { config: l2.json.layout ? (await call(a, 'GET', `/api/quote-layouts/${l2.json.layout.id}`)).json.layout.config : cfg, quoteId: id })).text.startsWith('%PDF'));
+  assert.equal((await call(a, 'PUT', `/api/quotes/${id}`, { layoutId: l2.json.layout.id })).json.quote.layout_id, l2.json.layout.id);
+  assert.equal((await call(a, 'POST', `/api/quote-layouts/${l2.json.layout.id}/default`)).status, 200);
+  assert.equal((await call(a, 'GET', '/api/quote-layouts')).json.layouts[0].name, 'Bold');
+
+  // the customer can download the PDF from the emailed link, but not a draft
+  const draftTok = (await call(a, 'GET', `/api/quotes/${id}`)).json.link.split('t=')[1];
+  assert.equal((await call(null, 'GET', `/api/quote/pdf?t=${draftTok}`)).status, 404);
+  assert.equal((await call(a, 'POST', `/api/quotes/${id}/send`)).status, 200);
+  const mail = await withTenant(tid, (c) => c.query("SELECT body FROM deliveries WHERE to_addr = 'buyer@layout.example' ORDER BY created_at DESC LIMIT 1"));
+  const pt = /\/api\/quote\/pdf\?t=([\w.-]+)/.exec(mail.rows[0].body)![1];
+  const pub = await call(null, 'GET', `/api/quote/pdf?t=${pt}`);
+  assert.equal(pub.status, 200);
+  assert.ok(pub.text.startsWith('%PDF'));
+  assert.equal((await call(null, 'GET', '/api/quote/pdf?t=bad.token')).status, 400);
+
+  // save the quote as a template for this customer only
+  assert.equal((await call(a, 'POST', `/api/quotes/${id}/save-template`, { name: 'Expo crew' })).status, 201);
+  assert.equal((await call(a, 'POST', `/api/quotes/${id}/save-template`, { name: 'Expo crew' })).status, 409);
+  const mine = (await call(a, 'GET', `/api/templates?customerId=${cu}`)).json.templates;
+  assert.equal(mine.length, 1);
+  assert.equal(mine[0].items[0].role, 'Audio A1');
+  assert.equal(mine[0].items[0].start, '18:00');
+  assert.equal(mine[0].items[0].end, '02:00');
+  assert.equal((await call(a, 'GET', `/api/templates?customerId=${other}`)).json.templates.length, 0, 'other customers never see it');
+  assert.equal((await call(a, 'GET', '/api/templates')).json.templates.length, 0, 'not offered when no customer is chosen');
+  const noCust = (await call(a, 'POST', '/api/quotes', { title: 'Loose', lines: [{ description: 'x', day: '2030-01-01', startTime: '08:00', endTime: '10:00', qty: 1, hours: 2, rate: 5 }] })).json.quote.id;
+  assert.equal((await call(a, 'POST', `/api/quotes/${noCust}/save-template`, { name: 'n' })).status, 400);
+});

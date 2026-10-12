@@ -1,5 +1,5 @@
 'use client';
-import { Suspense, useEffect, useState } from 'react';
+import { Fragment, Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Banner } from '@/components/ui';
 import ThemeToggle from '@/components/ThemeToggle';
@@ -7,10 +7,13 @@ import { api, money } from '@/lib/api';
 
 type Q = {
   company: string; number: number; title: string; customer: string | null; status: string; validUntil: string | null; intro: string | null; terms: string | null; taxPct: number;
-  lines: { description: string; qty: number; hours: number; rate: number; amount: number }[];
+  pdfUrl: string;
+  lines: { section: string | null; description: string; day: string | null; startTime: string | null; endTime: string | null; qty: number; hours: number; rate: number; amount: number }[];
   totals: { subtotal: number; discount: number; tax: number; total: number };
   respondedAt: string | null; responseNote: string | null; canRespond: boolean; reason: string | null;
 };
+
+const tm = (t: string) => { const [h, m] = t.split(':').map(Number); return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
 
 function View() {
   const t = useSearchParams().get('t') ?? '';
@@ -40,7 +43,7 @@ function View() {
               <h1 style={{ margin: '.1rem 0' }}>{q.title}</h1>
               <div className="muted small">Quote #{q.number}{q.customer ? ` · prepared for ${q.customer}` : ''}{q.validUntil ? ` · valid until ${q.validUntil}` : ''}</div>
             </div>
-            <button className="btn small no-print" onClick={() => window.print()}>Print / save as PDF</button>
+            <a className="btn small no-print" href={q.pdfUrl}>Download PDF</a>
           </div>
           {q.status === 'accepted' && <Banner kind="ok">You accepted this quote. Thank you! {q.company} will be in touch.</Banner>}
           {q.status === 'declined' && <Banner kind="info">You declined this quote. If that was a mistake, contact {q.company}.</Banner>}
@@ -48,10 +51,13 @@ function View() {
           {q.intro && <p style={{ whiteSpace: 'pre-wrap' }}>{q.intro}</p>}
           <div style={{ overflowX: 'auto' }}>
             <table className="table">
-              <thead><tr><th>Description</th><th style={{ textAlign: 'right' }}>People</th><th style={{ textAlign: 'right' }}>Hours</th><th style={{ textAlign: 'right' }}>Rate</th><th style={{ textAlign: 'right' }}>Amount</th></tr></thead>
+              <thead><tr><th>Description</th><th>When</th><th style={{ textAlign: 'right' }}>People</th><th style={{ textAlign: 'right' }}>Hours</th><th style={{ textAlign: 'right' }}>Rate</th><th style={{ textAlign: 'right' }}>Amount</th></tr></thead>
               <tbody>
                 {q.lines.map((l, i) => (
-                  <tr key={i}><td>{l.description}</td><td style={{ textAlign: 'right' }}>{l.qty}</td><td style={{ textAlign: 'right' }}>{l.hours}</td><td style={{ textAlign: 'right' }}>{money(l.rate)}</td><td style={{ textAlign: 'right' }}>{money(l.amount)}</td></tr>
+                  <Fragment key={i}>
+                    {l.section && l.section !== q.lines[i - 1]?.section && <tr><td colSpan={6} style={{ fontWeight: 700, paddingTop: '1rem' }}>{l.section}</td></tr>}
+                  <tr><td>{l.description}</td><td className="small">{l.day ? new Date(l.day + 'T12:00:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) : ''}{l.startTime && l.endTime ? ` ${tm(l.startTime)}–${tm(l.endTime)}` : ''}</td><td style={{ textAlign: 'right' }}>{l.qty}</td><td style={{ textAlign: 'right' }}>{l.hours}</td><td style={{ textAlign: 'right' }}>{money(l.rate)}</td><td style={{ textAlign: 'right' }}>{money(l.amount)}</td></tr>
+                  </Fragment>
                 ))}
               </tbody>
             </table>

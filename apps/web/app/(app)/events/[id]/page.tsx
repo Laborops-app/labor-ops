@@ -29,8 +29,8 @@ type Shift = {
 };
 type Detail = { event: EventFull; shifts: Shift[]; phases: Phase[] };
 type Member = { id: string; name: string; role: string; skills: string[]; active: boolean; ratings?: Record<string, number> };
-type TplItem = { role: string; dayOffset: number; start: string; end: string; headcount: number; isOpen: boolean; requiredCerts: string[] };
-type Template = { id: string; name: string; items: TplItem[] };
+type TplItem = { role: string; section?: string; dayOffset: number; start: string; end: string; headcount: number; isOpen: boolean; requiredCerts: string[] };
+type Template = { id: string; name: string; items: TplItem[]; customer_id?: string | null };
 
 const p2 = (n: number) => String(n).padStart(2, '0');
 const localInput = (d: Date) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}`;
@@ -114,14 +114,19 @@ function Body({ me }: { me: Me }) {
         setTplStart((v) => v || r.event.start_date.slice(0, 10));
       })
       .catch((e) => setError(e.message));
-  const loadTemplates = () => api<{ templates: Template[] }>('/api/templates').then((r) => setTemplates(r.templates));
+  const customerId = d?.event.customer_id ?? null;
+  const loadTemplates = () => api<{ templates: Template[] }>(`/api/templates${customerId ? `?customerId=${customerId}` : ''}`).then((r) => setTemplates(r.templates));
+  const [tplForCustomer, setTplForCustomer] = useState(false);
   useEffect(() => {
     load();
-    loadTemplates();
     api<{ crew: Member[] }>('/api/crew').then((r) => setCrew(r.crew.filter((m) => m.role === 'crew' && m.active)));
     api<{ groups: { id: string; name: string }[] }>('/api/crew-groups').then((r) => setCrewGroups(r.groups)).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+  useEffect(() => {
+    if (d) loadTemplates();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, customerId, !!d]);
 
   const run = async (fn: () => Promise<unknown>, okMsg = '') => {
     setError('');
@@ -172,7 +177,7 @@ function Body({ me }: { me: Me }) {
       const s = at(day, it.start);
       let e = at(day, it.end);
       if (e <= s) e = at(addDays(day, 1), it.end);
-      return { roleName: it.role, startsAt: s.toISOString(), endsAt: e.toISOString(), headcount: it.headcount, isOpen: it.isOpen, requiredCerts: it.requiredCerts, phaseId: tplPhase || null };
+      return { roleName: it.role, startsAt: s.toISOString(), endsAt: e.toISOString(), headcount: it.headcount, isOpen: it.isOpen, requiredCerts: it.requiredCerts, phaseId: tplPhase || d?.phases.find((p) => it.section && p.label.toLowerCase() === it.section.toLowerCase())?.id || null };
     });
     run(() => api(`/api/events/${id}/shifts/bulk`, { body: { shifts } }), `Added ${shifts.length} shifts from “${t.name}”.`);
   };
@@ -195,7 +200,7 @@ function Body({ me }: { me: Me }) {
         requiredCerts: s.required_certs ?? [],
       };
     });
-    if (await run(() => api('/api/templates', { body: { name: tplName.trim(), items } }), `Saved template “${tplName.trim()}”.`)) {
+    if (await run(() => api('/api/templates', { body: { name: tplName.trim(), items, customerId: tplForCustomer && customerId ? customerId : undefined } }), `Saved template “${tplName.trim()}”.`)) {
       setTplName('');
       loadTemplates();
     }
@@ -594,7 +599,7 @@ function Body({ me }: { me: Me }) {
               <option value="">Choose a template…</option>
               {templates.map((t) => (
                 <option key={t.id} value={t.id}>
-                  {t.name} ({t.items.length} shifts)
+                  {t.customer_id ? `★ ${t.name}` : t.name} ({t.items.length} shifts)
                 </option>
               ))}
             </select>
@@ -634,6 +639,7 @@ function Body({ me }: { me: Me }) {
             <button className="btn small" disabled={!tplName.trim() || d.shifts.length === 0} onClick={saveTemplate}>
               Save this event’s shifts as template
             </button>
+            {customerId && <label className="check"><input type="checkbox" checked={tplForCustomer} onChange={(e) => setTplForCustomer(e.target.checked)} /> Only for {d.event.client}</label>}
           </div>
         </div>
       </details>

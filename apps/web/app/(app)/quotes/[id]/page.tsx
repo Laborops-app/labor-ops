@@ -7,15 +7,18 @@ import { Banner, Pill } from '@/components/ui';
 import CustomerSelect from '@/components/CustomerSelect';
 import { api, money } from '@/lib/api';
 
-type Line = { description: string; qty: string; hours: string; rate: string };
+type Line = { section: string; description: string; day: string; start: string; end: string; qty: string; hours: string; rate: string };
+type Skill = { name: string; active: boolean; groupId: string | null; billRate?: number };
+const span = (a: string, b: string) => { const m = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3)); let d = m(b) - m(a); if (d <= 0) d += 1440; return Math.round((d / 60) * 100) / 100; };
 type Totals = { subtotal: number; discount: number; tax: number; total: number };
 type Detail = {
-  quote: { id: string; number: number; title: string; status: string; customer_id: string | null; customer_email: string | null; customer_name: string | null; event_id: string | null; event_name: string | null; valid_until: string | null; intro: string | null; terms: string | null; tax_pct: number; discount: number; sent_at: string | null; sent_to: string | null; responded_at: string | null; response_note: string | null };
-  lines: { description: string; qty: number; hours: number; rate: number }[];
+  quote: { id: string; number: number; title: string; status: string; customer_id: string | null; customer_email: string | null; customer_name: string | null; event_id: string | null; event_name: string | null; valid_until: string | null; intro: string | null; terms: string | null; tax_pct: number; discount: number; sent_at: string | null; sent_to: string | null; responded_at: string | null; response_note: string | null; layout_id: string | null };
+  lines: { section: string | null; description: string; day: string | null; startTime: string | null; endTime: string | null; qty: number; hours: number; rate: number }[];
   totals: Totals;
   link: string;
 };
 
+const hrsOf = (l: { start: string; end: string; hours: string }) => (l.start && l.end ? span(l.start, l.end) : Number(l.hours) || 0);
 const n = (s: string) => (Number.isFinite(Number(s)) ? Number(s) : 0);
 const r2 = (x: number) => Math.round(x * 100) / 100;
 
@@ -29,6 +32,14 @@ function Body() {
   const [people, setPeople] = useState<{ id: string; name: string; email: string | null; is_primary: boolean }[]>([]);
   const [msg, setMsg] = useState('');
   const [dirty, setDirty] = useState(false);
+  const [layoutId, setLayoutId] = useState('');
+  const [layouts, setLayouts] = useState<{ id: string; name: string; is_default: boolean }[]>([]);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [groups, setGroups] = useState<{ id: string; name: string }[]>([]);
+  const [tab, setTab] = useState('');
+  const [extra, setExtra] = useState<string[]>([]);
+  const [newSec, setNewSec] = useState('');
+  const [nl, setNl] = useState({ role: '', other: false, day: '', start: '08:00', end: '16:00', qty: '1', rate: '0' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
@@ -37,11 +48,16 @@ function Body() {
     setD((p) => ({ ...r, link: r.link ?? p?.link ?? '' }));
     const q = r.quote;
     setF({ title: q.title, customerId: q.customer_id, validUntil: q.valid_until ? String(q.valid_until).slice(0, 10) : '', intro: q.intro ?? '', terms: q.terms ?? '', taxPct: String(q.tax_pct), discount: String(q.discount) });
-    setLines(r.lines.map((l) => ({ description: l.description, qty: String(l.qty), hours: String(l.hours), rate: String(l.rate) })));
+    setLines(r.lines.map((l) => ({ section: l.section ?? '', description: l.description, day: l.day ?? '', start: l.startTime ?? '', end: l.endTime ?? '', qty: String(l.qty), hours: String(l.hours), rate: String(l.rate) })));
+    setLayoutId(q.layout_id ?? '');
     setDirty(false);
   };
   const load = () => api<Detail>(`/api/quotes/${id}`).then(apply).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [id]);
+  useEffect(() => {
+    api<{ layouts: typeof layouts }>('/api/quote-layouts').then((r) => setLayouts(r.layouts)).catch(() => {});
+    api<{ skills: Skill[]; groups: typeof groups }>('/api/skills').then((r) => { setSkills(r.skills.filter((x) => x.active)); setGroups(r.groups); }).catch(() => {});
+  }, []);
   const cid = d?.quote.customer_id;
   useEffect(() => {
     setPeople([]);
@@ -51,8 +67,31 @@ function Body() {
   const edit = <T,>(fn: (v: T) => void) => (v: T) => { fn(v); setDirty(true); };
   const setLine = (i: number, patch: Partial<Line>) => { setLines(lines.map((l, j) => (j === i ? { ...l, ...patch } : l))); setDirty(true); };
 
+  const sections = [...new Set([...lines.map((l) => l.section.trim()).filter(Boolean), ...extra])];
+  const shown = lines.map((l, i) => ({ l, i })).filter(({ l }) => !tab || l.section.trim() === tab);
+  const roleGroups = (() => {
+    const out = groups.map((g) => ({ label: g.name, roles: skills.filter((x) => x.groupId === g.id) })).filter((g) => g.roles.length);
+    const loose = skills.filter((x) => !x.groupId || !groups.some((g) => g.id === x.groupId));
+    if (loose.length) out.push({ label: out.length ? 'Other roles' : 'Roles', roles: loose });
+    return out;
+  })();
+  const addSection = () => {
+    const name = newSec.trim();
+    if (!name) return;
+    if (!sections.includes(name)) setExtra([...extra, name]);
+    setTab(name);
+    setNewSec('');
+  };
+  const addLine = (e: React.FormEvent) => {
+    e.preventDefault();
+    const day = nl.day || [...lines].reverse().find((l) => l.day)?.day || '';
+    setLines([...lines, { section: tab, description: nl.role.trim(), day, start: nl.start, end: nl.end, qty: nl.qty || '1', hours: '0', rate: nl.rate || '0' }]);
+    setNl({ ...nl, role: '', other: nl.other, day });
+    setDirty(true);
+  };
+
   const live = (() => {
-    const subtotal = r2(lines.reduce((a, l) => a + n(l.qty) * n(l.hours) * n(l.rate), 0));
+    const subtotal = r2(lines.reduce((a, l) => a + n(l.qty) * hrsOf(l) * n(l.rate), 0));
     const disc = Math.min(n(f.discount), subtotal);
     const tax = r2((subtotal - disc) * n(f.taxPct) / 100);
     return { subtotal, discount: r2(disc), tax, total: r2(subtotal - disc + tax) };
@@ -66,7 +105,8 @@ function Body() {
         method: 'PUT',
         body: {
           title: f.title, customerId: f.customerId, validUntil: f.validUntil || null, intro: f.intro || null, terms: f.terms || null, taxPct: n(f.taxPct), discount: n(f.discount),
-          lines: lines.filter((l) => l.description.trim()).map((l) => ({ description: l.description.trim(), qty: n(l.qty), hours: n(l.hours), rate: n(l.rate) })),
+          layoutId: layoutId || null,
+          lines: lines.filter((l) => l.description.trim()).map((l) => ({ section: l.section.trim() || null, description: l.description.trim(), day: l.day || null, startTime: l.day && l.start && l.end ? l.start : l.start && l.end ? l.start : null, endTime: l.start && l.end ? l.end : null, qty: n(l.qty), hours: l.start && l.end ? span(l.start, l.end) : n(l.hours), rate: n(l.rate) })),
         },
       });
       apply(r);
@@ -111,26 +151,63 @@ function Body() {
       </section>
 
       <section className="card">
-        <h2>Line items</h2>
-        <p className="muted small">Each line is people × hours × hourly rate. Rates start from each role's billing rate on the Roles &amp; rates page.</p>
-        <div style={{ overflowX: 'auto' }}>
-          <table className="table">
-            <thead><tr><th>Description</th><th>People</th><th>Hours</th><th>Rate/hr</th><th style={{ textAlign: 'right' }}>Amount</th><th></th></tr></thead>
-            <tbody>
-              {lines.map((l, i) => (
-                <tr key={i}>
-                  <td><input value={l.description} onChange={(e) => setLine(i, { description: e.target.value })} aria-label="Description" maxLength={300} style={{ minWidth: '14rem' }} /></td>
-                  <td><input type="number" min={0} step="1" value={l.qty} onChange={(e) => setLine(i, { qty: e.target.value })} aria-label="People" style={{ width: '5rem' }} /></td>
-                  <td><input type="number" min={0} step="0.25" value={l.hours} onChange={(e) => setLine(i, { hours: e.target.value })} aria-label="Hours" style={{ width: '5.5rem' }} /></td>
-                  <td><input type="number" min={0} step="0.01" value={l.rate} onChange={(e) => setLine(i, { rate: e.target.value })} aria-label="Rate per hour" style={{ width: '6rem' }} /></td>
-                  <td style={{ textAlign: 'right' }}>{money(r2(n(l.qty) * n(l.hours) * n(l.rate)))}</td>
-                  <td><button className="btn ghost small danger" aria-label="Remove line" onClick={() => { setLines(lines.filter((_, j) => j !== i)); setDirty(true); }}>✕</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <h2>Shifts and line items</h2>
+        <p className="muted small">Laid out like an event: one tab per phase, with a role, date, start and end time and the number of people on each line. Rates come from each role's billing rate.</p>
+        <div className="phase-tabs" role="tablist" aria-label="Quote sections">
+          <button type="button" role="tab" aria-selected={tab === ''} className={tab === '' ? 'tab on' : 'tab'} onClick={() => setTab('')}>All</button>
+          {sections.map((sec) => (
+            <button key={sec} type="button" role="tab" aria-selected={tab === sec} className={tab === sec ? 'tab on' : 'tab'} onClick={() => setTab(sec)}>{sec}</button>
+          ))}
+          <span className="row" style={{ gap: '.3rem' }}>
+            <input value={newSec} onChange={(e) => setNewSec(e.target.value)} placeholder="+ New section" aria-label="New section name" style={{ width: '9rem' }} maxLength={80}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addSection(); } }} />
+            {newSec.trim() && <button className="btn small" onClick={addSection}>Add</button>}
+          </span>
         </div>
-        <button className="btn small" onClick={() => { setLines([...lines, { description: '', qty: '1', hours: '8', rate: '0' }]); setDirty(true); }}>Add a line</button>
+        <form className="grid-form" style={{ marginTop: '.75rem' }} onSubmit={addLine}>
+          <label>Role
+            {skills.length > 0 && !nl.other ? (
+              <select value={nl.role} required onChange={(e) => {
+                if (e.target.value === '__other') return setNl({ ...nl, other: true, role: '' });
+                const sk = skills.find((x) => x.name === e.target.value);
+                setNl({ ...nl, role: e.target.value, rate: String(sk?.billRate ?? 0) });
+              }}>
+                <option value="">Choose a role…</option>
+                {roleGroups.map((g) => <optgroup key={g.label} label={g.label}>{g.roles.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}</optgroup>)}
+                <option value="__other">Other (type a name)…</option>
+              </select>
+            ) : <input value={nl.role} onChange={(e) => setNl({ ...nl, role: e.target.value })} placeholder="Travel, per diem, equipment…" required />}
+          </label>
+          <label>Date<input type="date" value={nl.day} onChange={(e) => setNl({ ...nl, day: e.target.value })} /></label>
+          <label>Starts<input type="time" value={nl.start} onChange={(e) => setNl({ ...nl, start: e.target.value })} /></label>
+          <label>Ends<input type="time" value={nl.end} onChange={(e) => setNl({ ...nl, end: e.target.value })} /></label>
+          <label>People<input type="number" min={0} step="1" value={nl.qty} onChange={(e) => setNl({ ...nl, qty: e.target.value })} /></label>
+          <label>Rate / hr<input type="number" min={0} step="0.01" value={nl.rate} onChange={(e) => setNl({ ...nl, rate: e.target.value })} /></label>
+          <div className="form-actions"><button className="btn primary">Add to {tab || 'quote'}</button></div>
+        </form>
+        {shown.length > 0 && (
+          <div style={{ overflowX: 'auto', marginTop: '.75rem' }}>
+            <table className="table">
+              <thead><tr>{!tab && <th>Section</th>}<th>Role / item</th><th>Date</th><th>Start</th><th>End</th><th>People</th><th>Hours</th><th>Rate/hr</th><th style={{ textAlign: 'right' }}>Amount</th><th></th></tr></thead>
+              <tbody>
+                {shown.map(({ l, i }) => (
+                  <tr key={i}>
+                    {!tab && <td><input value={l.section} onChange={(e) => setLine(i, { section: e.target.value })} aria-label="Section" style={{ width: '7rem' }} /></td>}
+                    <td><input value={l.description} onChange={(e) => setLine(i, { description: e.target.value })} aria-label="Role or item" maxLength={300} style={{ minWidth: '10rem' }} /></td>
+                    <td><input type="date" value={l.day} onChange={(e) => setLine(i, { day: e.target.value })} aria-label="Date" /></td>
+                    <td><input type="time" value={l.start} onChange={(e) => setLine(i, { start: e.target.value })} aria-label="Start" /></td>
+                    <td><input type="time" value={l.end} onChange={(e) => setLine(i, { end: e.target.value })} aria-label="End" /></td>
+                    <td><input type="number" min={0} step="1" value={l.qty} onChange={(e) => setLine(i, { qty: e.target.value })} aria-label="People" style={{ width: '4.5rem' }} /></td>
+                    <td><input type="number" min={0} step="0.25" value={l.start && l.end ? String(span(l.start, l.end)) : l.hours} disabled={!!(l.start && l.end)} onChange={(e) => setLine(i, { hours: e.target.value })} aria-label="Hours" style={{ width: '5rem' }} /></td>
+                    <td><input type="number" min={0} step="0.01" value={l.rate} onChange={(e) => setLine(i, { rate: e.target.value })} aria-label="Rate per hour" style={{ width: '5.5rem' }} /></td>
+                    <td style={{ textAlign: 'right' }}>{money(r2(n(l.qty) * hrsOf(l) * n(l.rate)))}</td>
+                    <td><button className="btn ghost small danger" aria-label="Remove line" onClick={() => { setLines(lines.filter((_, j) => j !== i)); setDirty(true); }}>✕</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
         <div className="grid-form" style={{ marginTop: '1rem', maxWidth: '28rem' }}>
           <label>Discount ($)<input type="number" min={0} step="0.01" value={f.discount} onChange={(e) => edit(setF)({ ...f, discount: e.target.value })} /></label>
           <label>Tax (%)<input type="number" min={0} max={100} step="0.01" value={f.taxPct} onChange={(e) => edit(setF)({ ...f, taxPct: e.target.value })} /></label>
@@ -148,7 +225,18 @@ function Body() {
       </section>
 
       <section className="card">
-        <h2>Send to the customer</h2>
+        <h2>PDF and sending</h2>
+        <div className="grid-form">
+          <label>PDF layout
+            <select value={layoutId} onChange={(e) => { setLayoutId(e.target.value); setDirty(true); }}>
+              <option value="">{layouts.find((x) => x.is_default)?.name ? `Company default (${layouts.find((x) => x.is_default)!.name})` : 'Standard layout'}</option>
+              {layouts.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+          </label>
+          <div className="form-actions row">
+            <button className="btn" disabled={busy} onClick={async () => { if (dirty && !(await save())) return; window.open(`/api/quotes/${id}/pdf${layoutId ? `?layoutId=${layoutId}` : ''}`, '_blank', 'noopener'); }}>Preview PDF</button>
+          </div>
+        </div>
         <div className="grid-form">
           {people.length > 1 && (
             <label>Send to
@@ -165,6 +253,15 @@ function Body() {
           <button className="btn" disabled={busy || !dirty} onClick={save}>Save changes</button>
           <button className="btn primary" disabled={busy || !email || lines.length === 0} onClick={send}>{q.status === 'draft' ? 'Save & send quote' : 'Send again'}</button>
           {q.status !== 'draft' && <button className="btn ghost" onClick={() => navigator.clipboard?.writeText(d.link).then(() => setNote('Customer link copied.'))}>Copy customer link</button>}
+          <button className="btn ghost" disabled={busy || !q.customer_id} title={q.customer_id ? '' : 'Pick a customer first'} onClick={async () => {
+            const name = prompt('Name this template (it will only be offered for this customer):', q.title);
+            if (!name) return;
+            if (dirty && !(await save())) return;
+            try {
+              const r = await api<{ shifts: number; skipped: number }>(`/api/quotes/${id}/save-template`, { body: { name } });
+              setNote(`Saved template “${name}” with ${r.shifts} shift${r.shifts === 1 ? '' : 's'}${r.skipped ? ` (${r.skipped} line${r.skipped === 1 ? '' : 's'} without times skipped)` : ''}. It shows up when you build an event for ${q.customer_name}.`);
+            } catch (e) { setError((e as Error).message); }
+          }}>Save as customer template</button>
           {q.status !== 'draft' && <a className="btn ghost" href={d.link} target="_blank" rel="noopener noreferrer">Preview as customer</a>}
         </div>
         {!email && <p className="muted small">Add an email address for the customer (on their page) or type one above.</p>}
