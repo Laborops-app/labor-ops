@@ -2,15 +2,18 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
 import { guard } from '../auth';
+import { CUSTOMER_SQL, addContact, addLocation, setMainContact, setMainAddress } from '../crm';
 
 const uuid = z.string().uuid();
 const mgr = guard('admin', 'manager');
 const opt = (n: number) => z.string().trim().max(n).optional().nullable();
+const email = z.string().trim().email().max(200).optional().nullable().or(z.literal(''));
 const body = z.object({
   name: z.string().trim().min(1).max(150),
-  contactName: opt(150), email: z.string().trim().email().max(200).optional().nullable().or(z.literal('')),
-  phone: opt(50), address: opt(300), notes: z.string().trim().max(5000).optional().nullable(),
+  contactName: opt(150), email, phone: opt(50), address: opt(300), notes: z.string().trim().max(5000).optional().nullable(),
 });
+const contactBody = z.object({ name: z.string().trim().min(1).max(150), title: opt(100), email, phone: opt(50), notes: opt(2000), primary: z.boolean().optional() });
+const locationBody = z.object({ label: z.string().trim().min(1).max(100), venue: opt(200), address: opt(300), notes: opt(2000), isDefault: z.boolean().optional() });
 
 export async function customerRoutes(app: FastifyInstance) {
   app.get('/api/customers', { preHandler: mgr }, async (req) =>
@@ -20,7 +23,7 @@ export async function customerRoutes(app: FastifyInstance) {
           `SELECT u.*, (SELECT count(*)::int FROM events e WHERE e.customer_id = u.id) AS event_count,
                   (SELECT count(*)::int FROM quotes q WHERE q.customer_id = u.id) AS quote_count,
                   (SELECT max(e.start_date) FROM events e WHERE e.customer_id = u.id) AS last_event
-             FROM customers u ORDER BY lower(u.name)`,
+             FROM (${CUSTOMER_SQL}) u ORDER BY lower(u.name)`,
         )
       ).rows,
     })),
@@ -30,10 +33,11 @@ export async function customerRoutes(app: FastifyInstance) {
     const b = body.parse(req.body);
     const r = await withTenant(req.user.tid, async (c) => {
       if ((await c.query('SELECT 1 FROM customers WHERE lower(name) = lower($1)', [b.name])).rowCount) return null;
-      const row = (await c.query('INSERT INTO customers (tenant_id, name, contact_name, email, phone, address, notes) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
-        [req.user.tid, b.name, b.contactName || null, b.email || null, b.phone || null, b.address || null, b.notes || null])).rows[0];
+      const row = (await c.query('INSERT INTO customers (tenant_id, name, notes) VALUES ($1,$2,$3) RETURNING id', [req.user.tid, b.name, b.notes || null])).rows[0];
+      await setMainContact(c, req.user.tid, row.id, b, b.name);
+      await setMainAddress(c, req.user.tid, row.id, b.address);
       await audit(c, req.user.tid, req.user.sub, 'customer.create', 'customer', row.id, { name: b.name });
-      return row;
+      return (await c.query(`SELECT * FROM (${CUSTOMER_SQL}) u WHERE u.id = $1`, [row.id])).rows[0];
     });
     return r ? reply.code(201).send({ customer: r }) : reply.code(409).send({ error: 'A customer with that name already exists' });
   });
@@ -56,8 +60,10 @@ export async function customerRoutes(app: FastifyInstance) {
   app.get('/api/customers/:id', { preHandler: mgr }, async (req, reply) => {
     const { id } = z.object({ id: uuid }).parse(req.params);
     const out = await withTenant(req.user.tid, async (c) => {
-      const customer = (await c.query('SELECT * FROM customers WHERE id = $1', [id])).rows[0];
+      const customer = (await c.query(`SELECT * FROM (${CUSTOMER_SQL}) u WHERE u.id = $1`, [id])).rows[0];
       if (!customer) return null;
+      const contacts = (await c.query('SELECT * FROM customer_contacts WHERE customer_id = $1 ORDER BY is_primary DESC, lower(name)', [id])).rows;
+      const locations = (await c.query('SELECT * FROM customer_locations WHERE customer_id = $1 ORDER BY is_default DESC, lower(label)', [id])).rows;
       const events = (await c.query(
         `SELECT e.id, e.name, e.venue, e.start_date, e.end_date,
                 (SELECT count(*)::int FROM shifts s WHERE s.event_id = e.id) AS shift_count,
@@ -68,7 +74,7 @@ export async function customerRoutes(app: FastifyInstance) {
                 (SELECT coalesce(sum(l.qty*l.hours*l.rate),0) FROM quote_lines l WHERE l.quote_id = q.id) AS subtotal, q.discount, q.tax_pct
            FROM quotes q WHERE q.customer_id = $1 ORDER BY q.number DESC`, [id])).rows
         .map((q) => ({ ...q, total: Math.round(((Number(q.subtotal) - Number(q.discount)) * (1 + Number(q.tax_pct) / 100)) * 100) / 100 }));
-      return { customer, events, quotes };
+      return { customer, contacts, locations, events, quotes };
     });
     return out ?? reply.code(404).send({ error: 'Customer not found' });
   });
@@ -80,15 +86,87 @@ export async function customerRoutes(app: FastifyInstance) {
       const cur = (await c.query('SELECT * FROM customers WHERE id = $1', [id])).rows[0];
       if (!cur) return { code: 404, error: 'Customer not found' };
       if (b.name && (await c.query('SELECT 1 FROM customers WHERE lower(name) = lower($1) AND id <> $2', [b.name, id])).rowCount) return { code: 409, error: 'A customer with that name already exists' };
-      const pick = (v: any, old: any) => (v === undefined ? old : v || null);
-      const row = (await c.query('UPDATE customers SET name=$2, contact_name=$3, email=$4, phone=$5, address=$6, notes=$7 WHERE id=$1 RETURNING *',
-        [id, b.name ?? cur.name, pick(b.contactName, cur.contact_name), pick(b.email, cur.email), pick(b.phone, cur.phone), pick(b.address, cur.address), pick(b.notes, cur.notes)])).rows[0];
+      const name = b.name ?? cur.name;
+      await c.query('UPDATE customers SET name = $2, notes = $3 WHERE id = $1', [id, name, b.notes === undefined ? cur.notes : b.notes || null]);
+      await setMainContact(c, req.user.tid, id, b, name);
+      await setMainAddress(c, req.user.tid, id, b.address);
       if (b.name && b.name !== cur.name) await c.query('UPDATE events SET client = $2 WHERE customer_id = $1', [id, b.name]);
       await audit(c, req.user.tid, req.user.sub, 'customer.update', 'customer', id, b);
-      return { code: 200, customer: row };
+      return { code: 200, customer: (await c.query(`SELECT * FROM (${CUSTOMER_SQL}) u WHERE u.id = $1`, [id])).rows[0] };
     });
     const { code, ...rest } = r as { code: number; [k: string]: unknown };
     return reply.code(code).send(rest);
+  });
+
+  // ---- several contacts per customer ----
+  app.post('/api/customers/:id/contacts', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const b = contactBody.parse(req.body);
+    const row = await withTenant(req.user.tid, async (c) => {
+      if (!(await c.query('SELECT 1 FROM customers WHERE id = $1', [id])).rowCount) return null;
+      return addContact(c, req.user.tid, id, b);
+    });
+    return row ? reply.code(201).send({ contact: row }) : reply.code(404).send({ error: 'Customer not found' });
+  });
+  app.patch('/api/customer-contacts/:id', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const b = contactBody.partial().parse(req.body);
+    const row = await withTenant(req.user.tid, async (c) => {
+      const cur = (await c.query('SELECT * FROM customer_contacts WHERE id = $1', [id])).rows[0];
+      if (!cur) return null;
+      if (b.primary) await c.query('UPDATE customer_contacts SET is_primary = false WHERE customer_id = $1', [cur.customer_id]);
+      const pick = (v: string | null | undefined, old: string | null) => (v === undefined ? old : v || null);
+      return (await c.query(
+        'UPDATE customer_contacts SET name=$2, title=$3, email=$4, phone=$5, notes=$6, is_primary=$7 WHERE id=$1 RETURNING *',
+        [id, b.name ?? cur.name, pick(b.title, cur.title), pick(b.email, cur.email), pick(b.phone, cur.phone), pick(b.notes, cur.notes), b.primary ?? cur.is_primary],
+      )).rows[0];
+    });
+    return row ? { contact: row } : reply.code(404).send({ error: 'Contact not found' });
+  });
+  app.delete('/api/customer-contacts/:id', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const n = await withTenant(req.user.tid, async (c) => {
+      const r = await c.query('DELETE FROM customer_contacts WHERE id = $1 RETURNING customer_id, is_primary', [id]);
+      // Keep a main contact: promote the oldest remaining one.
+      if (r.rows[0]?.is_primary) await c.query('UPDATE customer_contacts SET is_primary = true WHERE id = (SELECT id FROM customer_contacts WHERE customer_id = $1 ORDER BY created_at LIMIT 1)', [r.rows[0].customer_id]);
+      return r.rowCount;
+    });
+    return n ? { ok: true } : reply.code(404).send({ error: 'Contact not found' });
+  });
+
+  // ---- several locations per customer (offices, venues they use) ----
+  app.post('/api/customers/:id/locations', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const b = locationBody.parse(req.body);
+    const row = await withTenant(req.user.tid, async (c) => {
+      if (!(await c.query('SELECT 1 FROM customers WHERE id = $1', [id])).rowCount) return null;
+      return addLocation(c, req.user.tid, id, b);
+    });
+    return row ? reply.code(201).send({ location: row }) : reply.code(404).send({ error: 'Customer not found' });
+  });
+  app.patch('/api/customer-locations/:id', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const b = locationBody.partial().parse(req.body);
+    const row = await withTenant(req.user.tid, async (c) => {
+      const cur = (await c.query('SELECT * FROM customer_locations WHERE id = $1', [id])).rows[0];
+      if (!cur) return null;
+      if (b.isDefault) await c.query('UPDATE customer_locations SET is_default = false WHERE customer_id = $1', [cur.customer_id]);
+      const pick = (v: string | null | undefined, old: string | null) => (v === undefined ? old : v || null);
+      return (await c.query(
+        'UPDATE customer_locations SET label=$2, venue=$3, address=$4, notes=$5, is_default=$6 WHERE id=$1 RETURNING *',
+        [id, b.label ?? cur.label, pick(b.venue, cur.venue), pick(b.address, cur.address), pick(b.notes, cur.notes), b.isDefault ?? cur.is_default],
+      )).rows[0];
+    });
+    return row ? { location: row } : reply.code(404).send({ error: 'Location not found' });
+  });
+  app.delete('/api/customer-locations/:id', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const n = await withTenant(req.user.tid, async (c) => {
+      const r = await c.query('DELETE FROM customer_locations WHERE id = $1 RETURNING customer_id, is_default', [id]);
+      if (r.rows[0]?.is_default) await c.query('UPDATE customer_locations SET is_default = true WHERE id = (SELECT id FROM customer_locations WHERE customer_id = $1 ORDER BY created_at LIMIT 1)', [r.rows[0].customer_id]);
+      return r.rowCount;
+    });
+    return n ? { ok: true } : reply.code(404).send({ error: 'Location not found' });
   });
 
   app.delete('/api/customers/:id', { preHandler: mgr }, async (req, reply) => {

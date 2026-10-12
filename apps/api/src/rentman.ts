@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { addContact, addLocation, norm } from './crm';
 import { decrypt, encrypt } from './crypto';
 
 const BASE = 'https://api.rentman.net';
@@ -68,26 +69,158 @@ const refId = (v: unknown): number | null => {
 };
 const ts = (v: unknown) => (v ? String(v) : null);
 
-/** Pull every project into the local cache. Customer / venue names are resolved from Rentman contacts. */
+const text = (...v: unknown[]) => v.map((x) => String(x ?? '').trim()).find(Boolean) ?? null;
+
+/** Rentman spreads an address over several fields; join the ones present into one line. */
+function addressOf(x: any): string | null {
+  const line = (pre: string) => {
+    const street = [x[`${pre}_street`], x[`${pre}_number`]].map((v) => String(v ?? '').trim()).filter(Boolean).join(' ');
+    const city = [x[`${pre}_postalcode`], x[`${pre}_city`]].map((v) => String(v ?? '').trim()).filter(Boolean).join(' ');
+    return [street, city, text(x[`${pre}_country`])].filter(Boolean).join(', ');
+  };
+  return line('visit') || line('mailing') || text(x.address) || null;
+}
+const contactRow = (x: any) => ({
+  id: Number(x.id),
+  name: String(text(x.displayname, x.name, [x.firstname, x.infix, x.surname].filter(Boolean).join(' ')) ?? `Contact ${x.id}`),
+  email: text(x.email_1, x.email),
+  phone: text(x.phone_1, x.phone, x.mobile),
+  address: addressOf(x),
+});
+
+/** Pull every project (and the contacts they point at) into the local cache. */
 export async function syncProjects(c: PoolClient, tid: string, token: string) {
   const [projects, contacts] = await Promise.all([
     getAll(token, '/projects'),
-    getAll(token, '/contacts', { fields: 'id,displayname' }).catch(() => [] as any[]),
+    getAll(token, '/contacts').catch(() => [] as any[]),
   ]);
-  const names = new Map<number, string>(contacts.map((x: any) => [Number(x.id), String(x.displayname ?? '')]));
+  const rows = contacts.filter((x: any) => x?.id != null).map(contactRow);
+  if (rows.length)
+    await c.query(
+      `INSERT INTO rentman_contacts (tenant_id, id, name, email, phone, address)
+       SELECT $1, * FROM unnest($2::int[], $3::text[], $4::text[], $5::text[], $6::text[])
+       ON CONFLICT (tenant_id, id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email, phone = EXCLUDED.phone, address = EXCLUDED.address`,
+      [tid, rows.map((r) => r.id), rows.map((r) => r.name), rows.map((r) => r.email), rows.map((r) => r.phone), rows.map((r) => r.address)],
+    );
+  const names = new Map<number, string>(rows.map((r) => [r.id, r.name]));
   const nm = (v: unknown) => names.get(refId(v) ?? -1) ?? null;
   for (const p of projects) {
     await c.query(
       `INSERT INTO rentman_projects (tenant_id, id, number, name, customer, location, reference, project_type, tags, planperiod_start, planperiod_end,
-         usageperiod_start, usageperiod_end, equipment_period_from, equipment_period_to, synced_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, now())
+         usageperiod_start, usageperiod_end, equipment_period_from, equipment_period_to, customer_id, location_id, synced_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17, now())
        ON CONFLICT (tenant_id, id) DO UPDATE SET number=$3, name=$4, customer=$5, location=$6, reference=$7, project_type=$8, tags=$9, planperiod_start=$10,
-         planperiod_end=$11, usageperiod_start=$12, usageperiod_end=$13, equipment_period_from=$14, equipment_period_to=$15, synced_at=now()`,
+         planperiod_end=$11, usageperiod_start=$12, usageperiod_end=$13, equipment_period_from=$14, equipment_period_to=$15, customer_id=$16, location_id=$17, synced_at=now()`,
       [tid, p.id, p.number ?? null, String(p.displayname || p.name || `Project ${p.id}`), nm(p.customer), nm(p.location), p.reference || null, p.project_type || null, p.tags || null,
-       ts(p.planperiod_start), ts(p.planperiod_end), ts(p.usageperiod_start), ts(p.usageperiod_end), ts(p.equipment_period_from), ts(p.equipment_period_to)],
+       ts(p.planperiod_start), ts(p.planperiod_end), ts(p.usageperiod_start), ts(p.usageperiod_end), ts(p.equipment_period_from), ts(p.equipment_period_to), refId(p.customer), refId(p.location)],
     );
   }
   return projects.length;
+}
+
+/**
+ * Bring Rentman's customers (the contacts used as a project customer) into the CRM. Matches by earlier link, then by name.
+ * Never overwrites what is already filled in here; it only adds what is missing (contact people, addresses).
+ */
+export async function pullCustomers(c: PoolClient, tid: string, token: string) {
+  const ids = (await c.query('SELECT DISTINCT customer_id FROM rentman_projects WHERE customer_id IS NOT NULL')).rows.map((r) => r.customer_id as number);
+  const out = { created: 0, linked: 0, contacts: 0, locations: 0 };
+  if (!ids.length) return out;
+  const cached = new Map<number, any>((await c.query('SELECT * FROM rentman_contacts WHERE id = ANY($1)', [ids])).rows.map((r) => [r.id, r]));
+  const persons = await getAll(token, '/contactpersons').catch(() => [] as any[]);
+  for (const rid of ids) {
+    const rc = cached.get(rid);
+    if (!rc) continue;
+    let cu = (await c.query('SELECT id FROM customers WHERE rentman_contact_id = $1', [rid])).rows[0];
+    if (!cu) {
+      const byName = (await c.query('SELECT id FROM customers WHERE lower(name) = lower($1) AND rentman_contact_id IS NULL', [rc.name])).rows[0];
+      if (byName) { cu = byName; out.linked++; }
+      else {
+        cu = (await c.query('INSERT INTO customers (tenant_id, name) VALUES ($1,$2) RETURNING id', [tid, rc.name])).rows[0];
+        out.created++;
+      }
+    }
+    await c.query('UPDATE customers SET rentman_contact_id = $2, rentman_synced_at = now() WHERE id = $1', [cu.id, rid]);
+    const have = (await c.query('SELECT name, email FROM customer_contacts WHERE customer_id = $1', [cu.id])).rows;
+    const known = (email: string | null, name: string) => have.some((h) => (email && h.email && h.email.toLowerCase() === email.toLowerCase()) || (!email && norm(h.name) === norm(name)));
+    const people = [
+      ...(rc.email || rc.phone ? [{ name: rc.name, title: 'Main', email: rc.email, phone: rc.phone }] : []),
+      ...persons.filter((p: any) => refId(p.contact) === rid).map((p: any) => ({
+        name: String(text(p.displayname, p.name, [p.firstname, p.infix, p.surname].filter(Boolean).join(' ')) ?? ''), title: text(p.function, p.title), email: text(p.email_1, p.email), phone: text(p.phone_1, p.phone, p.mobile),
+      })),
+    ];
+    for (const pe of people) {
+      if (!pe.name || known(pe.email, pe.name)) continue;
+      await addContact(c, tid, cu.id, pe);
+      have.push({ name: pe.name, email: pe.email });
+      out.contacts++;
+    }
+    if (rc.address) {
+      const locs = (await c.query('SELECT address FROM customer_locations WHERE customer_id = $1', [cu.id])).rows;
+      if (!locs.some((l) => norm(l.address) === norm(rc.address))) {
+        await addLocation(c, tid, cu.id, { label: locs.length ? 'Rentman address' : 'Main', address: rc.address });
+        out.locations++;
+      }
+    }
+  }
+  return out;
+}
+
+/** The CRM customer for a Rentman contact: the linked one, one with the same name (then linked), or a new one built from the cached contact. */
+export async function customerForRentman(c: PoolClient, tid: string, rentmanContactId: number): Promise<{ id: string; name: string } | null> {
+  const linked = (await c.query('SELECT id, name FROM customers WHERE rentman_contact_id = $1', [rentmanContactId])).rows[0];
+  if (linked) return linked;
+  const rc = (await c.query('SELECT * FROM rentman_contacts WHERE id = $1', [rentmanContactId])).rows[0];
+  if (!rc) return null;
+  let cu = (await c.query('SELECT id, name FROM customers WHERE lower(name) = lower($1) AND rentman_contact_id IS NULL', [rc.name])).rows[0];
+  if (!cu) {
+    cu = (await c.query('INSERT INTO customers (tenant_id, name) VALUES ($1,$2) RETURNING id, name', [tid, rc.name])).rows[0];
+    if (rc.email || rc.phone) await addContact(c, tid, cu.id, { name: rc.name, title: 'Main', email: rc.email, phone: rc.phone });
+    if (rc.address) await addLocation(c, tid, cu.id, { label: 'Main', address: rc.address });
+  }
+  await c.query('UPDATE customers SET rentman_contact_id = $2, rentman_synced_at = now() WHERE id = $1', [cu.id, rentmanContactId]);
+  return cu;
+}
+
+async function send(token: string, method: 'POST' | 'PUT', path: string, body: unknown): Promise<any> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, { method, headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(20000) });
+  } catch {
+    throw new RentmanError('Could not reach Rentman. Try again in a moment.');
+  }
+  if (res.status === 401) throw new RentmanError('Rentman rejected the API token. Check it and save again.', 400);
+  if (res.status === 403) throw new RentmanError('Rentman would not allow that. The API token may be read-only, or you hit the rate limit.', 403);
+  if (!res.ok) throw new RentmanError(`Rentman could not save the customer (${res.status}).`);
+  return res.json();
+}
+
+/** Create the customer in Rentman (or update the linked one). Name, email and phone of the main contact go across. */
+export async function pushCustomer(c: PoolClient, token: string, customerId: string): Promise<number> {
+  const cu = (await c.query(
+    `SELECT cu.*, pc.email, pc.phone FROM customers cu LEFT JOIN LATERAL (SELECT email, phone FROM customer_contacts WHERE customer_id = cu.id ORDER BY is_primary DESC, created_at LIMIT 1) pc ON true WHERE cu.id = $1`, [customerId])).rows[0];
+  if (!cu) throw new RentmanError('Customer not found', 404);
+  const payload: Record<string, unknown> = { displayname: cu.name, name: cu.name };
+  if (cu.email) payload.email_1 = cu.email;
+  if (cu.phone) payload.phone_1 = cu.phone;
+  let rid: number | null = cu.rentman_contact_id;
+  // Already in Rentman under the same name: link to it instead of creating a duplicate.
+  if (!rid) rid = (await c.query('SELECT id FROM rentman_contacts WHERE lower(name) = lower($1) ORDER BY id LIMIT 1', [cu.name])).rows[0]?.id ?? null;
+  if (rid && !cu.rentman_contact_id) {
+    await c.query('UPDATE customers SET rentman_contact_id = $2, rentman_synced_at = now() WHERE id = $1', [customerId, rid]);
+    return rid;
+  }
+  if (rid) await send(token, 'PUT', `/contacts/${rid}`, payload);
+  else {
+    const j = await send(token, 'POST', '/contacts', payload);
+    rid = Number(j?.data?.id);
+    if (!rid) throw new RentmanError('Rentman did not return the new contact.');
+  }
+  await c.query('UPDATE customers SET rentman_contact_id = $2, rentman_synced_at = now() WHERE id = $1', [customerId, rid]);
+  await c.query(
+    `INSERT INTO rentman_contacts (tenant_id, id, name, email, phone) VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (tenant_id, id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email, phone = EXCLUDED.phone`, [cu.tenant_id, rid, cu.name, cu.email, cu.phone]);
+  return rid;
 }
 
 /** Replace the cached equipment list of one project with what Rentman has now. */

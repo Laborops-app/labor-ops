@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { withTenant, audit } from '../db';
 import { guard } from '../auth';
 import { evaluateShift } from '../eligibility';
+import { customerForRentman } from '../rentman';
 
 const id = z.object({ id: z.string().uuid() });
 const eventBody = z.object({
@@ -155,9 +156,15 @@ export async function eventRoutes(app: FastifyInstance) {
     const row = await withTenant(req.user.tid, async (c) => {
       const cust = b.customerId ? (await c.query('SELECT id, name FROM customers WHERE id = $1', [b.customerId])).rows[0] : null;
       if (b.customerId && !cust) return null;
-      const custId = cust?.id ?? null;
-      const clientName = cust?.name ?? b.client;
-      const rentmanId = b.rentmanProjectId && (await c.query('SELECT 1 FROM rentman_projects WHERE id = $1', [b.rentmanProjectId])).rowCount ? b.rentmanProjectId : null;
+      const rmp = b.rentmanProjectId ? (await c.query('SELECT p.id, p.customer_id, lc.name AS loc_name, lc.address AS loc_address FROM rentman_projects p LEFT JOIN rentman_contacts lc ON lc.id = p.location_id WHERE p.id = $1', [b.rentmanProjectId])).rows[0] : null;
+      const rentmanId: number | null = rmp ? rmp.id : null;
+      // A linked Rentman project fills in the customer (created in the CRM if new), venue and address when they were left empty.
+      let custRow = cust;
+      if (!custRow && rmp?.customer_id) custRow = await customerForRentman(c, req.user.tid, rmp.customer_id);
+      const custId = custRow?.id ?? null;
+      const clientName = custRow?.name ?? b.client;
+      b.venue = b.venue || rmp?.loc_name || undefined;
+      b.address = b.address || rmp?.loc_address || undefined;
       const r = await c.query(
         `INSERT INTO events (tenant_id, name, client, venue, address, start_date, end_date, notes, created_by, rentman_project_id, customer_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,

@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { withTenant, audit } from '../db';
 import { guard } from '../auth';
 import { config } from '../config';
+import { CUSTOMER_SQL } from '../crm';
 import { hoursBetween } from '../pay';
 import { notifyStaff } from '../notify';
 import { absUrl, renderEmail } from '../notify/templates';
@@ -61,7 +62,7 @@ export function totals(lines: { qty: unknown; hours: unknown; rate: unknown }[],
 async function load(c: PoolClient, id: string) {
   const q = (await c.query(
     `SELECT q.*, cu.name AS customer_name, cu.email AS customer_email, cu.contact_name, ev.name AS event_name
-       FROM quotes q LEFT JOIN customers cu ON cu.id = q.customer_id LEFT JOIN events ev ON ev.id = q.event_id WHERE q.id = $1`, [id])).rows[0];
+       FROM quotes q LEFT JOIN (${CUSTOMER_SQL}) cu ON cu.id = q.customer_id LEFT JOIN events ev ON ev.id = q.event_id WHERE q.id = $1`, [id])).rows[0];
   if (!q) return null;
   const lines = (await c.query('SELECT id, description, qty, hours, rate FROM quote_lines WHERE quote_id = $1 ORDER BY sort', [id])).rows
     .map((l) => ({ id: l.id, description: l.description, qty: Number(l.qty), hours: Number(l.hours), rate: Number(l.rate), amount: r2(Number(l.qty) * Number(l.hours) * Number(l.rate)) }));

@@ -1446,6 +1446,7 @@ test('rentman: connect with a token, sync projects, link to an event, equipment 
   const a = await register('rm');
   const c1 = await mkCrew(a, 'rm1');
   const calls: string[] = [];
+  const pushed: any[] = [];
   const real = globalThis.fetch;
   const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: { 'content-type': 'application/json' } });
   globalThis.fetch = (async (input: any, init?: any) => {
@@ -1453,7 +1454,13 @@ test('rentman: connect with a token, sync projects, link to an event, equipment 
     if (!url.startsWith('https://api.rentman.net')) return real(input, init);
     calls.push(url);
     if ((init?.headers as any)?.Authorization !== 'Bearer good-token-123456') return json({ error: 'nope' }, 401);
-    if (url.includes('/contacts')) return json({ data: [{ id: 7, displayname: 'Utah Athletics' }, { id: 9, displayname: 'Rice-Eccles Stadium' }] });
+    if (init?.method === 'POST' && url.endsWith('/contacts')) { pushed.push(JSON.parse(init.body)); return json({ data: { id: 555 } }); }
+    if (init?.method === 'PUT' && url.includes('/contacts/')) { pushed.push(JSON.parse(init.body)); return json({ data: {} }); }
+    if (url.includes('/contactpersons')) return json({ data: [{ id: 1, contact: '/contacts/7', firstname: 'Dana', surname: 'Lee', email: 'dana@utah.example', function: 'Producer' }] });
+    if (url.includes('/contacts')) return json({ data: [
+      { id: 7, displayname: 'Utah Athletics', email_1: 'ops@utah.example', phone_1: '555-0100', visit_street: 'Fieldhouse Dr', visit_number: '1', visit_city: 'Salt Lake City', visit_postalcode: '84112' },
+      { id: 9, displayname: 'Rice-Eccles Stadium', visit_street: '451 S 1400 E', visit_city: 'Salt Lake City', visit_postalcode: '84112' },
+    ] });
     if (url.includes('/projectequipmentgroup')) return json({ data: [{ id: 50, name: 'Audio', order: 1 }, { id: 51, name: 'Lighting', order: 2 }] });
     if (url.includes('/projectequipment')) return json({ data: [
       { id: 1, displayname: 'Shure SM58', quantity_total: 12, unit_price: 9.5, is_option: false, equipment_group: '/projectequipmentgroup/50', planperiod_start: '2030-01-01T08:00:00+00:00', planperiod_end: '2030-01-02T22:00:00+00:00' },
@@ -1477,16 +1484,43 @@ test('rentman: connect with a token, sync projects, link to an event, equipment 
     assert.equal((await call(a, 'PUT', '/api/rentman/settings', { token: 'good-token-123456' })).status, 200);
     assert.equal((await call(a, 'GET', '/api/rentman/settings')).json.connected, true);
 
-    assert.equal((await call(a, 'POST', '/api/rentman/sync')).json.synced, 2);
+    const syn = await call(a, 'POST', '/api/rentman/sync');
+    assert.equal(syn.json.synced, 2);
+    assert.equal(syn.json.customers.created, 1);
+    assert.equal(syn.json.customers.contacts, 2, 'the company and its contact person');
     const list = (await call(a, 'GET', '/api/rentman/projects?q=game')).json.projects;
     assert.equal(list.length, 1);
     assert.equal(list[0].customer, 'Utah Athletics');
     assert.equal(list[0].location, 'Rice-Eccles Stadium');
+    assert.equal(list[0].location_address, '451 S 1400 E, 84112 Salt Lake City');
+    assert.ok(list[0].customer_local_id, 'the Rentman customer now exists in the CRM');
+
+    // the customer came across with contacts and an address, and syncing again does not duplicate anything
+    const cust = (await call(a, 'GET', `/api/customers/${list[0].customer_local_id}`)).json;
+    assert.equal(cust.customer.rentman_contact_id, 7);
+    assert.deepEqual(cust.contacts.map((x: any) => x.email).sort(), ['dana@utah.example', 'ops@utah.example']);
+    assert.equal(cust.locations.length, 1);
+    assert.equal((await call(a, 'POST', '/api/rentman/sync')).json.customers.contacts, 0);
+    assert.equal((await call(a, 'GET', '/api/customers')).json.customers.length, 1);
+
+    // a new CRM customer can be sent to Rentman; the one already there is not duplicated
+    await call(a, 'POST', '/api/customers', { name: 'New Client', email: 'hi@new.example' });
+    const ps = await call(a, 'POST', '/api/rentman/push-customers');
+    assert.equal(ps.json.sent, 1, ps.text);
+    assert.equal(pushed.length, 1);
+    assert.equal(pushed[0].displayname, 'New Client');
+    assert.equal(pushed[0].email_1, 'hi@new.example');
+    assert.equal((await call(c1.session, 'POST', '/api/rentman/push-customers')).status, 403);
 
     // create an event already linked, equipment comes with it
     const made = await call(a, 'POST', '/api/events', { name: 'Game Day', startDate: '2030-01-01', endDate: '2030-01-02', rentmanProjectId: 101 });
     assert.equal(made.status, 201, made.text);
     const ev = made.json.event.id;
+    // the project filled in the customer, client name, venue and street address
+    assert.equal(made.json.event.client, 'Utah Athletics');
+    assert.equal(made.json.event.customer_id, list[0].customer_local_id);
+    assert.equal(made.json.event.venue, 'Rice-Eccles Stadium');
+    assert.match(made.json.event.address, /451 S 1400 E/);
     const v = (await call(a, 'GET', `/api/events/${ev}/rentman`)).json;
     assert.equal(v.linked, true);
     assert.equal(v.project.number, 2042);
@@ -1628,4 +1662,48 @@ test('quotes: lines from an event, totals, send, customer accepts without signin
   assert.ok(note.rowCount! >= 1, 'staff are told');
   assert.equal((await call(a, 'GET', `/api/customers/${cu}`)).json.quotes.length, 1);
   assert.equal((await call(a, 'DELETE', `/api/quotes/${id}`)).status, 200);
+});
+
+test('customers: several contacts and locations, main ones are kept, quotes use the main contact', async () => {
+  const a = await register('crm3');
+  const b = await register('crm4');
+  const c1 = await mkCrew(a, 'crm3c');
+  const cu = (await call(a, 'POST', '/api/customers', { name: 'Multi Co', contactName: 'Pat', email: 'pat@multi.example', address: '1 Main St' })).json.customer;
+  let d = (await call(a, 'GET', `/api/customers/${cu.id}`)).json;
+  assert.equal(d.contacts.length, 1);
+  assert.equal(d.contacts[0].is_primary, true);
+  assert.equal(d.locations[0].address, '1 Main St');
+  assert.equal(d.customer.email, 'pat@multi.example');
+
+  const second = await call(a, 'POST', `/api/customers/${cu.id}/contacts`, { name: 'Sam', title: 'AP', email: 'sam@multi.example' });
+  assert.equal(second.status, 201, second.text);
+  assert.equal(second.json.contact.is_primary, false);
+  assert.equal((await call(c1.session, 'POST', `/api/customers/${cu.id}/contacts`, { name: 'x' })).status, 403);
+  assert.equal((await call(b, 'POST', `/api/customers/${cu.id}/contacts`, { name: 'x' })).status, 404);
+  // make Sam the main contact: the customer's main email follows
+  assert.equal((await call(a, 'PATCH', `/api/customer-contacts/${second.json.contact.id}`, { primary: true })).json.contact.is_primary, true);
+  d = (await call(a, 'GET', `/api/customers/${cu.id}`)).json;
+  assert.equal(d.customer.email, 'sam@multi.example');
+  assert.equal(d.contacts.filter((x: any) => x.is_primary).length, 1);
+  // deleting the main contact promotes another
+  await call(a, 'DELETE', `/api/customer-contacts/${second.json.contact.id}`);
+  d = (await call(a, 'GET', `/api/customers/${cu.id}`)).json;
+  assert.equal(d.contacts.length, 1);
+  assert.equal(d.contacts[0].is_primary, true);
+
+  const loc = await call(a, 'POST', `/api/customers/${cu.id}/locations`, { label: 'Warehouse', venue: 'Dock 4', address: '9 Industrial Way', isDefault: true });
+  assert.equal(loc.status, 201, loc.text);
+  d = (await call(a, 'GET', `/api/customers/${cu.id}`)).json;
+  assert.equal(d.locations.length, 2);
+  assert.equal(d.locations[0].label, 'Warehouse');
+  assert.equal(d.locations.filter((x: any) => x.is_default).length, 1);
+  assert.equal((await call(a, 'PATCH', `/api/customer-locations/${loc.json.location.id}`, { venue: 'Dock 5' })).json.location.venue, 'Dock 5');
+  assert.equal((await call(a, 'DELETE', `/api/customer-locations/${loc.json.location.id}`)).status, 200);
+  d = (await call(a, 'GET', `/api/customers/${cu.id}`)).json;
+  assert.equal(d.locations.length, 1);
+  assert.equal(d.locations[0].is_default, true);
+
+  // the quote goes to the main contact by default
+  const q = (await call(a, 'POST', '/api/quotes', { title: 'T', customerId: cu.id, lines: [{ description: 'x', qty: 1, hours: 1, rate: 10 }] })).json.quote;
+  assert.equal(q.customer_email, 'pat@multi.example');
 });

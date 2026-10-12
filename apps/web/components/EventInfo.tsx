@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import RentmanPicker, { RmProject } from '@/components/RentmanPicker';
 import { api, fmtDate, getPosition } from '@/lib/api';
 import CustomerSelect from '@/components/CustomerSelect';
+import LocationPick from '@/components/LocationPick';
 
 export type EventFull = { id: string; customer_id?: string | null; name: string; client: string | null; venue: string | null; address: string | null; notes: string | null; start_date: string; end_date: string; clock_mode?: 'self' | 'coordinator'; geo_lat?: number | null; geo_lng?: number | null; geofence_m?: number | null };
 export type Phase = { id: string; label: string; starts_on: string; ends_on: string };
@@ -88,6 +89,7 @@ export function EventDetails({ ev, hasPhases, onSaved, onError }: { ev: EventFul
           <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required maxLength={150} />
         </label>
         <CustomerSelect value={f.customerId} onPick={(c) => setF({ ...f, customerId: c?.id ?? null, client: c ? c.name : f.client })} />
+        <LocationPick customerId={f.customerId} onPick={(l) => setF((x) => ({ ...x, venue: l.venue, address: l.address }))} />
         {!f.customerId && (
           <label>
             Client name

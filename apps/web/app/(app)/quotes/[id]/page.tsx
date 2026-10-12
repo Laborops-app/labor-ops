@@ -26,6 +26,7 @@ function Body() {
   const [f, setF] = useState({ title: '', customerId: null as string | null, validUntil: '', intro: '', terms: '', taxPct: '0', discount: '0' });
   const [lines, setLines] = useState<Line[]>([]);
   const [to, setTo] = useState('');
+  const [people, setPeople] = useState<{ id: string; name: string; email: string | null; is_primary: boolean }[]>([]);
   const [msg, setMsg] = useState('');
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -41,6 +42,11 @@ function Body() {
   };
   const load = () => api<Detail>(`/api/quotes/${id}`).then(apply).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [id]);
+  const cid = d?.quote.customer_id;
+  useEffect(() => {
+    setPeople([]);
+    if (cid) api<{ contacts: typeof people }>(`/api/customers/${cid}`).then((r) => setPeople(r.contacts.filter((p) => p.email))).catch(() => {});
+  }, [cid]);
 
   const edit = <T,>(fn: (v: T) => void) => (v: T) => { fn(v); setDirty(true); };
   const setLine = (i: number, patch: Partial<Line>) => { setLines(lines.map((l, j) => (j === i ? { ...l, ...patch } : l))); setDirty(true); };
@@ -144,7 +150,15 @@ function Body() {
       <section className="card">
         <h2>Send to the customer</h2>
         <div className="grid-form">
-          <label>Email to<input type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder={q.customer_email ?? 'customer@example.com'} /></label>
+          {people.length > 1 && (
+            <label>Send to
+              <select value={people.some((p) => p.email === to) ? to : ''} onChange={(e) => setTo(e.target.value)}>
+                <option value="">Main contact{q.customer_email ? ` (${q.customer_email})` : ''}</option>
+                {people.map((p) => <option key={p.id} value={p.email!}>{p.name} — {p.email}</option>)}
+              </select>
+            </label>
+          )}
+          <label>{people.length > 1 ? 'Or type another email' : 'Email to'}<input type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder={q.customer_email ?? 'customer@example.com'} /></label>
         </div>
         <label>Note in the email (optional)<textarea rows={2} value={msg} onChange={(e) => setMsg(e.target.value)} maxLength={3000} /></label>
         <div className="row">

@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
 import { guard } from '../auth';
-import { clearToken, getToken, RentmanError, saveToken, syncEquipment, syncProjects, testToken } from '../rentman';
+import { clearToken, getToken, pullCustomers, pushCustomer, RentmanError, saveToken, syncEquipment, syncProjects, testToken } from '../rentman';
 
 const uuid = z.string().uuid();
 const adm = guard('admin');
@@ -50,10 +50,11 @@ export async function rentmanRoutes(app: FastifyInstance) {
         const token = await getToken(c);
         if (!token) throw new RentmanError('Connect Rentman first (Integrations page).', 409);
         const n = await syncProjects(c, req.user.tid, token);
-        await audit(c, req.user.tid, req.user.sub, 'rentman.sync', 'integration', null, { projects: n });
-        return n;
+        const customers = await pullCustomers(c, req.user.tid, token);
+        await audit(c, req.user.tid, req.user.sub, 'rentman.sync', 'integration', null, { projects: n, customers });
+        return { n, customers };
       });
-      return { synced: n };
+      return { synced: n.n, customers: n.customers };
     } catch (e) {
       return fail(reply, e);
     }
@@ -65,13 +66,53 @@ export async function rentmanRoutes(app: FastifyInstance) {
     return withTenant(req.user.tid, async (c) => ({
       projects: (
         await c.query(
-          `SELECT id, number, name, customer, location, planperiod_start, planperiod_end FROM rentman_projects
-            WHERE $1::text IS NULL OR name ILIKE '%' || $1 || '%' OR customer ILIKE '%' || $1 || '%' OR number::text = $1
-            ORDER BY planperiod_start DESC NULLS LAST, id DESC LIMIT 300`,
+          `SELECT p.id, p.number, p.name, p.customer, p.location, p.planperiod_start, p.planperiod_end, lc.address AS location_address,
+                  (SELECT cu.id FROM customers cu WHERE cu.rentman_contact_id = p.customer_id OR lower(cu.name) = lower(p.customer) ORDER BY (cu.rentman_contact_id = p.customer_id) DESC NULLS LAST LIMIT 1) AS customer_local_id
+             FROM rentman_projects p LEFT JOIN rentman_contacts lc ON lc.id = p.location_id
+            WHERE $1::text IS NULL OR p.name ILIKE '%' || $1 || '%' OR p.customer ILIKE '%' || $1 || '%' OR p.number::text = $1
+            ORDER BY p.planperiod_start DESC NULLS LAST, p.id DESC LIMIT 300`,
           [q || null],
         )
       ).rows,
     }));
+  });
+
+  // Send customers that are not in Rentman yet (matching names are linked, not duplicated).
+  app.post('/api/rentman/push-customers', { preHandler: mgr }, async (req, reply) => {
+    try {
+      const out = await withTenant(req.user.tid, async (c) => {
+        const token = await getToken(c);
+        if (!token) throw new RentmanError('Connect Rentman first (Integrations page).', 409);
+        let sent = 0;
+        let failed = 0;
+        for (const cu of (await c.query('SELECT id FROM customers WHERE rentman_contact_id IS NULL ORDER BY lower(name)')).rows) {
+          await c.query('SAVEPOINT one');
+          try { await pushCustomer(c, token, cu.id); sent++; await c.query('RELEASE SAVEPOINT one'); }
+          catch (e) { await c.query('ROLLBACK TO SAVEPOINT one'); failed++; if (e instanceof RentmanError && (e.status === 400 || e.status === 403)) throw e; }
+        }
+        await audit(c, req.user.tid, req.user.sub, 'rentman.push_customers', 'integration', null, { sent, failed });
+        return { sent, failed };
+      });
+      return out;
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+
+  // Create or update one customer in Rentman.
+  app.post('/api/customers/:id/rentman', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    try {
+      return await withTenant(req.user.tid, async (c) => {
+        const token = await getToken(c);
+        if (!token) throw new RentmanError('Connect Rentman first (Integrations page).', 409);
+        const rid = await pushCustomer(c, token, id);
+        await audit(c, req.user.tid, req.user.sub, 'rentman.push_customer', 'customer', id, { rid });
+        return { rentmanContactId: rid };
+      });
+    } catch (e) {
+      return fail(reply, e);
+    }
   });
 
   // The Rentman project and equipment linked to an event.

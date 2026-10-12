@@ -74,9 +74,15 @@ function Body() {
             <p className="small">
               {s.projects} project{s.projects === 1 ? '' : 's'} synced{s.lastSync ? `, last at ${new Date(s.lastSync).toLocaleString()}` : ''}.
             </p>
-            <button className="btn" disabled={!!busy} onClick={() => act('sync', 'Projects synced.', () => api('/api/rentman/sync', { body: {} }))}>
-              {busy === 'sync' ? 'Syncing…' : 'Sync projects now'}
+            <p className="muted small">Syncing also brings Rentman's customers into Customers (contact people and addresses are added, nothing you already entered is overwritten). Customers you create here can be sent the other way; one with the same name in Rentman is linked, not duplicated.</p>
+            <div className="row">
+            <button className="btn" disabled={!!busy} onClick={() => act('sync', 'Projects and customers synced.', () => api('/api/rentman/sync', { body: {} }))}>
+              {busy === 'sync' ? 'Syncing…' : 'Sync projects & customers now'}
             </button>
+            <button className="btn" disabled={!!busy} onClick={() => act('push', 'Customers sent to Rentman.', () => api('/api/rentman/push-customers', { body: {} }))}>
+              {busy === 'push' ? 'Sending…' : 'Send new customers to Rentman'}
+            </button>
+            </div>
           </>
         )}
       </section>

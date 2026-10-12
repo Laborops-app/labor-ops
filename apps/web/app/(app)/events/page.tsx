@@ -6,6 +6,7 @@ import { Banner, Empty } from '@/components/ui';
 import { api, fmtDate } from '@/lib/api';
 import RentmanPicker from '@/components/RentmanPicker';
 import CustomerSelect from '@/components/CustomerSelect';
+import LocationPick from '@/components/LocationPick';
 
 type Ev = { id: string; name: string; client: string | null; venue: string | null; start_date: string; end_date: string; shift_count: number; slots: number; accepted: number };
 const today = () => new Date().toISOString().slice(0, 10);
@@ -50,15 +51,19 @@ function Body() {
               value={rm}
               onPick={(p) => {
                 setRm(p ? p.id : null);
-                if (p)
+                if (p) {
+                  // Picking a project fills in everything it knows: name, customer, client, venue, street address and dates.
+                  setCust(p.customer_local_id ?? null);
                   setF((x) => ({
                     ...x,
-                    name: x.name || p.name,
-                    client: x.client || p.customer || '',
-                    venue: x.venue || p.location || '',
+                    name: p.name || x.name,
+                    client: p.customer || x.client,
+                    venue: p.location || x.venue,
+                    address: p.location_address || x.address,
                     startDate: p.planperiod_start ? p.planperiod_start.slice(0, 10) : x.startDate,
                     endDate: p.planperiod_end ? p.planperiod_end.slice(0, 10) : p.planperiod_start ? p.planperiod_start.slice(0, 10) : x.endDate,
                   }));
+                }
               }}
               label="Rentman project (optional, fills in the details below)"
             />
@@ -72,6 +77,7 @@ function Body() {
             Client name
             <input value={f.client} onChange={(e) => { setCust(null); setF({ ...f, client: e.target.value }); }} />
           </label>
+          <LocationPick customerId={cust} onPick={(l) => setF((x) => ({ ...x, venue: l.venue, address: l.address }))} />
           <label>
             Venue
             <input value={f.venue} onChange={(e) => setF({ ...f, venue: e.target.value })} />

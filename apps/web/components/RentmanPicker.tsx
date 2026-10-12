@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { api, fmtDate } from '@/lib/api';
 
-export type RmProject = { id: number; number: number | null; name: string; customer: string | null; location: string | null; planperiod_start: string | null; planperiod_end: string | null };
+export type RmProject = { id: number; number: number | null; name: string; customer: string | null; location: string | null; location_address?: string | null; customer_local_id?: string | null; planperiod_start: string | null; planperiod_end: string | null };
 
 /** Drop-down of synced Rentman projects with a search box. Renders nothing when Rentman is not connected. */
 export default function RentmanPicker({ value, onPick, label = 'Rentman project' }: { value: number | null; onPick: (p: RmProject | null) => void; label?: string }) {
