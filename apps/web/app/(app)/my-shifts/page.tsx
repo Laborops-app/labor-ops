@@ -99,7 +99,7 @@ function Body() {
               {s.status === 'offered' && (
                 <>
                   <button className="btn primary" disabled={!!busy} onClick={() => act(s.assignment_id, () => api(`/api/assignments/${s.assignment_id}/respond`, { body: { response: 'accepted' } }))}>
-                    Accept
+                    Confirm
                   </button>
                   <button className="btn" disabled={!!busy} onClick={() => act(s.assignment_id, () => api(`/api/assignments/${s.assignment_id}/respond`, { body: { response: 'declined' } }))}>
                     Decline

@@ -32,9 +32,23 @@ function Body() {
   const { id } = useParams<{ id: string }>();
   const [d, setD] = useState<Detail | null>(null);
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const load = () => api<Detail>(`/api/my/assignments/${id}`).then(setD).catch((e) => setError(e.message));
   useEffect(() => {
-    api<Detail>(`/api/my/assignments/${id}`).then(setD).catch((e) => setError(e.message));
+    load();
   }, [id]);
+  const respond = async (response: 'accepted' | 'declined') => {
+    setBusy(true);
+    setError('');
+    try {
+      await api(`/api/assignments/${id}/respond`, { body: { response } });
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
   const s = d.shift;
@@ -76,6 +90,21 @@ function Body() {
         </div>
         <Pill status={s.status} />
       </div>
+
+      {error && <Banner>{error}</Banner>}
+      {s.status === 'offered' && (
+        <section className="card">
+          <h2>Can you work this shift?</h2>
+          <div className="row">
+            <button className="btn primary big" disabled={busy} onClick={() => respond('accepted')}>
+              Confirm shift
+            </button>
+            <button className="btn big" disabled={busy} onClick={() => respond('declined')}>
+              Decline
+            </button>
+          </div>
+        </section>
+      )}
 
       <div className="detail-grid">
         <section className="card">

@@ -354,11 +354,12 @@ function Body() {
       ? [{ key: 'none', phase: null as Phase | null, shifts: d.shifts.filter((s) => !s.phase_id || !d.phases.some((p) => p.id === s.phase_id)) }]
       : []),
   ];
-  const addToPhase = (p: Phase) => {
+  // Pick a phase for the new shift: it goes into that phase and the dates start on the phase's first day (times are kept).
+  const addToPhase = (p: Phase, scroll = true) => {
     const day = p.starts_on.slice(0, 10);
     const swap = (v: string) => `${day}T${v.slice(11)}`;
     setF((x) => ({ ...x, phaseId: p.id, startsAt: swap(x.startsAt), endsAt: swap(x.endsAt) }));
-    shiftForm.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (scroll) shiftForm.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
   const templateForPhase = (p: Phase) => {
     setTplPhase(p.id);
@@ -443,6 +444,19 @@ function Body() {
 
       <section className="card" ref={shiftForm}>
         <h2>Add a shift</h2>
+        {d.phases.length > 0 && (
+          <div className="phase-tabs" role="tablist" aria-label="Phase for the new shift">
+            {d.phases.map((p) => (
+              <button key={p.id} type="button" role="tab" aria-selected={f.phaseId === p.id} className={f.phaseId === p.id ? 'tab on' : 'tab'} onClick={() => addToPhase(p, false)}>
+                {p.label}
+                <span className="muted small"> {fmtDate(p.starts_on.slice(0, 10))}</span>
+              </button>
+            ))}
+            <button type="button" role="tab" aria-selected={f.phaseId === ''} className={f.phaseId === '' ? 'tab on' : 'tab'} onClick={() => setF((x) => ({ ...x, phaseId: '' }))}>
+              No phase
+            </button>
+          </div>
+        )}
         <form className="grid-form" onSubmit={addShift}>
           <label>
             Role
@@ -473,26 +487,6 @@ function Body() {
               <input value={f.roleName} onChange={(e) => setF({ ...f, roleName: e.target.value })} placeholder="Audio Tech" required />
             )}
           </label>
-          {d.phases.length > 0 && (
-            <label>
-              Phase
-              <select
-                value={f.phaseId}
-                onChange={(e) => {
-                  const p = d.phases.find((x) => x.id === e.target.value);
-                  if (p) addToPhase(p);
-                  else setF({ ...f, phaseId: '' });
-                }}
-              >
-                <option value="">No phase</option>
-                {d.phases.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
           <label>
             Starts
             <input type="datetime-local" value={f.startsAt} onChange={(e) => setF({ ...f, startsAt: e.target.value })} required />
