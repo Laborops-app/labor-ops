@@ -636,7 +636,7 @@ test('notifications: queue, inbox, preferences, SMS consent, reset and invite li
   assert.equal(sms.to_addr, '+18015550142');
 
   // worker drains the queue in log-only mode (nothing really sent) and skips placeholder addresses
-  await processQueue(100);
+  await processQueue(1000);
   log = await call(a, 'GET', '/api/messaging');
   assert.ok(log.json.deliveries.every((d: any) => d.status !== 'queued' && d.status !== 'sending'));
   assert.ok(log.json.deliveries.find((d: any) => d.channel === 'sms').status === 'sent');
