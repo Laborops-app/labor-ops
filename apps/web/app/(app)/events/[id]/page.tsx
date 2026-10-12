@@ -302,6 +302,11 @@ function Body() {
                         {a.user_name} <Pill status={a.status} />
                       </span>
                       <span className="row">
+                        {(a.status === 'offered' || a.status === 'pending') && (
+                          <button className="btn small primary" onClick={() => run(() => api(`/api/assignments/${a.id}/confirm`, { body: {} }), `Confirmed ${a.user_name}.`)}>
+                            Confirm
+                          </button>
+                        )}
                         {a.status === 'accepted' && !a.clocked_in_at && (
                           <button className="btn small" onClick={() => run(() => api(`/api/assignments/${a.id}/check-in`, { body: {} }))}>
                             Check in
@@ -322,6 +327,20 @@ function Body() {
                     </li>
                   ))}
                 </ul>
+              )}
+              {pending.length + s.assignments.filter((a) => a.status === 'offered').length > 1 && (
+                <div className="row">
+                  <button
+                    className="btn small"
+                    onClick={() =>
+                      run(async () => {
+                        for (const a of s.assignments.filter((x) => x.status === 'offered' || x.status === 'pending')) await api(`/api/assignments/${a.id}/confirm`, { body: {} });
+                      }, 'Confirmed everyone on this shift.')
+                    }
+                  >
+                    Confirm everyone
+                  </button>
+                </div>
               )}
               {!full && (
                 <div className="row">

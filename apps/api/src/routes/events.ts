@@ -321,6 +321,25 @@ export async function eventRoutes(app: FastifyInstance) {
     return reply.code(code).send(body);
   });
 
+  // Confirm someone on their behalf after the offer went out (they said yes by phone, in person, ...).
+  app.post('/api/assignments/:id/confirm', { preHandler: mgr }, async (req, reply) => {
+    const { id: aId } = id.parse(req.params);
+    const r = await withTenant(req.user.tid, async (c) => {
+      const a = (await c.query("UPDATE shift_assignments SET status = 'accepted' WHERE id = $1 AND status IN ('offered','pending') RETURNING id, user_id, shift_id", [aId])).rows[0];
+      if (!a) return null;
+      await audit(c, req.user.tid, req.user.sub, 'assignment.confirm', 'assignment', aId);
+      const d = await describeShift(c, req.user.tid, a.shift_id, a.user_id);
+      if (d)
+        await notify(c, req.user.tid, {
+          userId: a.user_id, category: 'assignment', title: `You're confirmed: ${d.role}`,
+          body: `${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nYour coordinator confirmed you for this shift.`, link: `/my-shifts/${a.id}`,
+          sms: `Confirmed: ${d.role}, ${d.event}, ${d.when}.`,
+        });
+      return a;
+    });
+    return r ? { ok: true } : reply.code(404).send({ error: 'Nothing to confirm: the shift is already confirmed or declined' });
+  });
+
   app.delete('/api/assignments/:id', { preHandler: mgr }, async (req, reply) => {
     const { id: aId } = id.parse(req.params);
     const n = await withTenant(req.user.tid, async (c) => {

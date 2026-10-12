@@ -1429,3 +1429,15 @@ test('coordinator can confirm crew straight onto a shift (no accept step)', asyn
   assert.equal((await call(a, 'POST', `/api/shifts/${sh2}/fill-from-group`, { groupId: g, mode: 'auto', confirmed: true })).status, 200);
   assert.equal((await call(c3.session, 'GET', '/api/my/shifts')).json.shifts[0].status, 'accepted');
 });
+
+test('coordinator can confirm an offered shift on the crew member\'s behalf', async () => {
+  const a = await register('cfm');
+  const c1 = await mkCrew(a, 'cf1');
+  const ev = await mkEvent(a);
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Tech', startsAt: start(90), endsAt: start(96), headcount: 1 })).json.shift.id;
+  const asg = (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id })).json.assignment.id;
+  assert.equal((await call(c1.session, 'POST', `/api/assignments/${asg}/confirm`)).status, 403);
+  assert.equal((await call(a, 'POST', `/api/assignments/${asg}/confirm`)).status, 200);
+  assert.equal((await call(c1.session, 'GET', '/api/my/shifts')).json.shifts[0].status, 'accepted');
+  assert.equal((await call(a, 'POST', `/api/assignments/${asg}/confirm`)).status, 404);
+});
