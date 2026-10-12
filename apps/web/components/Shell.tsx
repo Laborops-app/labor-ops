@@ -51,6 +51,26 @@ const NAV: { href: string; label: string; roles: Role[]; icon: React.ReactNode }
     ),
   },
   {
+    href: '/customers',
+    label: 'Customers',
+    roles: ['admin', 'manager'],
+    icon: icon(
+      <>
+        <path d="M4 21V7l8-4 8 4v14M9 21v-6h6v6M9 10h.01M15 10h.01" />
+      </>,
+    ),
+  },
+  {
+    href: '/quotes',
+    label: 'Quotes',
+    roles: ['admin', 'manager'],
+    icon: icon(
+      <>
+        <path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h7" />
+      </>,
+    ),
+  },
+  {
     href: '/crew',
     label: 'Crew',
     roles: ['admin', 'manager'],

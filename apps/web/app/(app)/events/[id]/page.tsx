@@ -6,6 +6,7 @@ import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { roleKey } from '@/components/Stars';
 import FillFromGroup from '@/components/FillFromGroup';
+import CopyEvent from '@/components/CopyEvent';
 import { api, ApiError, Me, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
 import { EventDetails, Phases, Clocking, RentmanCard, EventFull, Phase } from '@/components/EventInfo';
 import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
@@ -461,6 +462,13 @@ function Body({ me }: { me: Me }) {
         >
           Event chat
         </button>
+        <button
+          className="btn small"
+          onClick={() => api<{ quote: { id: string } }>('/api/quotes', { body: { eventId: id } }).then((r) => router.push(`/quotes/${r.quote.id}`)).catch((e) => setError(e.message))}
+        >
+          Create quote
+        </button>
+        <CopyEvent eventId={id} name={ev.name} customerId={ev.customer_id ?? null} onError={setError} label="Copy event" />
         <button
           className="btn ghost small danger"
           onClick={() => {

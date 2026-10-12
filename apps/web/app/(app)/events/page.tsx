@@ -5,6 +5,7 @@ import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, fmtDate } from '@/lib/api';
 import RentmanPicker from '@/components/RentmanPicker';
+import CustomerSelect from '@/components/CustomerSelect';
 
 type Ev = { id: string; name: string; client: string | null; venue: string | null; start_date: string; end_date: string; shift_count: number; slots: number; accepted: number };
 const today = () => new Date().toISOString().slice(0, 10);
@@ -14,6 +15,7 @@ function Body() {
   const [error, setError] = useState('');
   const [f, setF] = useState({ name: '', client: '', venue: '', address: '', startDate: today(), endDate: today() });
   const [rm, setRm] = useState<number | null>(null);
+  const [cust, setCust] = useState<string | null>(null);
 
   const load = () =>
     api<{ events: Ev[] }>('/api/events')
@@ -27,7 +29,7 @@ function Body() {
     e.preventDefault();
     setError('');
     try {
-      await api('/api/events', { body: { ...f, client: f.client || null, venue: f.venue || null, address: f.address || null, rentmanProjectId: rm } });
+      await api('/api/events', { body: { ...f, client: f.client || null, venue: f.venue || null, address: f.address || null, rentmanProjectId: rm, customerId: cust || undefined } });
       setRm(null);
       setF({ name: '', client: '', venue: '', address: '', startDate: today(), endDate: today() });
       load();
@@ -65,9 +67,10 @@ function Body() {
             Name
             <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required />
           </label>
+          <CustomerSelect value={cust} onPick={(c) => { setCust(c?.id ?? null); if (c) setF({ ...f, client: c.name }); }} />
           <label>
-            Client
-            <input value={f.client} onChange={(e) => setF({ ...f, client: e.target.value })} />
+            Client name
+            <input value={f.client} onChange={(e) => { setCust(null); setF({ ...f, client: e.target.value }); }} />
           </label>
           <label>
             Venue

@@ -2,8 +2,9 @@
 import { useEffect, useState } from 'react';
 import RentmanPicker, { RmProject } from '@/components/RentmanPicker';
 import { api, fmtDate, getPosition } from '@/lib/api';
+import CustomerSelect from '@/components/CustomerSelect';
 
-export type EventFull = { id: string; name: string; client: string | null; venue: string | null; address: string | null; notes: string | null; start_date: string; end_date: string; clock_mode?: 'self' | 'coordinator'; geo_lat?: number | null; geo_lng?: number | null; geofence_m?: number | null };
+export type EventFull = { id: string; customer_id?: string | null; name: string; client: string | null; venue: string | null; address: string | null; notes: string | null; start_date: string; end_date: string; clock_mode?: 'self' | 'coordinator'; geo_lat?: number | null; geo_lng?: number | null; geofence_m?: number | null };
 export type Phase = { id: string; label: string; starts_on: string; ends_on: string };
 
 const PRESETS = ['Load in', 'Setup', 'Rehearsal', 'Tech', 'Show day', 'Show days', 'Strike', 'Load out'];
@@ -13,9 +14,9 @@ const range = (a: string, b: string) => (d10(a) === d10(b) ? fmtDate(d10(a)) : `
 /** Event name, client, venue and address, with an edit form. */
 export function EventDetails({ ev, hasPhases, onSaved, onError }: { ev: EventFull; hasPhases: boolean; onSaved: () => void; onError: (m: string) => void }) {
   const [editing, setEditing] = useState(false);
-  const [f, setF] = useState({ name: '', client: '', venue: '', address: '', notes: '', startDate: '', endDate: '' });
+  const [f, setF] = useState<{ name: string; client: string; venue: string; address: string; notes: string; startDate: string; endDate: string; customerId: string | null }>({ name: '', client: '', venue: '', address: '', notes: '', startDate: '', endDate: '', customerId: null });
   const open = () => {
-    setF({ name: ev.name, client: ev.client ?? '', venue: ev.venue ?? '', address: ev.address ?? '', notes: ev.notes ?? '', startDate: d10(ev.start_date), endDate: d10(ev.end_date) });
+    setF({ name: ev.name, client: ev.client ?? '', venue: ev.venue ?? '', address: ev.address ?? '', notes: ev.notes ?? '', startDate: d10(ev.start_date), endDate: d10(ev.end_date), customerId: ev.customer_id ?? null });
     setEditing(true);
   };
   const save = async (e: React.FormEvent) => {
@@ -86,10 +87,13 @@ export function EventDetails({ ev, hasPhases, onSaved, onError }: { ev: EventFul
           Event name
           <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required maxLength={150} />
         </label>
-        <label>
-          Client
-          <input value={f.client} onChange={(e) => setF({ ...f, client: e.target.value })} maxLength={200} placeholder="Who is this event for?" />
-        </label>
+        <CustomerSelect value={f.customerId} onPick={(c) => setF({ ...f, customerId: c?.id ?? null, client: c ? c.name : f.client })} />
+        {!f.customerId && (
+          <label>
+            Client name
+            <input value={f.client} onChange={(e) => setF({ ...f, client: e.target.value })} maxLength={200} placeholder="Who is this event for?" />
+          </label>
+        )}
         <label>
           Venue
           <input value={f.venue} onChange={(e) => setF({ ...f, venue: e.target.value })} maxLength={200} />

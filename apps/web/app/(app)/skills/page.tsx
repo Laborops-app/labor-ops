@@ -4,9 +4,9 @@ import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api } from '@/lib/api';
 
-type Skill = { id: string; name: string; payRate: number; active: boolean; groupId: string | null };
+type Skill = { id: string; name: string; payRate: number; billRate?: number; active: boolean; groupId: string | null };
 type Group = { id: string; name: string };
-type Edit = { name: string; payRate: string };
+type Edit = { name: string; payRate: string; billRate: string };
 
 const money = (n: number) => n.toLocaleString([], { style: 'currency', currency: 'USD' });
 
@@ -14,7 +14,7 @@ function Body() {
   const [list, setList] = useState<Skill[] | null>(null);
   const [edits, setEdits] = useState<Record<string, Edit>>({});
   const [groups, setGroups] = useState<Group[]>([]);
-  const [f, setF] = useState({ name: '', payRate: '', groupId: '' });
+  const [f, setF] = useState({ name: '', payRate: '', billRate: '', groupId: '' });
   const [newGroup, setNewGroup] = useState('');
   const [renaming, setRenaming] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
@@ -55,16 +55,16 @@ function Body() {
     e.preventDefault();
     const n = rateNum(f.payRate || '0');
     if (!Number.isFinite(n) || n < 0) return setError('Enter a pay rate of 0 or more.');
-    if (await act('add', `Added ${f.name}.`, () => api('/api/skills', { body: { name: f.name, payRate: n, groupId: f.groupId || null } }))) setF({ name: '', payRate: '', groupId: f.groupId });
+    if (await act('add', `Added ${f.name}.`, () => api('/api/skills', { body: { name: f.name, payRate: n, billRate: rateNum(f.billRate || '0') || 0, groupId: f.groupId || null } }))) setF({ name: '', payRate: '', billRate: '', groupId: f.groupId });
   };
   const save = (s: Skill) => {
     const e = edits[s.id];
     if (!e) return;
     const n = rateNum(e.payRate);
     if (!Number.isFinite(n) || n < 0) return setError('Enter a pay rate of 0 or more.');
-    act(s.id, `Saved ${e.name}.`, () => api(`/api/skills/${s.id}`, { method: 'PATCH', body: { name: e.name, payRate: n } }));
+    act(s.id, `Saved ${e.name}.`, () => api(`/api/skills/${s.id}`, { method: 'PATCH', body: { name: e.name, payRate: n, billRate: rateNum(e.billRate) || 0 } }));
   };
-  const set = (s: Skill, patch: Partial<Edit>) => setEdits({ ...edits, [s.id]: { name: edits[s.id]?.name ?? s.name, payRate: edits[s.id]?.payRate ?? String(s.payRate), ...patch } });
+  const set = (s: Skill, patch: Partial<Edit>) => setEdits({ ...edits, [s.id]: { name: edits[s.id]?.name ?? s.name, payRate: edits[s.id]?.payRate ?? String(s.payRate), billRate: edits[s.id]?.billRate ?? String(s.billRate ?? 0), ...patch } });
 
   const addGroup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -166,6 +166,10 @@ function Body() {
             Hourly pay rate (USD)
             <input type="number" min={0} max={10000} step="0.01" inputMode="decimal" value={f.payRate} onChange={(e) => setF({ ...f, payRate: e.target.value })} placeholder="25.00" required />
           </label>
+          <label>
+            Hourly billing rate (USD, for quotes)
+            <input type="number" min={0} max={10000} step="0.01" inputMode="decimal" value={f.billRate} onChange={(e) => setF({ ...f, billRate: e.target.value })} placeholder="45.00" />
+          </label>
           <div className="form-actions">
             <button className="btn primary" disabled={busy === 'add'}>
               Add
@@ -194,7 +198,8 @@ function Body() {
                 <tr>
                   <th>Name</th>
                   <th>Group</th>
-                  <th>Hourly rate</th>
+                  <th>Pay rate</th>
+                  <th>Bill rate</th>
                   <th>Status</th>
                   <th></th>
                 </tr>
@@ -244,6 +249,13 @@ function Body() {
                             onChange={(ev) => set(s, { payRate: ev.target.value })}
                             aria-label={`Hourly rate for ${s.name}`}
                           />
+                          <span className="muted small">/hr</span>
+                        </span>
+                      </td>
+                      <td>
+                        <span className="money-input">
+                          <span aria-hidden="true">$</span>
+                          <input type="number" min={0} max={10000} step="0.01" inputMode="decimal" value={e?.billRate ?? (s.billRate ?? 0).toFixed(2)} onChange={(ev) => set(s, { billRate: ev.target.value })} aria-label={`Billing rate for ${s.name}`} />
                           <span className="muted small">/hr</span>
                         </span>
                       </td>

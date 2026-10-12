@@ -1511,3 +1511,121 @@ test('rentman: connect with a token, sync projects, link to an event, equipment 
     globalThis.fetch = real;
   }
 });
+
+test('customers: CRUD, duplicates, import from event client names, roles, isolation', async () => {
+  const a = await register('crm1');
+  const b = await register('crm2');
+  const c1 = await mkCrew(a, 'crmc1');
+  assert.equal((await call(c1.session, 'GET', '/api/customers')).status, 403);
+  const made = await call(a, 'POST', '/api/customers', { name: 'Acme Corp', contactName: 'Pat', email: 'pat@acme.example' });
+  assert.equal(made.status, 201, made.text);
+  const id = made.json.customer.id;
+  assert.equal((await call(a, 'POST', '/api/customers', { name: 'acme corp' })).status, 409);
+  assert.equal((await call(a, 'POST', '/api/customers', { name: 'X', email: 'nope' })).status, 400);
+  const up = await call(a, 'PATCH', `/api/customers/${id}`, { phone: '555-1234', notes: 'Pays net 30' });
+  assert.equal(up.json.customer.phone, '555-1234');
+  assert.equal(up.json.customer.contact_name, 'Pat', 'untouched fields stay');
+  assert.equal((await call(b, 'GET', `/api/customers/${id}`)).status, 404);
+
+  // events with client text only get turned into customers
+  await call(a, 'POST', '/api/events', { name: 'Old Show', client: 'Globex', startDate: '2029-01-01', endDate: '2029-01-01' });
+  await call(a, 'POST', '/api/events', { name: 'Old Show 2', client: 'ACME CORP', startDate: '2029-02-01', endDate: '2029-02-01' });
+  const imp = await call(a, 'POST', '/api/customers/import-from-events');
+  assert.equal(imp.json.created, 1);
+  assert.equal(imp.json.linked, 2);
+  assert.equal((await call(a, 'GET', `/api/customers/${id}`)).json.events.length, 1);
+
+  // an event created for a customer carries its name
+  const ev = await call(a, 'POST', '/api/events', { name: 'New Show', customerId: id, startDate: '2030-01-01', endDate: '2030-01-01' });
+  assert.equal(ev.json.event.client, 'Acme Corp');
+  assert.equal(ev.json.event.customer_id, id);
+  assert.equal((await call(a, 'POST', '/api/events', { name: 'Z', customerId: (await call(b, 'POST', '/api/customers', { name: 'Other' })).json.customer.id, startDate: '2030-01-01', endDate: '2030-01-01' })).status, 404);
+  assert.equal((await call(a, 'DELETE', `/api/customers/${id}`)).status, 200);
+  assert.equal((await call(a, 'GET', `/api/events/${ev.json.event.id}`)).json.event.customer_id, null);
+});
+
+test('copy event: dates shift, phases and shifts come along, crew do not', async () => {
+  const a = await register('cpy');
+  const c1 = await mkCrew(a, 'cpyc1');
+  const src = (await call(a, 'POST', '/api/events', { name: 'Gala', client: 'Acme', venue: 'Hall', startDate: '2030-05-10', endDate: '2030-05-10' })).json.event.id;
+  const ph = (await call(a, 'POST', `/api/events/${src}/phases`, { label: 'Show', startDate: '2030-05-10', endDate: '2030-05-11' })).json.phase;
+  const sh = (await call(a, 'POST', `/api/events/${src}/shifts`, { roleName: 'Audio A1', startsAt: '2030-05-10T15:00:00Z', endsAt: '2030-05-10T23:00:00Z', headcount: 2, phaseId: ph.id })).json.shift.id;
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id })).status, 201);
+
+  assert.equal((await call(c1.session, 'POST', `/api/events/${src}/copy`, { name: 'x', startDate: '2031-05-10' })).status, 403);
+  const cp = await call(a, 'POST', `/api/events/${src}/copy`, { name: 'Gala 2031', startDate: '2031-05-09' });
+  assert.equal(cp.status, 201, cp.text);
+  assert.equal(cp.json.offsetDays, 364);
+  const d = (await call(a, 'GET', `/api/events/${cp.json.event.id}`)).json;
+  assert.equal(d.event.name, 'Gala 2031');
+  assert.equal(d.event.venue, 'Hall');
+  assert.equal(d.phases.length, 1);
+  assert.equal(d.phases[0].starts_on.slice(0, 10), '2031-05-09');
+  assert.equal(d.shifts.length, 1);
+  assert.equal(d.shifts[0].role_name, 'Audio A1');
+  assert.equal(d.shifts[0].headcount, 2);
+  assert.equal(d.shifts[0].phase_id, d.phases[0].id, 'phase remapped to the copy');
+  assert.equal(d.shifts[0].starts_at.slice(0, 10), '2031-05-09');
+  assert.equal(d.shifts[0].assignments.length, 0, 'crew are not copied');
+  // the original is untouched
+  assert.equal((await call(a, 'GET', `/api/events/${src}`)).json.shifts[0].assignments.length, 1);
+  assert.equal((await call(a, 'POST', `/api/events/${src}/copy`, { name: 'Bare', startDate: '2032-01-01', includeShifts: false, includePhases: false })).json.shifts, 0);
+});
+
+test('quotes: lines from an event, totals, send, customer accepts without signing in', async () => {
+  const a = await register('qte');
+  const b = await register('qte2');
+  const c1 = await mkCrew(a, 'qtec1');
+  const tid = await tenantOf(a);
+  const sk = (await call(a, 'POST', '/api/skills', { name: 'Audio A1', payRate: 30, billRate: 60 })).json.skill;
+  assert.equal(sk.billRate, 60);
+  assert.equal((await call(c1.session, 'GET', '/api/quotes')).status, 403);
+
+  const cu = (await call(a, 'POST', '/api/customers', { name: 'Acme', contactName: 'Pat', email: 'pat@acme.example' })).json.customer.id;
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Gala', customerId: cu, startDate: '2030-05-10', endDate: '2030-05-10' })).json.event.id;
+  await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Audio A1', startsAt: '2030-05-10T15:00:00Z', endsAt: '2030-05-10T23:00:00Z', headcount: 2 });
+
+  const q = await call(a, 'POST', '/api/quotes', { eventId: ev, taxPct: 10, discount: 100 });
+  assert.equal(q.status, 201, q.text);
+  assert.equal(q.json.quote.number, 1001);
+  assert.equal(q.json.quote.customer_id, cu);
+  assert.equal(q.json.lines.length, 1);
+  assert.equal(q.json.lines[0].amount, 960); // 2 people × 8h × $60
+  assert.deepEqual(q.json.totals, { subtotal: 960, discount: 100, tax: 86, total: 946 });
+  const id = q.json.quote.id;
+  assert.equal((await call(a, 'POST', '/api/quotes', { title: 'Second' })).json.quote.number, 1002);
+  assert.equal((await call(b, 'GET', `/api/quotes/${id}`)).status, 404);
+
+  const ed = await call(a, 'PUT', `/api/quotes/${id}`, { lines: [{ description: 'Audio A1', qty: 2, hours: 8, rate: 60 }, { description: 'Travel', qty: 1, hours: 1, rate: 40.5 }], taxPct: 0, discount: 0 });
+  assert.equal(ed.json.totals.total, 1000.5);
+
+  // drafts are not visible to the customer; sending needs lines and an address
+  assert.equal((await call(a, 'POST', `/api/quotes/${(await call(a, 'POST', '/api/quotes', { title: 'Empty' })).json.quote.id}/send`, { to: 'x@y.example' })).status, 400);
+  const sent = await call(a, 'POST', `/api/quotes/${id}/send`, { message: 'Thanks for the chance!' });
+  assert.equal(sent.status, 200, sent.text);
+  assert.equal(sent.json.sentTo, 'pat@acme.example');
+  const mail = await withTenant(tid, (c) => c.query("SELECT html, subject FROM deliveries WHERE to_addr = 'pat@acme.example' ORDER BY created_at DESC LIMIT 1"));
+  const t = /\/quote\?t=([\w.-]+)/.exec(mail.rows[0].html)![1];
+  assert.match(mail.rows[0].subject, /Quote #1001/);
+
+  const v = await call(null, 'GET', `/api/quote/view?t=${t}`);
+  assert.equal(v.status, 200, v.text);
+  assert.equal(v.json.quote.totals.total, 1000.5);
+  assert.equal(v.json.quote.canRespond, true);
+  assert.equal((await call(null, 'GET', '/api/quote/view?t=bad.token')).status, 400);
+
+  // editing a sent quote puts it back to draft and the customer can no longer see it
+  assert.equal((await call(a, 'PUT', `/api/quotes/${id}`, { intro: 'Revised' })).json.quote.status, 'draft');
+  assert.equal((await call(null, 'GET', `/api/quote/view?t=${t}`)).status, 404);
+  assert.equal((await call(a, 'POST', `/api/quotes/${id}/send`)).status, 200);
+
+  assert.equal((await call(null, 'POST', '/api/quote/respond', { t, response: 'accepted', note: 'Go ahead' })).json.status, 'accepted');
+  assert.equal((await call(null, 'POST', '/api/quote/respond', { t, response: 'declined' })).status, 409);
+  const after = (await call(a, 'GET', `/api/quotes/${id}`)).json.quote;
+  assert.equal(after.status, 'accepted');
+  assert.equal(after.response_note, 'Go ahead');
+  const note = await withTenant(tid, (c) => c.query("SELECT 1 FROM notifications WHERE title = 'Quote #1001 accepted'"));
+  assert.ok(note.rowCount! >= 1, 'staff are told');
+  assert.equal((await call(a, 'GET', `/api/customers/${cu}`)).json.quotes.length, 1);
+  assert.equal((await call(a, 'DELETE', `/api/quotes/${id}`)).status, 200);
+});
