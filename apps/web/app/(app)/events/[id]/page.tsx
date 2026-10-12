@@ -25,6 +25,8 @@ type Shift = {
   crew_status: Elig[];
   phase_id: string | null;
   hourly_rate?: number | null;
+  role_rate?: number | null;
+  pay_rate_override?: string | null;
   estimated_cost?: number | null;
 };
 type Detail = { event: EventFull; shifts: Shift[]; phases: Phase[] };
@@ -62,6 +64,7 @@ function Body({ me }: { me: Me }) {
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
   const [pick, setPick] = useState<Record<string, string>>({});
+  const [payEdit, setPayEdit] = useState<{ id: string; value: string } | null>(null);
   // "Confirm automatically": crew are put straight on the shift instead of being asked to accept. Remembered on this device.
   const [autoConfirm, setAutoConfirmState] = useState(false);
   useEffect(() => {
@@ -259,6 +262,25 @@ function Body({ me }: { me: Me }) {
                       </>
                     )}
                   </div>
+                  {s.role_rate !== undefined && (
+                    <div className="small" style={{ marginTop: '.3rem' }}>
+                      {payEdit?.id === s.id ? (
+                        <span className="row" style={{ gap: '.4rem', flexWrap: 'wrap' }}>
+                          <span aria-hidden="true">$</span>
+                          <input type="number" min={0.01} step="0.01" autoFocus value={payEdit.value} onChange={(e) => setPayEdit({ id: s.id, value: e.target.value })} aria-label="Pay rate for this shift" style={{ width: '6.5rem' }} />
+                          <span className="muted">/hr for this shift only{s.role_rate ? ` (role rate ${money(s.role_rate)})` : ''}</span>
+                          <button className="btn small primary" disabled={!(Number(payEdit.value) > 0)} onClick={() => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { payRate: Math.round(Number(payEdit.value) * 100) / 100 } }), 'Pay rate updated. Anyone on the shift has been told.').then(() => setPayEdit(null))}>Save</button>
+                          {s.pay_rate_override && <button className="btn small" onClick={() => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { payRate: null } }), 'Back to the role pay rate.').then(() => setPayEdit(null))}>Use role rate</button>}
+                          <button className="btn ghost small" onClick={() => setPayEdit(null)}>Cancel</button>
+                        </span>
+                      ) : (
+                        <>
+                          {s.pay_rate_override && <span className="chip">Custom pay rate</span>}{' '}
+                          <button className="btn ghost small" onClick={() => setPayEdit({ id: s.id, value: String(s.hourly_rate ?? s.role_rate ?? '') })}>Change pay rate</button>
+                        </>
+                      )}
+                    </div>
+                  )}
                   <div className="shift-flags">
                     {s.is_open && <span className="chip open">Open for claiming</span>}
                     {s.required_certs?.map((c) => (

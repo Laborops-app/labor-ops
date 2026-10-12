@@ -20,7 +20,7 @@ const ENTRY_SQL = `
   SELECT t.id, t.status, t.clock_in, t.clock_out, t.approved_at,
     ROUND(EXTRACT(EPOCH FROM (COALESCE(t.clock_out, now()) - t.clock_in)) / 3600.0, 2)::float AS hours,
     u.id AS user_id, u.name AS user_name, u.email AS user_email,
-    s.role_name, e.name AS event_name, ap.name AS approved_by_name
+    s.role_name, s.pay_rate_override AS shift_rate, e.name AS event_name, ap.name AS approved_by_name
   FROM time_entries t
   JOIN users u ON u.id = t.user_id
   JOIN shift_assignments a ON a.id = t.assignment_id
@@ -286,7 +286,9 @@ export async function timeRoutes(app: FastifyInstance) {
           (await withTenant(req.user.tid, (c) => c.query('SELECT lower(name) AS n, pay_rate FROM skills'))).rows.map((r: any) => [r.n as string, Number(r.pay_rate)]),
         )
       : new Map<string, number>();
-    const rateFor = (role: string) => rates.get(role.replace(/\s*\(.*\)\s*$/, '').trim().toLowerCase());
+    const roleRate = (role: string) => rates.get(role.replace(/\s*\(.*\)\s*$/, '').trim().toLowerCase());
+    // A rate set on the shift itself wins over the role's rate.
+    const rateFor = (r: { role_name: string; shift_rate?: string | null }) => (r.shift_rate && Number(r.shift_rate) > 0 ? Number(r.shift_rate) : roleRate(r.role_name));
     const head = ['Employee', 'Email', 'Event', 'Role', 'Clock in (UTC)', 'Clock out (UTC)', 'Hours', 'Approved by', ...(isAdmin ? ['Hourly rate', 'Pay'] : [])];
     const lines = [head.join(',')].concat(
       rows.map((r) =>
@@ -299,7 +301,7 @@ export async function timeRoutes(app: FastifyInstance) {
           r.clock_out?.toISOString(),
           r.hours,
           r.approved_by_name,
-          ...(isAdmin ? [rateFor(r.role_name) ?? '', rateFor(r.role_name) === undefined ? '' : (Math.round(Number(r.hours) * rateFor(r.role_name)! * 100) / 100).toFixed(2)] : []),
+          ...(isAdmin ? [rateFor(r) ?? '', rateFor(r) === undefined ? '' : (Math.round(Number(r.hours) * rateFor(r)! * 100) / 100).toFixed(2)] : []),
         ]
           .map(csvCell)
           .join(','),

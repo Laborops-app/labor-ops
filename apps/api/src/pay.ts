@@ -97,7 +97,9 @@ export function priceShift(rules: Rules | null, rate: number | undefined, starts
 /** Estimate for a specific person (counts the hours they already work that week) or, without a user, for the shift on its own. */
 export async function estimateShift(c: PoolClient, rules: Rules, rates: Map<string, number>, role: string, startsAt: Date | string, endsAt: Date | string, userId?: string | null, shiftId: string | null = null): Promise<Priced> {
   const prior = userId ? await priorWeekHours(c, rules, userId, shiftId, startsAt) : 0;
-  return priceShift(rules, rateFor(rates, role), startsAt, endsAt, prior);
+  // A rate set on this one shift replaces the role's rate.
+  const override = shiftId ? Number((await c.query('SELECT pay_rate_override FROM shifts WHERE id = $1', [shiftId])).rows[0]?.pay_rate_override ?? 0) : 0;
+  return priceShift(rules, override > 0 ? override : rateFor(rates, role), startsAt, endsAt, prior);
 }
 
 export const fmtH = (n: number) => `${Math.round(n * 10) / 10} h`;

@@ -1837,3 +1837,49 @@ test('rates: two rates per role; only admins and allowed coordinators can adjust
   await call(a, 'PUT', `/api/crew/${coordId}/rate-permission`, { allowed: false });
   assert.equal((await call(coord, 'PATCH', `/api/skills/${skill.id}`, { billRate: 1 })).status, 403);
 });
+
+test('pay override: one shift can have its own pay rate, only for those allowed to adjust rates', async () => {
+  const a = await register('pov');
+  await call(a, 'POST', '/api/skills', { name: 'Rigger', payRate: 40, billRate: 90 });
+  const crew = await mkCrew(a, 'povcrew');
+  const mk = await call(a, 'POST', '/api/crew', { name: 'Coord', email: `povco-${run}@test.example`, password: 'password123', role: 'manager' });
+  const coord = await login(`povco-${run}@test.example`, 'password123');
+  const tid = await tenantOf(a);
+  const ev = await mkEvent(a);
+  const mkShift = async () => (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Rigger', startsAt: start(100), endsAt: start(104), headcount: 2 })).json.shift.id as string;
+  const sh = await mkShift();
+  const other = await mkShift();
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: crew.id })).status, 201);
+  const shiftOf = async (s: Session, id: string) => (await call(s, 'GET', `/api/events/${ev}`)).json.shifts.find((x: any) => x.id === id);
+
+  // not allowed: coordinators without permission and crew
+  assert.equal((await call(coord, 'PATCH', `/api/shifts/${sh}`, { payRate: 55 })).status, 403);
+  assert.equal((await call(crew.session, 'PATCH', `/api/shifts/${sh}`, { payRate: 55 })).status, 403);
+  assert.equal((await shiftOf(coord, sh)).hourly_rate, undefined, 'coordinators without permission see no rates');
+  assert.equal((await call(a, 'PATCH', `/api/shifts/${sh}`, { payRate: 0 })).status, 400);
+
+  // admin sets 55 on this shift only
+  assert.equal((await call(a, 'PATCH', `/api/shifts/${sh}`, { payRate: 55 })).status, 200);
+  let s1 = await shiftOf(a, sh);
+  assert.equal(s1.hourly_rate, 55);
+  assert.equal(s1.role_rate, 40);
+  assert.equal(s1.pay_rate_override, '55.00');
+  assert.equal(s1.estimated_cost, 55 * 4 * 2);
+  assert.equal((await shiftOf(a, other)).hourly_rate, 40, 'other shifts keep the role rate');
+
+  // the person on the shift sees the new pay and is told
+  const mine = (await call(crew.session, 'GET', '/api/my/shifts')).json.shifts.find((x: any) => x.shift_id === sh);
+  assert.equal(mine.hourly_rate, 55);
+  assert.equal(mine.estimated_pay, 220);
+  const n = await withTenant(tid, (c) => c.query("SELECT 1 FROM notifications WHERE user_id = $1 AND title LIKE 'Pay updated%'", [crew.id]));
+  assert.equal(n.rowCount, 1);
+
+  // an allowed coordinator can change and clear it
+  await call(a, 'PUT', `/api/crew/${mk.json.member.id}/rate-permission`, { allowed: true });
+  assert.equal((await call(coord, 'PATCH', `/api/shifts/${sh}`, { payRate: 60 })).status, 200);
+  assert.equal((await shiftOf(coord, sh)).hourly_rate, 60);
+  assert.equal((await call(coord, 'PATCH', `/api/shifts/${sh}`, { payRate: null })).status, 200);
+  s1 = await shiftOf(a, sh);
+  assert.equal(s1.hourly_rate, 40);
+  assert.equal(s1.pay_rate_override, null);
+});

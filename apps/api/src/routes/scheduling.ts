@@ -5,6 +5,7 @@ import { withTenant, audit } from '../db';
 import { guard, authenticate } from '../auth';
 import { notify, notifyStaff, describeShift } from '../notify';
 import { loadRules, checkRules } from '../pay';
+import { canAdjustRates } from '../rates';
 import { claimLinks } from '../notify/respond';
 import { syncEventChannel } from './chat';
 import { evaluateShift, findClash, filledCount, certMessage } from '../eligibility';
@@ -93,9 +94,10 @@ export async function schedulingRoutes(app: FastifyInstance) {
   app.patch('/api/shifts/:id', { preHandler: mgr }, async (req, reply) => {
     const { id } = idParam.parse(req.params);
     const b = z
-      .object({ isOpen: z.boolean().optional(), requiredCerts: certList.optional(), headcount: z.number().int().min(1).max(500).optional(), phaseId: z.string().uuid().nullable().optional() })
+      .object({ isOpen: z.boolean().optional(), requiredCerts: certList.optional(), headcount: z.number().int().min(1).max(500).optional(), phaseId: z.string().uuid().nullable().optional(), payRate: z.number().min(0.01).max(10000).multipleOf(0.01).nullable().optional() })
       .parse(req.body);
     const row = await withTenant(req.user.tid, async (c) => {
+      if (b.payRate !== undefined && !(await canAdjustRates(c, req.user))) return { error: 'You are not allowed to change pay rates. Ask an admin.', forbidden: true };
       if (b.headcount !== undefined) {
         const filled = await filledCount(c, id);
         if (b.headcount < filled) return { error: `${filled} people are already on this shift` };
@@ -104,10 +106,19 @@ export async function schedulingRoutes(app: FastifyInstance) {
       if (b.phaseId && !(await c.query('SELECT 1 FROM event_phases p JOIN shifts s ON s.event_id = p.event_id WHERE p.id = $1 AND s.id = $2', [b.phaseId, id])).rowCount) return { error: 'That phase belongs to a different event' };
       const r = await c.query(
         `UPDATE shifts SET offer_group_id = CASE WHEN $2::boolean IS FALSE THEN NULL ELSE offer_group_id END, is_open = COALESCE($2, is_open), required_certs = COALESCE($3, required_certs), headcount = COALESCE($4, headcount),
-                phase_id = CASE WHEN $5::boolean THEN $6::uuid ELSE phase_id END
+                phase_id = CASE WHEN $5::boolean THEN $6::uuid ELSE phase_id END,
+                pay_rate_override = CASE WHEN $7::boolean THEN $8::numeric ELSE pay_rate_override END
          WHERE id = $1 RETURNING *`,
-        [id, b.isOpen ?? null, b.requiredCerts ?? null, b.headcount ?? null, b.phaseId !== undefined, b.phaseId ?? null],
+        [id, b.isOpen ?? null, b.requiredCerts ?? null, b.headcount ?? null, b.phaseId !== undefined, b.phaseId ?? null, b.payRate !== undefined, b.payRate ?? null],
       );
+      // People already on the shift hear about a pay change (their pay line is recalculated from the new rate).
+      if (r.rows[0] && b.payRate !== undefined) {
+        const who = (await c.query("SELECT user_id FROM shift_assignments WHERE shift_id = $1 AND status <> 'declined'", [id])).rows;
+        for (const w of who) {
+          const d = await describeShift(c, req.user.tid, id, w.user_id);
+          if (d) await notify(c, req.user.tid, { userId: w.user_id, category: 'shift_change', title: `Pay updated: ${d.role}`, body: `${d.line}\n${d.payLine ?? 'Pay for this shift changed.'}`, link: '/my-shifts' });
+        }
+      }
       if (r.rows[0]) await audit(c, req.user.tid, req.user.sub, 'shift.update', 'shift', id, b);
       if (r.rows[0] && b.isOpen === true && wasOpen === false) {
         const d = await describeShift(c, req.user.tid, id);
@@ -126,6 +137,7 @@ export async function schedulingRoutes(app: FastifyInstance) {
       }
       return { shift: r.rows[0] };
     });
+    if ('forbidden' in row) return reply.code(403).send({ error: row.error });
     if ('error' in row) return reply.code(409).send(row);
     if (!row.shift) return reply.code(404).send({ error: 'Shift not found' });
     return row;

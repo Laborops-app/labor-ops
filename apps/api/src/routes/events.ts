@@ -1,7 +1,8 @@
 import type { PoolClient } from 'pg';
 import { notify, describeShift } from '../notify';
 import { syncEventChannel, sendDirectMessage } from './chat';
-import { loadRates, loadRules, estimateShift, checkRules } from '../pay';
+import { loadRates, loadRules, estimateShift, checkRules, rateFor } from '../pay';
+import { canAdjustRates } from '../rates';
 import { respondLinks } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -199,12 +200,13 @@ export async function eventRoutes(app: FastifyInstance) {
         )
       ).rows;
       const out = [];
-      // Pay is shown to admins only (coordinators see names, not rates).
-      const rates = req.user.role === 'admin' ? await loadRates(c) : null;
+      // Pay is shown to admins and to coordinators allowed to adjust rates (other coordinators see names, not rates).
+      const seePay = await canAdjustRates(c, req.user);
+      const rates = seePay ? await loadRates(c) : null;
       const rules = rates ? await loadRules(c) : null;
       for (const s of shifts) {
-        const pay = rates && rules ? await estimateShift(c, rules, rates, s.role_name, s.starts_at, s.ends_at) : null;
-        out.push({ ...s, ...(pay ? { hours: pay.hours, hourly_rate: pay.rate, estimated_cost: pay.estimate ? Math.round(pay.estimate * s.headcount * 100) / 100 : null } : {}), assignments: assigns.filter((a) => a.shift_id === s.id), crew_status: await evaluateShift(c, s.id) });
+        const pay = rates && rules ? await estimateShift(c, rules, rates, s.role_name, s.starts_at, s.ends_at, null, s.id) : null;
+        out.push({ ...s, ...(pay ? { hours: pay.hours, hourly_rate: pay.rate, role_rate: rateFor(rates!, s.role_name) ?? null, estimated_cost: pay.estimate ? Math.round(pay.estimate * s.headcount * 100) / 100 : null } : {}), assignments: assigns.filter((a) => a.shift_id === s.id), crew_status: await evaluateShift(c, s.id) });
       }
       const phases = (await c.query('SELECT id, label, starts_on, ends_on FROM event_phases WHERE event_id = $1 ORDER BY starts_on, ends_on, created_at', [eventId])).rows;
       return { event: ev, shifts: out, phases };
