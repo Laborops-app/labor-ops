@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { roleKey } from '@/components/Stars';
+import FillFromGroup from '@/components/FillFromGroup';
 import { api, ApiError, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
 import { EventDetails, Phases, Clocking, EventFull, Phase } from '@/components/EventInfo';
 import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
@@ -55,6 +56,7 @@ function Body() {
   const router = useRouter();
   const [d, setD] = useState<Detail | null>(null);
   const [crew, setCrew] = useState<Member[]>([]);
+  const [crewGroups, setCrewGroups] = useState<{ id: string; name: string }[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
@@ -99,6 +101,7 @@ function Body() {
     load();
     loadTemplates();
     api<{ crew: Member[] }>('/api/crew').then((r) => setCrew(r.crew.filter((m) => m.role === 'crew' && m.active)));
+    api<{ groups: { id: string; name: string }[] }>('/api/crew-groups').then((r) => setCrewGroups(r.groups)).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -337,6 +340,9 @@ function Body() {
                     Assign
                   </button>
                 </div>
+              )}
+              {!full && crewGroups.length > 0 && (
+                <FillFromGroup shiftId={s.id} groups={crewGroups} onError={setError} onDone={(m) => { setNote(m); load(); }} />
               )}
             </section>
           );

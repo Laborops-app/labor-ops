@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { notify, describeShift } from '../notify';
 import { syncEventChannel, sendDirectMessage } from './chat';
 import { loadRates, loadRules, estimateShift, checkRules } from '../pay';
@@ -29,6 +30,75 @@ const shiftBody = z.object({
 });
 
 const mgr = guard('admin', 'manager');
+
+/** Offer a shift to one crew member: checks, assignment, notification and chat message. Shared by the assign and fill-from-group routes. */
+export async function assignCrew(c: PoolClient, tid: string, actorId: string, shiftId: string, userId: string, override?: boolean): Promise<{ code: number; [k: string]: unknown }> {
+  const shift = (await c.query('SELECT * FROM shifts WHERE id = $1 FOR UPDATE', [shiftId])).rows[0];
+  if (!shift) return { code: 404, error: 'Shift not found' };
+  const user = (await c.query("SELECT id, name, active FROM users WHERE id = $1 AND role = 'crew'", [userId])).rows[0];
+  if (!user || !user.active) return { code: 404, error: 'Crew member not found or inactive' };
+
+  const filled = (
+    await c.query("SELECT count(*)::int AS n FROM shift_assignments WHERE shift_id = $1 AND status <> 'declined'", [shiftId])
+  ).rows[0].n;
+  if (filled >= shift.headcount) return { code: 409, error: 'This shift is already full' };
+
+  const clash = (
+    await c.query(
+      `SELECT e.name AS event_name, s.role_name, s.starts_at, s.ends_at
+       FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
+       WHERE a.user_id = $1 AND a.status <> 'declined' AND s.id <> $2
+         AND tstzrange(s.starts_at, s.ends_at) && tstzrange($3::timestamptz, $4::timestamptz)
+       LIMIT 1`,
+      [userId, shiftId, shift.starts_at, shift.ends_at],
+    )
+  ).rows[0];
+  if (clash)
+    return {
+      code: 409,
+      error: `${user.name} is already booked for ${clash.role_name} at ${clash.event_name} during that time`,
+      conflict: clash,
+    };
+
+  const dup = await c.query('SELECT 1 FROM shift_assignments WHERE shift_id = $1 AND user_id = $2', [shiftId, userId]);
+  if (dup.rowCount) return { code: 409, error: `${user.name} is already on this shift` };
+
+  const [el] = await evaluateShift(c, shiftId, userId);
+  if (el?.missing_certs.length)
+    return { code: 409, error: `${user.name} does not have a valid ${el.missing_certs.join(', ')} certificate for that shift`, reason: 'missing_cert' };
+  if ((el?.time_off || el?.outside_availability) && !override)
+    return {
+      code: 409,
+      error: `${user.name} is ${el.time_off ? 'on time off' : 'outside their weekly availability'} for that shift.`,
+      reason: 'unavailable',
+    };
+
+  const chk = await checkRules(c, await loadRules(c), userId, shiftId, shift.starts_at, shift.ends_at, user.name);
+  if (chk.blocks.length && !override)
+    return { code: 409, error: chk.blocks.join('. ') + '.', reason: 'rules' };
+
+  const a = (
+    await c.query(
+      'INSERT INTO shift_assignments (tenant_id, shift_id, user_id) VALUES ($1,$2,$3) RETURNING *',
+      [tid, shiftId, userId],
+    )
+  ).rows[0];
+  await audit(c, tid, actorId, 'assignment.create', 'assignment', a.id, { shiftId, userId });
+  await syncEventChannel(c, tid, shift.event_id, userId, true);
+  const d = await describeShift(c, tid, shiftId, userId);
+  if (d) {
+    const links = respondLinks(tid, a.id, userId);
+    await notify(c, tid, {
+      userId, category: 'assignment', title: `New shift offered: ${d.role}`,
+      body: `${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nPlease accept or decline this shift.`,
+      link: `/my-shifts/${a.id}`, sms: `New shift offered: ${d.role}, ${d.event}, ${d.when}. Accept or decline:`, smsLink: links.accept.replace('&a=accept', ''),
+      actions: [{ label: 'Accept shift', url: links.accept, kind: 'accept' }, { label: 'Decline', url: links.decline, kind: 'decline' }],
+    });
+    // The same offer lands in the crew member's chat, from the coordinator who sent it.
+    await sendDirectMessage(c, tid, actorId, userId, `New shift offered\n\n${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nAccept: ${links.accept}\nDecline: ${links.decline}`);
+  }
+  return { code: 201, assignment: a, warnings: chk.warns };
+}
 
 export async function eventRoutes(app: FastifyInstance) {
   app.get('/api/events', { preHandler: mgr }, async (req) =>
@@ -235,73 +305,7 @@ export async function eventRoutes(app: FastifyInstance) {
   app.post('/api/shifts/:id/assign', { preHandler: mgr }, async (req, reply) => {
     const { id: shiftId } = id.parse(req.params);
     const { userId, override } = z.object({ userId: z.string().uuid(), override: z.boolean().optional() }).parse(req.body);
-    const result = await withTenant(req.user.tid, async (c) => {
-      const shift = (await c.query('SELECT * FROM shifts WHERE id = $1 FOR UPDATE', [shiftId])).rows[0];
-      if (!shift) return { code: 404, error: 'Shift not found' };
-      const user = (await c.query("SELECT id, name, active FROM users WHERE id = $1 AND role = 'crew'", [userId])).rows[0];
-      if (!user || !user.active) return { code: 404, error: 'Crew member not found or inactive' };
-
-      const filled = (
-        await c.query("SELECT count(*)::int AS n FROM shift_assignments WHERE shift_id = $1 AND status <> 'declined'", [shiftId])
-      ).rows[0].n;
-      if (filled >= shift.headcount) return { code: 409, error: 'This shift is already full' };
-
-      const clash = (
-        await c.query(
-          `SELECT e.name AS event_name, s.role_name, s.starts_at, s.ends_at
-           FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
-           WHERE a.user_id = $1 AND a.status <> 'declined' AND s.id <> $2
-             AND tstzrange(s.starts_at, s.ends_at) && tstzrange($3::timestamptz, $4::timestamptz)
-           LIMIT 1`,
-          [userId, shiftId, shift.starts_at, shift.ends_at],
-        )
-      ).rows[0];
-      if (clash)
-        return {
-          code: 409,
-          error: `${user.name} is already booked for ${clash.role_name} at ${clash.event_name} during that time`,
-          conflict: clash,
-        };
-
-      const dup = await c.query('SELECT 1 FROM shift_assignments WHERE shift_id = $1 AND user_id = $2', [shiftId, userId]);
-      if (dup.rowCount) return { code: 409, error: `${user.name} is already on this shift` };
-
-      const [el] = await evaluateShift(c, shiftId, userId);
-      if (el?.missing_certs.length)
-        return { code: 409, error: `${user.name} does not have a valid ${el.missing_certs.join(', ')} certificate for that shift`, reason: 'missing_cert' };
-      if ((el?.time_off || el?.outside_availability) && !override)
-        return {
-          code: 409,
-          error: `${user.name} is ${el.time_off ? 'on time off' : 'outside their weekly availability'} for that shift.`,
-          reason: 'unavailable',
-        };
-
-      const chk = await checkRules(c, await loadRules(c), userId, shiftId, shift.starts_at, shift.ends_at, user.name);
-      if (chk.blocks.length && !override)
-        return { code: 409, error: chk.blocks.join('. ') + '.', reason: 'rules' };
-
-      const a = (
-        await c.query(
-          'INSERT INTO shift_assignments (tenant_id, shift_id, user_id) VALUES ($1,$2,$3) RETURNING *',
-          [req.user.tid, shiftId, userId],
-        )
-      ).rows[0];
-      await audit(c, req.user.tid, req.user.sub, 'assignment.create', 'assignment', a.id, { shiftId, userId });
-      await syncEventChannel(c, req.user.tid, shift.event_id, userId, true);
-      const d = await describeShift(c, req.user.tid, shiftId, userId);
-      if (d) {
-        const links = respondLinks(req.user.tid, a.id, userId);
-        await notify(c, req.user.tid, {
-          userId, category: 'assignment', title: `New shift offered: ${d.role}`,
-          body: `${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nPlease accept or decline this shift.`,
-          link: `/my-shifts/${a.id}`, sms: `New shift offered: ${d.role}, ${d.event}, ${d.when}. Accept or decline:`, smsLink: links.accept.replace('&a=accept', ''),
-          actions: [{ label: 'Accept shift', url: links.accept, kind: 'accept' }, { label: 'Decline', url: links.decline, kind: 'decline' }],
-        });
-        // The same offer lands in the crew member's chat, from the coordinator who sent it.
-        await sendDirectMessage(c, req.user.tid, req.user.sub, userId, `New shift offered\n\n${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nAccept: ${links.accept}\nDecline: ${links.decline}`);
-      }
-      return { code: 201, assignment: a, warnings: chk.warns };
-    });
+    const result = await withTenant(req.user.tid, (c) => assignCrew(c, req.user.tid, req.user.sub, shiftId, userId, override));
     const { code, ...body } = result as { code: number; [k: string]: unknown };
     return reply.code(code).send(body);
   });

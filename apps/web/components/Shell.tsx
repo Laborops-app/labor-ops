@@ -106,6 +106,28 @@ const NAV: { href: string; label: string; roles: Role[]; icon: React.ReactNode }
     ),
   },
   {
+    href: '/groups',
+    label: 'Crew groups',
+    roles: ['admin', 'manager'],
+    icon: icon(
+      <>
+        <circle cx="9" cy="8" r="3" />
+        <path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M17 11a3 3 0 1 0 0-6M21 20c0-2.5-1.6-4.6-4-5.5" />
+      </>,
+    ),
+  },
+  {
+    href: '/trainings',
+    label: 'Trainings',
+    roles: ['admin', 'manager', 'crew'],
+    icon: icon(
+      <>
+        <path d="M2 9l10-5 10 5-10 5z" />
+        <path d="M6 11v5c0 1.5 2.7 3 6 3s6-1.5 6-3v-5" />
+      </>,
+    ),
+  },
+  {
     href: '/chat',
     label: 'Chat',
     roles: ['admin', 'manager', 'crew'],

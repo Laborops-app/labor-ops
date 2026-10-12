@@ -3,7 +3,7 @@ import { toE164 } from './providers';
 import { absUrl, renderEmail } from './templates';
 import { loadRates, loadRules, estimateShift, money } from '../pay';
 
-export type Category = 'assignment' | 'shift_change' | 'reminder' | 'approval_request' | 'approval_result' | 'open_shift' | 'chat' | 'cert' | 'account';
+export type Category = 'assignment' | 'shift_change' | 'reminder' | 'approval_request' | 'approval_result' | 'open_shift' | 'chat' | 'cert' | 'account' | 'training';
 
 // Categories that may also go out by text message (when the person opted in). Everything else is email + in-app only.
 const SMS_CATEGORIES = new Set<Category>(['assignment', 'shift_change', 'reminder', 'approval_result']);

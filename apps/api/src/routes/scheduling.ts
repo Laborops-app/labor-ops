@@ -69,7 +69,7 @@ export async function schedulingRoutes(app: FastifyInstance) {
       const wasOpen = (await c.query('SELECT is_open FROM shifts WHERE id = $1', [id])).rows[0]?.is_open;
       if (b.phaseId && !(await c.query('SELECT 1 FROM event_phases p JOIN shifts s ON s.event_id = p.event_id WHERE p.id = $1 AND s.id = $2', [b.phaseId, id])).rowCount) return { error: 'That phase belongs to a different event' };
       const r = await c.query(
-        `UPDATE shifts SET is_open = COALESCE($2, is_open), required_certs = COALESCE($3, required_certs), headcount = COALESCE($4, headcount),
+        `UPDATE shifts SET offer_group_id = CASE WHEN $2::boolean IS FALSE THEN NULL ELSE offer_group_id END, is_open = COALESCE($2, is_open), required_certs = COALESCE($3, required_certs), headcount = COALESCE($4, headcount),
                 phase_id = CASE WHEN $5::boolean THEN $6::uuid ELSE phase_id END
          WHERE id = $1 RETURNING *`,
         [id, b.isOpen ?? null, b.requiredCerts ?? null, b.headcount ?? null, b.phaseId !== undefined, b.phaseId ?? null],
@@ -380,6 +380,7 @@ export async function schedulingRoutes(app: FastifyInstance) {
              (SELECT count(*)::int FROM shift_assignments a WHERE a.shift_id = s.id AND a.status <> 'declined') AS filled
            FROM shifts s JOIN events e ON e.id = s.event_id
            WHERE s.is_open AND s.ends_at > now()
+             AND (s.offer_group_id IS NULL OR EXISTS (SELECT 1 FROM crew_group_members gm WHERE gm.group_id = s.offer_group_id AND gm.user_id = $1))
              AND NOT EXISTS (SELECT 1 FROM shift_assignments a WHERE a.shift_id = s.id AND a.user_id = $1)
            ORDER BY s.starts_at`,
           [req.user.sub],
@@ -405,6 +406,8 @@ export async function schedulingRoutes(app: FastifyInstance) {
     const r = await withTenant(req.user.tid, async (c): Promise<Out> => {
       const s = (await c.query('SELECT * FROM shifts WHERE id = $1 FOR UPDATE', [id])).rows[0];
       if (!s || !s.is_open || new Date(s.ends_at) <= new Date()) return { code: 404, error: 'This shift is not open for claiming' };
+      if (s.offer_group_id && !(await c.query('SELECT 1 FROM crew_group_members WHERE group_id = $1 AND user_id = $2', [s.offer_group_id, req.user.sub])).rowCount)
+        return { code: 404, error: 'This shift is not open for claiming' };
       if ((await filledCount(c, id)) >= s.headcount) return { code: 409, error: 'Someone else just took the last spot' };
       if ((await c.query('SELECT 1 FROM shift_assignments WHERE shift_id = $1 AND user_id = $2', [id, req.user.sub])).rowCount)
         return { code: 409, error: 'You are already on this shift' };

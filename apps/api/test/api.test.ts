@@ -1312,3 +1312,78 @@ test('clocking: geofence, coordinator mode and on-site check-in', async () => {
   assert.equal((await call(a, 'POST', `/api/assignments/${asg}/check-out`)).status, 409);
   assert.equal((await call(a, 'GET', '/api/timesheets?status=submitted')).json.entries.length, 2);
 });
+
+test('crew groups: fill from group skips scheduled people, ranks by rating, auto-picks or offers to the group only', async () => {
+  const a = await register('cgrp');
+  const [c1, c2, c3, c4, outsider] = [await mkCrew(a, 'g1'), await mkCrew(a, 'g2'), await mkCrew(a, 'g3'), await mkCrew(a, 'g4'), await mkCrew(a, 'g5')];
+  const g = (await call(a, 'POST', '/api/crew-groups', { name: 'Audio A-team' })).json.group.id;
+  assert.equal((await call(a, 'POST', '/api/crew-groups', { name: 'audio a-team' })).status, 409);
+  assert.equal((await call(c1.session, 'GET', '/api/crew-groups')).status, 403);
+  assert.equal((await call(a, 'PUT', `/api/crew-groups/${g}/members`, { userIds: [c1.id, c2.id, c3.id, c4.id] })).status, 200);
+  assert.equal((await call(a, 'GET', '/api/crew-groups')).json.groups[0].members.length, 4);
+  for (const [c, n] of [[c1, 3], [c2, 5], [c3, 4], [c4, 5]] as const) await call(a, 'PUT', `/api/crew/${c.id}/ratings`, { role: 'Audio', stars: n });
+
+  const ev = await mkEvent(a);
+  const mk = async (s: number, e: number, hc: number) => (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Audio', startsAt: start(s), endsAt: start(e), headcount: hc })).json.shift.id as string;
+  const busy = await mk(300, 306, 1);
+  await call(a, 'POST', `/api/shifts/${busy}/assign`, { userId: c2.id }); // best rated, but booked
+  const sh = await mk(302, 308, 2);
+  const cand = (await call(a, 'GET', `/api/shifts/${sh}/group-candidates?groupId=${g}`)).json;
+  assert.deepEqual(cand.candidates.map((x: any) => x.user_id), [c4.id, c3.id, c1.id]); // 5, 4, 3 stars; c2 left out
+  assert.ok(cand.skipped.some((s: any) => s.user_id === c2.id && /already scheduled/.test(s.reason)));
+  assert.equal(cand.spots, 2);
+
+  // auto: top 2
+  const auto = await call(a, 'POST', `/api/shifts/${sh}/fill-from-group`, { groupId: g, mode: 'auto' });
+  assert.equal(auto.status, 200, auto.text);
+  assert.deepEqual(auto.json.offered.map((x: any) => x.user_id), [c4.id, c3.id]);
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/fill-from-group`, { groupId: g, mode: 'auto' })).status, 409); // full
+
+  // offer to the group: only members can see and claim it
+  const open = await mk(400, 404, 1);
+  const off = await call(a, 'POST', `/api/shifts/${open}/fill-from-group`, { groupId: g, mode: 'offer' });
+  assert.equal(off.status, 200, off.text);
+  assert.equal(off.json.notified, 4);
+  assert.equal((await call(outsider.session, 'GET', '/api/open-shifts')).json.shifts.length, 0);
+  assert.equal((await call(outsider.session, 'POST', `/api/shifts/${open}/claim`)).status, 404);
+  assert.equal((await call(c1.session, 'GET', '/api/open-shifts')).json.shifts.length, 1);
+  assert.equal((await call(c1.session, 'POST', `/api/shifts/${open}/claim`)).status, 201);
+});
+
+test('trainings: announce, apply, capacity waitlist, promotion, completion grants the certificate', async () => {
+  const a = await register('trn');
+  const [c1, c2, c3] = [await mkCrew(a, 'tr1'), await mkCrew(a, 'tr2'), await mkCrew(a, 'tr3')];
+  const tid = await tenantOf(a);
+  // c3 already holds a valid cert, so is not told about the class
+  await withTenant(tid, (c) => c.query("INSERT INTO user_certs (tenant_id, user_id, name, expires_on) VALUES ($1,$2,'Forklift','2099-01-01')", [tid, c3.id]));
+
+  assert.equal((await call(c1.session, 'POST', '/api/trainings', { title: 'x', startsAt: start(48), endsAt: start(52), capacity: 1 })).status, 403);
+  const made = await call(a, 'POST', '/api/trainings', { title: 'Forklift class', location: 'Warehouse', startsAt: start(48), endsAt: start(52), capacity: 1, grantsCert: 'Forklift', certValidMonths: 36 });
+  assert.equal(made.status, 201, made.text);
+  assert.equal(made.json.training.notified, 2);
+  const t = made.json.training.id;
+  const inbox = await withTenant(tid, (c) => c.query("SELECT user_id FROM notifications WHERE category = 'training' AND title LIKE 'Training open%'"));
+  assert.deepEqual(inbox.rows.map((r) => r.user_id).sort(), [c1.id, c2.id].sort());
+
+  assert.equal((await call(c1.session, 'POST', `/api/trainings/${t}/apply`)).status, 201);
+  assert.equal((await call(c1.session, 'POST', `/api/trainings/${t}/apply`)).status, 409);
+  assert.equal((await call(c2.session, 'POST', `/api/trainings/${t}/apply`)).status, 201);
+  const apps = (await call(a, 'GET', '/api/trainings')).json.trainings[0].applications;
+  const a1 = apps.find((x: any) => x.user_id === c1.id).id, a2 = apps.find((x: any) => x.user_id === c2.id).id;
+  assert.equal((await call(c1.session, 'PATCH', `/api/training-applications/${a1}`, { status: 'approved' })).status, 403);
+  assert.equal((await call(a, 'PATCH', `/api/training-applications/${a1}`, { status: 'approved' })).json.status, 'approved');
+  assert.equal((await call(a, 'PATCH', `/api/training-applications/${a2}`, { status: 'approved' })).json.status, 'waitlisted'); // full
+
+  // c1 withdraws -> c2 moves up
+  assert.equal((await call(c1.session, 'DELETE', `/api/trainings/${t}/apply`)).status, 200);
+  const mine = (await call(c2.session, 'GET', '/api/trainings')).json.trainings[0];
+  assert.equal(mine.my_status, 'approved');
+  assert.equal(mine.applications, undefined);
+
+  // completion grants the certificate with an expiry
+  const done = await call(a, 'POST', `/api/trainings/${t}/complete`);
+  assert.equal(done.json.completed, 1);
+  const cert = await withTenant(tid, (c) => c.query("SELECT verified, expires_on IS NOT NULL AS has_exp FROM user_certs WHERE user_id = $1 AND name = 'Forklift'", [c2.id]));
+  assert.deepEqual(cert.rows[0], { verified: true, has_exp: true });
+  assert.equal((await call(a, 'POST', `/api/trainings/${t}/complete`)).status, 409);
+});
