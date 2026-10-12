@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { withTenant, audit } from '../db';
 import { guard } from '../auth';
 import { config } from '../config';
+import { canAdjustRates } from '../rates';
 import { CUSTOMER_SQL } from '../crm';
 import { hoursBetween } from '../pay';
 import { notifyStaff } from '../notify';
@@ -81,6 +82,13 @@ async function load(c: PoolClient, id: string) {
   const lines = (await c.query("SELECT id, section, description, to_char(day,'YYYY-MM-DD') AS day, start_time, end_time, qty, hours, rate FROM quote_lines WHERE quote_id = $1 ORDER BY sort", [id])).rows
     .map((l) => ({ id: l.id, section: l.section, description: l.description, day: l.day, startTime: l.start_time, endTime: l.end_time, qty: Number(l.qty), hours: Number(l.hours), rate: Number(l.rate), amount: r2(Number(l.qty) * Number(l.hours) * Number(l.rate)) }));
   return { quote: { ...q, tax_pct: Number(q.tax_pct), discount: Number(q.discount) }, lines, totals: totals(lines, q.discount, q.tax_pct) };
+}
+
+/** Without permission to adjust rates, lines for a known role always carry that role's billing rate; other lines (travel, per diem) are free. */
+async function lockRates<T extends { description: string; rate: number }>(c: PoolClient, lines: T[]): Promise<T[]> {
+  const rows = (await c.query('SELECT lower(name) AS k, bill_rate FROM skills')).rows;
+  const by = new Map<string, number>(rows.map((r) => [r.k, Number(r.bill_rate)]));
+  return lines.map((l) => (by.has(l.description.trim().toLowerCase()) ? { ...l, rate: by.get(l.description.trim().toLowerCase())! } : l));
 }
 
 async function writeLines(c: PoolClient, tid: string, qid: string, lines: z.infer<typeof line>[]) {
@@ -176,13 +184,15 @@ export async function quoteRoutes(app: FastifyInstance) {
       }
       if (customerId && !(await c.query('SELECT 1 FROM customers WHERE id = $1', [customerId])).rowCount) return { code: 404, error: 'Customer not found' };
       if (!title) return { code: 400, error: 'Give the quote a title' };
-      const lines = b.lines ?? (b.eventId && b.fromEvent !== false ? await linesFromEvent(c, b.eventId) : []);
+      const allowed = await canAdjustRates(c, req.user);
+      let lines = b.lines ?? (b.eventId && b.fromEvent !== false ? await linesFromEvent(c, b.eventId) : []);
+      if (!allowed) lines = await lockRates(c, lines);
       await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['quote:' + req.user.tid]);
       const num = (await c.query('SELECT COALESCE(max(number), 1000) + 1 AS n FROM quotes')).rows[0].n;
       const q = (await c.query(
         `INSERT INTO quotes (tenant_id, number, customer_id, event_id, title, valid_until, intro, terms, tax_pct, discount, created_by)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
-        [req.user.tid, num, customerId, b.eventId ?? null, title, b.validUntil ?? null, b.intro ?? null, b.terms ?? null, b.taxPct ?? 0, b.discount ?? 0, req.user.sub])).rows[0];
+        [req.user.tid, num, customerId, b.eventId ?? null, title, b.validUntil ?? null, b.intro ?? null, b.terms ?? null, b.taxPct ?? 0, allowed ? b.discount ?? 0 : 0, req.user.sub])).rows[0];
       await writeLines(c, req.user.tid, q.id, lines);
       await audit(c, req.user.tid, req.user.sub, 'quote.create', 'quote', q.id, { number: num });
       return { code: 201, ...(await load(c, q.id)) };
@@ -193,7 +203,16 @@ export async function quoteRoutes(app: FastifyInstance) {
 
   app.get('/api/quotes/:id', { preHandler: mgr }, async (req, reply) => {
     const { id } = z.object({ id: uuid }).parse(req.params);
-    const out = await withTenant(req.user.tid, (c) => load(c, id));
+    const out = await withTenant(req.user.tid, async (c) => {
+      const d = await load(c, id);
+      if (!d) return null;
+      const allowed = await canAdjustRates(c, req.user);
+      // For people who may adjust rates: each role's pay and bill rate, so the quote can show margin.
+      const roleRates = allowed
+        ? (await c.query('SELECT name, pay_rate, bill_rate FROM skills WHERE active ORDER BY lower(name)')).rows.map((r) => ({ name: r.name, payRate: Number(r.pay_rate), billRate: Number(r.bill_rate) }))
+        : [];
+      return { ...d, canAdjustRates: allowed, roleRates };
+    });
     if (!out) return reply.code(404).send({ error: 'Quote not found' });
     return { ...out, link: absUrl(`/quote?t=${quoteToken(req.user.tid, id)}`) };
   });
@@ -206,6 +225,11 @@ export async function quoteRoutes(app: FastifyInstance) {
       if (!cur) return { code: 404, error: 'Quote not found' };
       if (b.customerId && !(await c.query('SELECT 1 FROM customers WHERE id = $1', [b.customerId])).rowCount) return { code: 404, error: 'Customer not found' };
       if (b.eventId && !(await c.query('SELECT 1 FROM events WHERE id = $1', [b.eventId])).rowCount) return { code: 404, error: 'Event not found' };
+      const allowed = await canAdjustRates(c, req.user);
+      if (!allowed) {
+        if (b.lines) b.lines = await lockRates(c, b.lines);
+        b.discount = undefined; // changing the price is a rate adjustment
+      }
       if (b.layoutId && !(await c.query('SELECT 1 FROM quote_layouts WHERE id = $1', [b.layoutId])).rowCount) return { code: 404, error: 'Quote layout not found' };
       const has = (k: keyof typeof b) => b[k] !== undefined;
       // Anything the customer has already answered is a record; changing the content makes it a new revision, so it goes back to draft.

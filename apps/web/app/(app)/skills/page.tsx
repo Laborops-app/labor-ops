@@ -2,13 +2,65 @@
 import { Fragment, useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
-import { api } from '@/lib/api';
+import { api, Me } from '@/lib/api';
 
 type Skill = { id: string; name: string; payRate: number; billRate?: number; active: boolean; groupId: string | null };
 type Group = { id: string; name: string };
 type Edit = { name: string; payRate: string; billRate: string };
 
 const money = (n: number) => n.toLocaleString([], { style: 'currency', currency: 'USD' });
+
+/** A coordinator who may adjust rates sees both rates for every role and can change only those. */
+function RatesOnly() {
+  const [list, setList] = useState<Skill[] | null>(null);
+  const [ed, setEd] = useState<Record<string, { pay: string; bill: string }>>({});
+  const [error, setError] = useState('');
+  const [note, setNote] = useState('');
+  const load = () => api<{ skills: Skill[] }>('/api/skills').then((r) => setList(r.skills.filter((s) => s.active))).catch((e) => setError(e.message));
+  useEffect(() => { load(); }, []);
+  const save = async (s: Skill) => {
+    const e = ed[s.id];
+    if (!e) return;
+    setError('');
+    try {
+      await api(`/api/skills/${s.id}`, { method: 'PATCH', body: { payRate: Math.round(Number(e.pay) * 100) / 100, billRate: Math.round(Number(e.bill) * 100) / 100 } });
+      setNote(`Saved rates for ${s.name}.`);
+      setEd(({ [s.id]: _, ...rest }) => rest);
+      load();
+    } catch (x) { setError((x as Error).message); }
+  };
+  return (
+    <>
+      <h1>Roles &amp; rates</h1>
+      <p className="muted">Each role has two rates: the <b>pay rate</b> crew are paid, and the <b>bill rate</b> customers are quoted and invoiced. You can change either. Pay changes apply to every shift of that role from now on.</p>
+      {error && <Banner onClose={() => setError('')}>{error}</Banner>}
+      {note && <Banner kind="ok" onClose={() => setNote('')}>{note}</Banner>}
+      {!list ? <div className="muted">Loading…</div> : (
+        <div className="card" style={{ overflowX: 'auto' }}>
+          <table className="table">
+            <thead><tr><th>Role</th><th>Pay rate /hr</th><th>Bill rate /hr</th><th>Margin</th><th></th></tr></thead>
+            <tbody>
+              {list.map((s) => {
+                const e = ed[s.id];
+                const pay = e ? Number(e.pay) : s.payRate;
+                const bill = e ? Number(e.bill) : s.billRate ?? 0;
+                return (
+                  <tr key={s.id}>
+                    <td>{s.name}</td>
+                    <td><input type="number" min={0} step="0.01" value={e?.pay ?? s.payRate.toFixed(2)} onChange={(ev) => setEd({ ...ed, [s.id]: { pay: ev.target.value, bill: e?.bill ?? String(s.billRate ?? 0) } })} aria-label={`Pay rate for ${s.name}`} style={{ width: '7rem' }} /></td>
+                    <td><input type="number" min={0} step="0.01" value={e?.bill ?? (s.billRate ?? 0).toFixed(2)} onChange={(ev) => setEd({ ...ed, [s.id]: { pay: e?.pay ?? String(s.payRate), bill: ev.target.value } })} aria-label={`Bill rate for ${s.name}`} style={{ width: '7rem' }} /></td>
+                    <td className="small">{bill > 0 ? `${Math.round(((bill - pay) / bill) * 100)}%` : '—'}</td>
+                    <td>{e && <button className="btn small primary" onClick={() => save(s)}>Save</button>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
 
 function Body() {
   const [list, setList] = useState<Skill[] | null>(null);
@@ -294,5 +346,5 @@ function Body() {
 }
 
 export default function Page() {
-  return <Shell roles={['admin']}>{() => <Body />}</Shell>;
+  return <Shell roles={['admin', 'manager']}>{(me: Me) => (me.role === 'admin' ? <Body /> : <RatesOnly />)}</Shell>;
 }

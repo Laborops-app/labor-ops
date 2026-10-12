@@ -8,7 +8,7 @@ import CustomerSelect from '@/components/CustomerSelect';
 import { api, money } from '@/lib/api';
 
 type Line = { section: string; description: string; day: string; start: string; end: string; qty: string; hours: string; rate: string };
-type Skill = { name: string; active: boolean; groupId: string | null; billRate?: number };
+type Skill = { id: string; name: string; active: boolean; groupId: string | null; billRate?: number };
 const span = (a: string, b: string) => { const m = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3)); let d = m(b) - m(a); if (d <= 0) d += 1440; return Math.round((d / 60) * 100) / 100; };
 type Totals = { subtotal: number; discount: number; tax: number; total: number };
 type Detail = {
@@ -16,6 +16,8 @@ type Detail = {
   lines: { section: string | null; description: string; day: string | null; startTime: string | null; endTime: string | null; qty: number; hours: number; rate: number }[];
   totals: Totals;
   link: string;
+  canAdjustRates?: boolean;
+  roleRates?: { name: string; payRate: number; billRate: number }[];
 };
 
 const hrsOf = (l: { start: string; end: string; hours: string }) => (l.start && l.end ? span(l.start, l.end) : Number(l.hours) || 0);
@@ -33,6 +35,9 @@ function Body() {
   const [msg, setMsg] = useState('');
   const [dirty, setDirty] = useState(false);
   const [layoutId, setLayoutId] = useState('');
+  const [canAdj, setCanAdj] = useState(false);
+  const [roleRates, setRoleRates] = useState<{ name: string; payRate: number; billRate: number }[]>([]);
+  const [qr, setQr] = useState<Record<string, { pay: string; bill: string }>>({});
   const [layouts, setLayouts] = useState<{ id: string; name: string; is_default: boolean }[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [groups, setGroups] = useState<{ id: string; name: string }[]>([]);
@@ -45,6 +50,7 @@ function Body() {
   const [note, setNote] = useState('');
 
   const apply = (r: Detail) => {
+    if (r.canAdjustRates !== undefined) { setCanAdj(r.canAdjustRates); setRoleRates(r.roleRates ?? []); }
     setD((p) => ({ ...r, link: r.link ?? p?.link ?? '' }));
     const q = r.quote;
     setF({ title: q.title, customerId: q.customer_id, validUntil: q.valid_until ? String(q.valid_until).slice(0, 10) : '', intro: q.intro ?? '', terms: q.terms ?? '', taxPct: String(q.tax_pct), discount: String(q.discount) });
@@ -67,6 +73,8 @@ function Body() {
   const edit = <T,>(fn: (v: T) => void) => (v: T) => { fn(v); setDirty(true); };
   const setLine = (i: number, patch: Partial<Line>) => { setLines(lines.map((l, j) => (j === i ? { ...l, ...patch } : l))); setDirty(true); };
 
+  const skillIds = Object.fromEntries(skills.map((x) => [x.name.toLowerCase(), x.id]));
+  const isRole = (name: string) => skills.some((x) => x.name.toLowerCase() === name.trim().toLowerCase());
   const sections = [...new Set([...lines.map((l) => l.section.trim()).filter(Boolean), ...extra])];
   const shown = lines.map((l, i) => ({ l, i })).filter(({ l }) => !tab || l.section.trim() === tab);
   const roleGroups = (() => {
@@ -182,7 +190,7 @@ function Body() {
           <label>Starts<input type="time" value={nl.start} onChange={(e) => setNl({ ...nl, start: e.target.value })} /></label>
           <label>Ends<input type="time" value={nl.end} onChange={(e) => setNl({ ...nl, end: e.target.value })} /></label>
           <label>People<input type="number" min={0} step="1" value={nl.qty} onChange={(e) => setNl({ ...nl, qty: e.target.value })} /></label>
-          <label>Rate / hr<input type="number" min={0} step="0.01" value={nl.rate} onChange={(e) => setNl({ ...nl, rate: e.target.value })} /></label>
+          <label>Rate / hr<input type="number" min={0} step="0.01" value={nl.rate} disabled={!canAdj && isRole(nl.role)} onChange={(e) => setNl({ ...nl, rate: e.target.value })} /></label>
           <div className="form-actions"><button className="btn primary">Add to {tab || 'quote'}</button></div>
         </form>
         {shown.length > 0 && (
@@ -199,7 +207,7 @@ function Body() {
                     <td><input type="time" value={l.end} onChange={(e) => setLine(i, { end: e.target.value })} aria-label="End" /></td>
                     <td><input type="number" min={0} step="1" value={l.qty} onChange={(e) => setLine(i, { qty: e.target.value })} aria-label="People" style={{ width: '4.5rem' }} /></td>
                     <td><input type="number" min={0} step="0.25" value={l.start && l.end ? String(span(l.start, l.end)) : l.hours} disabled={!!(l.start && l.end)} onChange={(e) => setLine(i, { hours: e.target.value })} aria-label="Hours" style={{ width: '5rem' }} /></td>
-                    <td><input type="number" min={0} step="0.01" value={l.rate} onChange={(e) => setLine(i, { rate: e.target.value })} aria-label="Rate per hour" style={{ width: '5.5rem' }} /></td>
+                    <td><input type="number" min={0} step="0.01" value={l.rate} onChange={(e) => setLine(i, { rate: e.target.value })} aria-label="Rate per hour" disabled={!canAdj && isRole(l.description)} title={!canAdj && isRole(l.description) ? 'Rates are set by an admin' : ''} style={{ width: '5.5rem' }} /></td>
                     <td style={{ textAlign: 'right' }}>{money(r2(n(l.qty) * hrsOf(l) * n(l.rate)))}</td>
                     <td><button className="btn ghost small danger" aria-label="Remove line" onClick={() => { setLines(lines.filter((_, j) => j !== i)); setDirty(true); }}>✕</button></td>
                   </tr>
@@ -209,7 +217,7 @@ function Body() {
           </div>
         )}
         <div className="grid-form" style={{ marginTop: '1rem', maxWidth: '28rem' }}>
-          <label>Discount ($)<input type="number" min={0} step="0.01" value={f.discount} onChange={(e) => edit(setF)({ ...f, discount: e.target.value })} /></label>
+          <label>Discount ($)<input type="number" min={0} step="0.01" disabled={!canAdj} value={f.discount} onChange={(e) => edit(setF)({ ...f, discount: e.target.value })} /></label>
           <label>Tax (%)<input type="number" min={0} max={100} step="0.01" value={f.taxPct} onChange={(e) => edit(setF)({ ...f, taxPct: e.target.value })} /></label>
         </div>
         <dl className="info-grid" style={{ marginTop: '.5rem' }}>
@@ -219,6 +227,55 @@ function Body() {
           <div><dt>Total</dt><dd><b>{money(live.total)}</b></dd></div>
         </dl>
       </section>
+
+      {canAdj && (() => {
+        const used = roleRates.filter((r) => lines.some((l) => l.description.trim().toLowerCase() === r.name.toLowerCase()));
+        if (!used.length) return null;
+        return (
+          <section className="card">
+            <h2>Quick rates</h2>
+            <p className="muted small">Each role has a pay rate (what crew are paid) and a bill rate (what the customer is quoted). Change a bill rate for just this quote, or save both as the role's new defaults. Saved pay rates apply to every shift of that role from now on.</p>
+            <div style={{ overflowX: 'auto' }}>
+              <table className="table">
+                <thead><tr><th>Role</th><th>Pay /hr</th><th>Bill /hr</th><th>Margin</th><th></th></tr></thead>
+                <tbody>
+                  {used.map((r) => {
+                    const e = qr[r.name];
+                    const pay = e ? n(e.pay) : r.payRate;
+                    const bill = e ? n(e.bill) : r.billRate;
+                    const set = (patch: Partial<{ pay: string; bill: string }>) => setQr({ ...qr, [r.name]: { pay: e?.pay ?? String(r.payRate), bill: e?.bill ?? String(r.billRate), ...patch } });
+                    return (
+                      <tr key={r.name}>
+                        <td>{r.name}</td>
+                        <td><input type="number" min={0} step="0.01" value={e?.pay ?? r.payRate.toFixed(2)} onChange={(ev) => set({ pay: ev.target.value })} aria-label={`Pay rate for ${r.name}`} style={{ width: '6.5rem' }} /></td>
+                        <td><input type="number" min={0} step="0.01" value={e?.bill ?? r.billRate.toFixed(2)} onChange={(ev) => set({ bill: ev.target.value })} aria-label={`Bill rate for ${r.name}`} style={{ width: '6.5rem' }} /></td>
+                        <td className="small">{bill > 0 ? `${Math.round(((bill - pay) / bill) * 100)}%` : '—'}</td>
+                        <td>
+                          {e && (
+                            <span className="row" style={{ gap: '.3rem' }}>
+                              <button className="btn small" onClick={() => { setLines(lines.map((l) => (l.description.trim().toLowerCase() === r.name.toLowerCase() ? { ...l, rate: String(bill) } : l))); setDirty(true); }}>Use bill rate on this quote</button>
+                              <button className="btn small primary" onClick={async () => {
+                                if (pay !== r.payRate && !confirm(`Change ${r.name} pay to ${money(pay)}/hr for everyone, from now on?`)) return;
+                                const sk = skillIds[r.name.toLowerCase()];
+                                try {
+                                  await api(`/api/skills/${sk}`, { method: 'PATCH', body: { payRate: pay, billRate: bill } });
+                                  setNote(`Saved ${r.name}: pay ${money(pay)}, bill ${money(bill)}.`);
+                                  setQr(({ [r.name]: _x, ...rest }) => rest);
+                                  load();
+                                } catch (x) { setError((x as Error).message); }
+                              }}>Save as role default</button>
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        );
+      })()}
 
       <section className="card">
         <label>Terms and conditions<textarea rows={4} value={f.terms} onChange={(e) => edit(setF)({ ...f, terms: e.target.value })} maxLength={10000} placeholder="Payment terms, cancellation policy, overtime rules…" /></label>

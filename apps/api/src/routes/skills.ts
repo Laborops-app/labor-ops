@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
 import { authenticate, guard } from '../auth';
+import { canAdjustRates } from '../rates';
 import { STARTER_GROUPS, STARTER_TEMPLATES } from '../starter';
 
 const admin = guard('admin');
@@ -12,8 +13,9 @@ const name = z.string().trim().min(1).max(60);
 export async function skillRoutes(app: FastifyInstance) {
   // Everyone signed in can read the names and groups (they fill the drop-downs). Only admins see pay rates.
   app.get('/api/skills', { preHandler: authenticate }, async (req) => {
-    const isAdmin = req.user.role === 'admin';
     return withTenant(req.user.tid, async (c) => {
+      const isAdmin = req.user.role === 'admin';
+      const seePay = await canAdjustRates(c, req.user);
       const rows = (
         await c.query(
           `SELECT s.id, s.name, s.pay_rate, s.bill_rate, s.active, s.group_id FROM skills s ${isAdmin ? '' : 'WHERE s.active'} ORDER BY lower(s.name)`,
@@ -22,7 +24,7 @@ export async function skillRoutes(app: FastifyInstance) {
       const groups = (await c.query('SELECT id, name FROM skill_groups ORDER BY sort, lower(name)')).rows;
       return {
         groups,
-        skills: rows.map((r) => ({ id: r.id, name: r.name, active: r.active, groupId: r.group_id, ...(isAdmin ? { payRate: Number(r.pay_rate) } : {}), ...(req.user.role !== 'crew' ? { billRate: Number(r.bill_rate) } : {}) })),
+        skills: rows.map((r) => ({ id: r.id, name: r.name, active: r.active, groupId: r.group_id, ...(seePay ? { payRate: Number(r.pay_rate) } : {}), ...(req.user.role !== 'crew' ? { billRate: Number(r.bill_rate) } : {}) })),
       };
     });
   });
@@ -97,10 +99,14 @@ export async function skillRoutes(app: FastifyInstance) {
     return reply.code(201).send({ skill: { id: row.id, name: row.name, active: row.active, groupId: row.group_id, payRate: Number(row.pay_rate), billRate: Number(row.bill_rate) } });
   });
 
-  app.patch('/api/skills/:id', { preHandler: admin }, async (req, reply) => {
+  // Admins edit everything; a coordinator who has been allowed to adjust rates may change only the two rates.
+  app.patch('/api/skills/:id', { preHandler: guard('admin', 'manager') }, async (req, reply) => {
     const { id } = idParam.parse(req.params);
     const b = z.object({ name: name.optional(), payRate: rate.optional(), billRate: rate.optional(), active: z.boolean().optional(), groupId: z.string().uuid().nullable().optional() }).parse(req.body);
     const row = await withTenant(req.user.tid, async (c) => {
+      if (req.user.role !== 'admin') {
+        if (!(await canAdjustRates(c, req.user)) || b.name !== undefined || b.active !== undefined || b.groupId !== undefined) return 'forbidden' as const;
+      }
       const old = (await c.query('SELECT name FROM skills WHERE id = $1', [id])).rows[0];
       if (!old) return null;
       const r = await c.query(
@@ -112,6 +118,7 @@ export async function skillRoutes(app: FastifyInstance) {
       await audit(c, req.user.tid, req.user.sub, 'skill.update', 'skill', id, b);
       return r.rows[0];
     });
+    if (row === 'forbidden') return reply.code(403).send({ error: 'You are not allowed to change rates. Ask an admin.' });
     if (!row) return reply.code(404).send({ error: 'Not found' });
     return { skill: { id: row.id, name: row.name, active: row.active, groupId: row.group_id, payRate: Number(row.pay_rate), billRate: Number(row.bill_rate) } };
   });

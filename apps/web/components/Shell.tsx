@@ -14,7 +14,7 @@ const icon = (d: React.ReactNode) => (
   </svg>
 );
 
-const NAV: { href: string; label: string; roles: Role[]; icon: React.ReactNode }[] = [
+const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; icon: React.ReactNode }[] = [
   {
     href: '/dashboard',
     label: 'Dashboard',
@@ -117,7 +117,8 @@ const NAV: { href: string; label: string; roles: Role[]; icon: React.ReactNode }
   {
     href: '/skills',
     label: 'Roles & rates',
-    roles: ['admin'],
+    roles: ['admin', 'manager'],
+    rates: true, // coordinators only when an admin has allowed them to adjust rates
     icon: icon(
       <>
         <path d="M12 2v20M17 6.5C17 4.6 14.8 3.5 12 3.5S7 4.6 7 6.5 9.2 9.5 12 10s5 1.6 5 3.5-2.2 3-5 3-5-1.1-5-3" />
@@ -275,7 +276,7 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
     await api('/api/auth/logout', { method: 'POST', body: {} });
     router.replace('/login');
   };
-  const items = NAV.filter((n) => n.roles.includes(me.role));
+  const items = NAV.filter((n) => n.roles.includes(me.role) && (!n.rates || me.role === 'admin' || me.canAdjustRates));
 
   const current = items.find((n) => path.startsWith(n.href));
 

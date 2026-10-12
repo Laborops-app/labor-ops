@@ -1782,3 +1782,58 @@ test('quote layout: lines grouped by phase with times, PDF output, admin-designe
   const noCust = (await call(a, 'POST', '/api/quotes', { title: 'Loose', lines: [{ description: 'x', day: '2030-01-01', startTime: '08:00', endTime: '10:00', qty: 1, hours: 2, rate: 5 }] })).json.quote.id;
   assert.equal((await call(a, 'POST', `/api/quotes/${noCust}/save-template`, { name: 'n' })).status, 400);
 });
+
+test('rates: two rates per role; only admins and allowed coordinators can adjust them, on roles and on quotes', async () => {
+  const a = await register('rtp');
+  await call(a, 'POST', '/api/skills', { name: 'Audio A1', payRate: 40, billRate: 90 });
+  const skill = (await call(a, 'GET', '/api/skills')).json.skills.find((s: any) => s.name === 'Audio A1');
+  const crew = await mkCrew(a, 'rtpcrew');
+  const mk = await call(a, 'POST', '/api/crew', { name: 'Coord', email: `rtpco-${run}@test.example`, password: 'password123', role: 'manager' });
+  assert.equal(mk.status, 201, mk.text);
+  const coordId = mk.json.member.id;
+  const coord = await login(`rtpco-${run}@test.example`, 'password123');
+
+  // crew never see the bill rate; they only see pay (their own estimate elsewhere)
+  const cs = (await call(crew.session, 'GET', '/api/skills')).json.skills[0];
+  assert.equal(cs.billRate, undefined);
+  assert.equal(cs.payRate, undefined);
+  // a coordinator without permission sees bill rates but not pay rates, and cannot change either
+  assert.equal((await call(coord, 'GET', '/api/auth/me')).json.user.canAdjustRates, false);
+  const nsk = (await call(coord, 'GET', '/api/skills')).json.skills.find((s: any) => s.name === 'Audio A1');
+  assert.equal(nsk.billRate, 90);
+  assert.equal(nsk.payRate, undefined);
+  assert.equal((await call(coord, 'PATCH', `/api/skills/${skill.id}`, { billRate: 95 })).status, 403);
+  assert.equal((await call(crew.session, 'PATCH', `/api/skills/${skill.id}`, { billRate: 95 })).status, 403);
+
+  // on a quote, their role lines stay at the role's bill rate and the discount cannot be set, but a travel line is free
+  const q = (await call(coord, 'POST', '/api/quotes', { title: 'T', discount: 50, lines: [
+    { description: 'Audio A1', qty: 1, hours: 8, rate: 10 }, { description: 'Travel', qty: 1, hours: 1, rate: 75 }] })).json;
+  assert.equal(q.lines[0].rate, 90, 'locked to the role bill rate');
+  assert.equal(q.lines[1].rate, 75);
+  assert.equal(q.quote.discount, 0);
+  assert.equal((await call(coord, 'PUT', `/api/quotes/${q.quote.id}`, { discount: 20, lines: [{ description: 'audio a1', qty: 2, hours: 8, rate: 1 }] })).json.totals.total, 1440);
+  const dq = (await call(coord, 'GET', `/api/quotes/${q.quote.id}`)).json;
+  assert.equal(dq.canAdjustRates, false);
+  assert.deepEqual(dq.roleRates, []);
+
+  // only an admin can grant the permission, and only to a coordinator
+  assert.equal((await call(coord, 'PUT', `/api/crew/${coordId}/rate-permission`, { allowed: true })).status, 403);
+  assert.equal((await call(a, 'PUT', `/api/crew/${crew.id}/rate-permission`, { allowed: true })).status, 404);
+  assert.equal((await call(a, 'PUT', `/api/crew/${coordId}/rate-permission`, { allowed: true })).json.can_adjust_rates, true);
+
+  // now they can change rates on the fly: on lines, discount, and the role defaults (only the two rates)
+  assert.equal((await call(coord, 'GET', '/api/auth/me')).json.user.canAdjustRates, true);
+  assert.equal((await call(coord, 'GET', '/api/skills')).json.skills.find((s: any) => s.name === 'Audio A1').payRate, 40);
+  const up = await call(coord, 'PUT', `/api/quotes/${q.quote.id}`, { discount: 100, lines: [{ description: 'Audio A1', qty: 1, hours: 8, rate: 100 }] });
+  assert.equal(up.json.lines[0].rate, 100);
+  assert.equal(up.json.totals.total, 700);
+  const dq2 = (await call(coord, 'GET', `/api/quotes/${q.quote.id}`)).json;
+  assert.equal(dq2.roleRates.find((r: any) => r.name === 'Audio A1').payRate, 40);
+  assert.equal((await call(coord, 'PATCH', `/api/skills/${skill.id}`, { payRate: 42, billRate: 95 })).json.skill.billRate, 95);
+  assert.equal((await call(coord, 'PATCH', `/api/skills/${skill.id}`, { name: 'Renamed' })).status, 403);
+  assert.equal((await call(coord, 'PATCH', `/api/skills/${skill.id}`, { active: false })).status, 403);
+
+  // turning it off locks them again
+  await call(a, 'PUT', `/api/crew/${coordId}/rate-permission`, { allowed: false });
+  assert.equal((await call(coord, 'PATCH', `/api/skills/${skill.id}`, { billRate: 1 })).status, 403);
+});

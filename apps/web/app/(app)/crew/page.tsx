@@ -8,7 +8,7 @@ import { api, Me, roleLabel } from '@/lib/api';
 import SkillPicker, { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 
 type Cert = { id: string; name: string; expires_on: string | null; verified: boolean; has_file: boolean };
-type Member = { id: string; name: string; email: string; role: string; phone: string | null; skills: string[]; active: boolean; certs: Cert[]; has_availability: boolean; ratings?: Record<string, number> };
+type Member = { id: string; name: string; email: string; role: string; phone: string | null; skills: string[]; active: boolean; certs: Cert[]; has_availability: boolean; can_adjust_rates?: boolean; ratings?: Record<string, number> };
 
 const certState = (c: Cert) => {
   if (!c.expires_on) return '';
@@ -203,6 +203,12 @@ function Body({ me }: { me: Me }) {
                         {m.phone ? <div className="muted">{m.phone}</div> : null}
                       </td>
                       <td>
+                        {m.role === 'manager' && me.role === 'admin' && (
+                          <label className="check small" title="Lets this coordinator change pay and bill rates, including on quotes">
+                            <input type="checkbox" checked={!!m.can_adjust_rates} onChange={(e) => api(`/api/crew/${m.id}/rate-permission`, { method: 'PUT', body: { allowed: e.target.checked } }).then(() => setList((l) => l && l.map((x) => (x.id === m.id ? { ...x, can_adjust_rates: e.target.checked } : x)))).catch((x) => setError(x.message))} />
+                            {' '}Can adjust rates
+                          </label>
+                        )}
                         {m.role === 'crew' && (
                           <button className="btn ghost small" onClick={() => toggle(m)}>
                             {m.active ? 'Deactivate' : 'Reactivate'}

@@ -27,7 +27,7 @@ const patchBody = z.object({
   active: z.boolean().optional(),
 });
 
-const COLS = 'id, name, email, role, phone, skills, active, created_at, address, emergency_name, emergency_phone, bio, coordinator_notes';
+const COLS = 'id, name, email, role, phone, skills, active, created_at, address, emergency_name, emergency_phone, bio, coordinator_notes, can_adjust_rates';
 
 export async function crewRoutes(app: FastifyInstance) {
   app.get('/api/crew', { preHandler: guard('admin', 'manager') }, async (req) => {
@@ -43,6 +43,18 @@ export async function crewRoutes(app: FastifyInstance) {
         )
       ).rows,
     }));
+  });
+
+  // Let a Labor Coordinator change pay and bill rates (admins always can).
+  app.put('/api/crew/:id/rate-permission', { preHandler: guard('admin') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const { allowed } = z.object({ allowed: z.boolean() }).parse(req.body);
+    const row = await withTenant(req.user.tid, async (c) => {
+      const r = await c.query("UPDATE users SET can_adjust_rates = $2 WHERE id = $1 AND role = 'manager' RETURNING id, can_adjust_rates", [id, allowed]);
+      if (r.rows[0]) await audit(c, req.user.tid, req.user.sub, 'user.rate_permission', 'user', id, { allowed });
+      return r.rows[0];
+    });
+    return row ?? reply.code(404).send({ error: 'Labor coordinator not found' });
   });
 
   // Star rating (1-5) for one position; null clears it. Ratings are internal to admins and coordinators.

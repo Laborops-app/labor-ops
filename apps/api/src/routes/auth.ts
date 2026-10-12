@@ -1,3 +1,4 @@
+import { canAdjustRates } from '../rates';
 import type { FastifyInstance } from 'fastify';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
@@ -73,10 +74,11 @@ export async function authRoutes(app: FastifyInstance) {
 
   app.get('/api/auth/me', { preHandler: authenticate }, async (req) => {
     const u = req.user;
-    const { company, name } = await withTenant(u.tid, async (c) => ({
+    const { company, name, rates } = await withTenant(u.tid, async (c) => ({
+      rates: await canAdjustRates(c, u),
       company: (await c.query('SELECT name FROM tenants')).rows[0]?.name as string | undefined,
       name: ((await c.query('SELECT name FROM users WHERE id = $1', [u.sub])).rows[0]?.name as string | undefined) ?? u.name,
     }));
-    return { user: { id: u.sub, name, role: u.role, company } };
+    return { user: { id: u.sub, name, role: u.role, company, canAdjustRates: rates } };
   });
 }
