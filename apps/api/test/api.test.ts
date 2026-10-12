@@ -1408,3 +1408,24 @@ test('open shift for a group: the email carries claim links that work without si
   assert.equal((await call(null, 'GET', `/api/respond/preview?t=${t}`)).json.shift.canRespond, false);
   assert.equal((await call(null, 'POST', '/api/respond', { t: 'x.y', response: 'accepted' })).status, 400);
 });
+
+test('coordinator can confirm crew straight onto a shift (no accept step)', async () => {
+  const a = await register('autoc');
+  const [c1, c2] = [await mkCrew(a, 'ac1'), await mkCrew(a, 'ac2')];
+  const ev = await mkEvent(a);
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Tech', startsAt: start(80), endsAt: start(86), headcount: 2 })).json.shift.id;
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, confirmed: true })).status, 201);
+  assert.equal((await call(c1.session, 'GET', '/api/my/shifts')).json.shifts[0].status, 'accepted');
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c2.id })).status, 201);
+  assert.equal((await call(c2.session, 'GET', '/api/my/shifts')).json.shifts[0].status, 'offered');
+  const t = await tenantOf(a);
+  const m = await withTenant(t, (c) => c.query("SELECT title FROM notifications WHERE user_id = $1", [c1.id]));
+  assert.equal(m.rows[0].title, "You're scheduled: Tech");
+  // group auto-fill can confirm too
+  const g = (await call(a, 'POST', '/api/crew-groups', { name: 'AC' })).json.group.id;
+  const c3 = await mkCrew(a, 'ac3');
+  await call(a, 'PUT', `/api/crew-groups/${g}/members`, { userIds: [c3.id] });
+  const sh2 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Tech', startsAt: start(120), endsAt: start(126), headcount: 1 })).json.shift.id;
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh2}/fill-from-group`, { groupId: g, mode: 'auto', confirmed: true })).status, 200);
+  assert.equal((await call(c3.session, 'GET', '/api/my/shifts')).json.shifts[0].status, 'accepted');
+});

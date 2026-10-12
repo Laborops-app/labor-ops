@@ -6,7 +6,7 @@ type Cand = { user_id: string; name: string; stars: number; week_hours: number; 
 type Preview = { candidates: Cand[]; skipped: { user_id: string; name: string; reason: string }[]; spots: number };
 
 /** Staff a shift from a crew group: preview the best available people, then auto-pick the top ones or offer the shift to the whole group. */
-export default function FillFromGroup({ shiftId, groups, onDone, onError }: { shiftId: string; groups: { id: string; name: string }[]; onDone: (msg: string) => void; onError: (m: string) => void }) {
+export default function FillFromGroup({ shiftId, groups, confirmed, onDone, onError }: { shiftId: string; confirmed?: boolean; groups: { id: string; name: string }[]; onDone: (msg: string) => void; onError: (m: string) => void }) {
   const [groupId, setGroupId] = useState('');
   const [pv, setPv] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
@@ -26,7 +26,7 @@ export default function FillFromGroup({ shiftId, groups, onDone, onError }: { sh
     setBusy(true);
     onError('');
     try {
-      const r = await api<{ offered?: { name: string }[]; notified?: number }>(`/api/shifts/${shiftId}/fill-from-group`, { body: { groupId, mode } });
+      const r = await api<{ offered?: { name: string }[]; notified?: number }>(`/api/shifts/${shiftId}/fill-from-group`, { body: { groupId, mode, confirmed: mode === 'auto' && confirmed ? true : undefined } });
       onDone(mode === 'auto' ? `Offered the shift to ${r.offered?.map((x) => x.name).join(', ')}.` : `Offered to ${r.notified} people in the group. First to claim gets it.`);
       setGroupId('');
       setPv(null);
@@ -73,7 +73,7 @@ export default function FillFromGroup({ shiftId, groups, onDone, onError }: { sh
           )}
           {pv.candidates.length > 0 && (
             <div className="row" style={{ marginTop: '.4rem' }}>
-              <button className="btn small primary" disabled={busy} onClick={() => fill('auto')}>Offer to top {n}</button>
+              <button className="btn small primary" disabled={busy} onClick={() => fill('auto')}>{confirmed ? `Confirm top ${n}` : `Offer to top ${n}`}</button>
               <button className="btn small" disabled={busy} onClick={() => fill('offer')}>Offer to whole group</button>
             </div>
           )}

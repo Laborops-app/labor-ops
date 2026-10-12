@@ -91,7 +91,7 @@ export async function groupRoutes(app: FastifyInstance) {
   // Fill a shift from a group: 'auto' offers it to the top-rated available people; 'offer' makes it a first-come open shift for the group.
   app.post('/api/shifts/:id/fill-from-group', { preHandler: mgr }, async (req, reply) => {
     const { id } = z.object({ id: uuid }).parse(req.params);
-    const b = z.object({ groupId: uuid, mode: z.enum(['auto', 'offer']), count: z.number().int().min(1).max(500).optional() }).parse(req.body);
+    const b = z.object({ groupId: uuid, mode: z.enum(['auto', 'offer']), count: z.number().int().min(1).max(500).optional(), confirmed: z.boolean().optional() }).parse(req.body);
     const r = await withTenant(req.user.tid, async (c) => {
       const lock = (await c.query('SELECT headcount FROM shifts WHERE id = $1 FOR UPDATE', [id])).rows[0];
       if (!lock) return { code: 404, error: 'Shift not found' };
@@ -106,7 +106,7 @@ export async function groupRoutes(app: FastifyInstance) {
         const picked = [];
         for (const p of cand.candidates) {
           if (picked.length >= Math.min(b.count ?? spots, spots)) break;
-          const res = await assignCrew(c, req.user.tid, req.user.sub, id, p.user_id);
+          const res = await assignCrew(c, req.user.tid, req.user.sub, id, p.user_id, false, b.confirmed);
           if (res.code === 201) picked.push({ user_id: p.user_id, name: p.name, stars: p.stars });
         }
         await audit(c, req.user.tid, req.user.sub, 'shift.fill_group', 'shift', id, { groupId: b.groupId, picked: picked.map((x) => x.user_id) });

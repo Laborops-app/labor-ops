@@ -61,6 +61,23 @@ function Body() {
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
   const [pick, setPick] = useState<Record<string, string>>({});
+  // "Confirm automatically": crew are put straight on the shift instead of being asked to accept. Remembered on this device.
+  const [autoConfirm, setAutoConfirmState] = useState(false);
+  useEffect(() => {
+    try {
+      setAutoConfirmState(localStorage.getItem('lo_auto_confirm') === '1');
+    } catch {
+      /* storage unavailable */
+    }
+  }, []);
+  const setAutoConfirm = (v: boolean) => {
+    setAutoConfirmState(v);
+    try {
+      localStorage.setItem('lo_auto_confirm', v ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  };
   const [f, setF] = useState(() => {
     const s = new Date();
     s.setMinutes(0, 0, 0);
@@ -192,7 +209,7 @@ function Body() {
       setError('');
       setNote('');
       try {
-        const r = await api<{ warnings?: string[] }>(`/api/shifts/${shiftId}/assign`, { body: { userId, override: ov || undefined } });
+        const r = await api<{ warnings?: string[] }>(`/api/shifts/${shiftId}/assign`, { body: { userId, override: ov || undefined, confirmed: autoConfirm || undefined } });
         setPick((p) => ({ ...p, [shiftId]: '' }));
         if (r.warnings?.length) setNote(r.warnings.join(' '));
         await load();
@@ -337,12 +354,16 @@ function Body() {
                     )}
                   </select>
                   <button className="btn small" disabled={!pick[s.id]} onClick={() => assign(s.id)}>
-                    Assign
+                    {autoConfirm ? 'Assign & confirm' : 'Assign'}
                   </button>
+                  <label className="row small" style={{ gap: '.35rem', alignItems: 'center' }}>
+                    <input type="checkbox" style={{ width: 'auto' }} checked={autoConfirm} onChange={(e) => setAutoConfirm(e.target.checked)} />
+                    Confirm automatically
+                  </label>
                 </div>
               )}
               {!full && crewGroups.length > 0 && (
-                <FillFromGroup shiftId={s.id} groups={crewGroups} onError={setError} onDone={(m) => { setNote(m); load(); }} />
+                <FillFromGroup shiftId={s.id} groups={crewGroups} confirmed={autoConfirm} onError={setError} onDone={(m) => { setNote(m); load(); }} />
               )}
             </section>
           );

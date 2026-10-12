@@ -32,7 +32,7 @@ const shiftBody = z.object({
 const mgr = guard('admin', 'manager');
 
 /** Offer a shift to one crew member: checks, assignment, notification and chat message. Shared by the assign and fill-from-group routes. */
-export async function assignCrew(c: PoolClient, tid: string, actorId: string, shiftId: string, userId: string, override?: boolean): Promise<{ code: number; [k: string]: unknown }> {
+export async function assignCrew(c: PoolClient, tid: string, actorId: string, shiftId: string, userId: string, override?: boolean, confirmed?: boolean): Promise<{ code: number; [k: string]: unknown }> {
   const shift = (await c.query('SELECT * FROM shifts WHERE id = $1 FOR UPDATE', [shiftId])).rows[0];
   if (!shift) return { code: 404, error: 'Shift not found' };
   const user = (await c.query("SELECT id, name, active FROM users WHERE id = $1 AND role = 'crew'", [userId])).rows[0];
@@ -79,8 +79,8 @@ export async function assignCrew(c: PoolClient, tid: string, actorId: string, sh
 
   const a = (
     await c.query(
-      'INSERT INTO shift_assignments (tenant_id, shift_id, user_id) VALUES ($1,$2,$3) RETURNING *',
-      [tid, shiftId, userId],
+      'INSERT INTO shift_assignments (tenant_id, shift_id, user_id, status) VALUES ($1,$2,$3,$4) RETURNING *',
+      [tid, shiftId, userId, confirmed ? 'accepted' : 'offered'],
     )
   ).rows[0];
   await audit(c, tid, actorId, 'assignment.create', 'assignment', a.id, { shiftId, userId });
@@ -88,14 +88,25 @@ export async function assignCrew(c: PoolClient, tid: string, actorId: string, sh
   const d = await describeShift(c, tid, shiftId, userId);
   if (d) {
     const links = respondLinks(tid, a.id, userId);
-    await notify(c, tid, {
-      userId, category: 'assignment', title: `New shift offered: ${d.role}`,
-      body: `${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nPlease accept or decline this shift.`,
-      link: `/my-shifts/${a.id}`, sms: `New shift offered: ${d.role}, ${d.event}, ${d.when}. Accept or decline:`, smsLink: links.accept.replace('&a=accept', ''),
-      actions: [{ label: 'Accept shift', url: links.accept, kind: 'accept' }, { label: 'Decline', url: links.decline, kind: 'decline' }],
-    });
-    // The same offer lands in the crew member's chat, from the coordinator who sent it.
-    await sendDirectMessage(c, tid, actorId, userId, `New shift offered\n\n${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nAccept: ${links.accept}\nDecline: ${links.decline}`);
+    if (confirmed) {
+      // Scheduled by a coordinator: already confirmed, so no answer is needed. They can still back out.
+      await notify(c, tid, {
+        userId, category: 'assignment', title: `You're scheduled: ${d.role}`,
+        body: `${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nYou're confirmed for this shift. If you can't make it, let your coordinator know.`,
+        link: `/my-shifts/${a.id}`, sms: `You're scheduled: ${d.role}, ${d.event}, ${d.when}.`,
+        actions: [{ label: "Can't make it", url: links.decline, kind: 'decline' }],
+      });
+      await sendDirectMessage(c, tid, actorId, userId, `You're scheduled\n\n${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nCan't make it? ${links.decline}`);
+    } else {
+      await notify(c, tid, {
+        userId, category: 'assignment', title: `New shift offered: ${d.role}`,
+        body: `${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nPlease accept or decline this shift.`,
+        link: `/my-shifts/${a.id}`, sms: `New shift offered: ${d.role}, ${d.event}, ${d.when}. Accept or decline:`, smsLink: links.accept.replace('&a=accept', ''),
+        actions: [{ label: 'Accept shift', url: links.accept, kind: 'accept' }, { label: 'Decline', url: links.decline, kind: 'decline' }],
+      });
+      // The same offer lands in the crew member's chat, from the coordinator who sent it.
+      await sendDirectMessage(c, tid, actorId, userId, `New shift offered\n\n${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nAccept: ${links.accept}\nDecline: ${links.decline}`);
+    }
   }
   return { code: 201, assignment: a, warnings: chk.warns };
 }
@@ -304,8 +315,8 @@ export async function eventRoutes(app: FastifyInstance) {
   // Assign crew to a shift. Blocks double-booking and over-filling.
   app.post('/api/shifts/:id/assign', { preHandler: mgr }, async (req, reply) => {
     const { id: shiftId } = id.parse(req.params);
-    const { userId, override } = z.object({ userId: z.string().uuid(), override: z.boolean().optional() }).parse(req.body);
-    const result = await withTenant(req.user.tid, (c) => assignCrew(c, req.user.tid, req.user.sub, shiftId, userId, override));
+    const { userId, override, confirmed } = z.object({ userId: z.string().uuid(), override: z.boolean().optional(), confirmed: z.boolean().optional() }).parse(req.body);
+    const result = await withTenant(req.user.tid, (c) => assignCrew(c, req.user.tid, req.user.sub, shiftId, userId, override, confirmed));
     const { code, ...body } = result as { code: number; [k: string]: unknown };
     return reply.code(code).send(body);
   });
