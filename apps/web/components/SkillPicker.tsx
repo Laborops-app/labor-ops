@@ -41,7 +41,9 @@ export default function SkillPicker({ value, onChange, options, sections, label 
     if (t && !value.some((v) => v.toLowerCase() === t.toLowerCase())) onChange([...value, t]);
   };
   return (
-    <div className="skill-picker">
+    // This picker is often rendered inside a <label>. A click on the label's empty space (or on a chip's text) would be forwarded to the
+    // first button inside it, which is the first chip's remove button. Only real clicks on a control may reach the controls.
+    <div className="skill-picker" onClick={(e) => { if (!(e.target as HTMLElement).closest('button, select, input, option')) e.preventDefault(); }}>
       {value.length > 0 && (
         <div className="skill-chips">
           {value.map((s) => (

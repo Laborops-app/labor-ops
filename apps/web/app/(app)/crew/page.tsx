@@ -122,10 +122,10 @@ function Body({ me }: { me: Me }) {
             Phone
             <input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} />
           </label>
-          <label>
-            Skills
+          <div className="field" role="group" aria-label="Skills">
+            <span className="field-label">Skills</span>
             <SkillPicker value={f.skills} onChange={(skills) => setF({ ...f, skills })} options={skillNames} sections={skillSections} />
-          </label>
+          </div>
           {me.role === 'admin' && (
             <label>
               Role

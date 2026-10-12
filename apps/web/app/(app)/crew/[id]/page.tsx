@@ -201,10 +201,10 @@ function Body() {
             Home address
             <input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} maxLength={300} />
           </label>
-          <label style={{ gridColumn: '1 / -1' }}>
-            Skills
+          <div className="field" style={{ gridColumn: '1 / -1' }} role="group" aria-label="Skills">
+            <span className="field-label">Skills</span>
             <SkillPicker value={f.skills} onChange={(skills) => setF({ ...f, skills })} options={skillNames} sections={skillSections} />
-          </label>
+          </div>
           <label style={{ gridColumn: '1 / -1' }}>
             About <span className="muted small">(what the person wrote about themselves)</span>
             <textarea rows={2} value={f.bio} onChange={(e) => setF({ ...f, bio: e.target.value })} maxLength={1000} />

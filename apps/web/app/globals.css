@@ -555,3 +555,5 @@ button.star:hover, button.star:focus-visible { color: #e5a50a; }
 .phase-tabs .tab { background: none; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 0.45rem 0.8rem; cursor: pointer; font: inherit; color: inherit; margin-bottom: -1px; }
 .phase-tabs .tab.on { border-color: var(--border, #c9ced6); background: var(--card, transparent); font-weight: 700; box-shadow: inset 0 2px 0 var(--accent, #2563eb); }
 .phase-tabs .tab:hover:not(.on) { background: rgba(127, 127, 127, 0.1); }
+
+.field { display: grid; gap: 0.3rem; font-size: 0.88rem; font-weight: 600; color: var(--text); }

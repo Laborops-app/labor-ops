@@ -181,10 +181,10 @@ function Body({ role }: { role: string }) {
             <input value={u.email} disabled />
           </label>
           {isCrew && (
-            <label style={{ gridColumn: '1 / -1' }}>
-              Skills
+            <div className="field" style={{ gridColumn: '1 / -1' }} role="group" aria-label="Skills">
+              <span className="field-label">Skills</span>
               <SkillPicker value={f.skills} onChange={(skills) => setF({ ...f, skills })} options={skillNames} />
-            </label>
+            </div>
           )}
           <label style={{ gridColumn: '1 / -1' }}>
             About me <span className="muted small">(optional — experience, anything your labor coordinator should know)</span>
