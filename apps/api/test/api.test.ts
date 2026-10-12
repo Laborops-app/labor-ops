@@ -282,7 +282,7 @@ test('availability: outside weekly availability needs a manager override; time o
   assert.equal((await call(a, 'POST', `/api/shifts/${sh2}/assign`, { userId: c2.id })).status, 201);
 });
 
-test('open shifts: claim, hold the slot, manager approves or rejects', async () => {
+test('open shifts: claims are confirmed automatically and hold the slot', async () => {
   const a = await register('claim');
   const [c1, c2, c3] = [await mkCrew(a, 'cl1'), await mkCrew(a, 'cl2'), await mkCrew(a, 'cl3')];
   const ev = await mkEvent(a);
@@ -300,27 +300,23 @@ test('open shifts: claim, hold the slot, manager approves or rejects', async () 
 
   const claim = await call(c1.session, 'POST', `/api/shifts/${open}/claim`);
   assert.equal(claim.status, 201, claim.text);
-  // the pending claim holds the slot, so a second person is turned away
-  assert.equal((await call(c2.session, 'POST', `/api/shifts/${open}/claim`)).status, 409);
-  assert.equal((await call(c1.session, 'POST', `/api/shifts/${open}/claim`)).status, 409);
-  // a pending claim cannot be used to clock in
-  assert.equal((await call(c1.session, 'POST', '/api/time/clock-in', { assignmentId: claim.json.assignmentId })).status, 404);
-
-  const reqs = await call(a, 'GET', '/api/requests');
-  assert.equal(reqs.json.claims.length, 1);
-  assert.equal(reqs.json.claims[0].user_name, 'Crew cl1');
-  // crew cannot approve their own claim
-  assert.equal((await call(c1.session, 'POST', `/api/assignments/${claim.json.assignmentId}/approve`)).status, 403);
-  assert.equal((await call(a, 'POST', `/api/assignments/${claim.json.assignmentId}/approve`)).status, 200);
-  assert.equal((await call(a, 'POST', `/api/assignments/${claim.json.assignmentId}/approve`)).status, 404);
+  // no approval step: the claim is already accepted, nothing waits in the coordinator's queue
   const mine = await call(c1.session, 'GET', '/api/my/shifts');
   assert.equal(mine.json.shifts.find((s: any) => s.role_name === 'Open').status, 'accepted');
+  assert.equal((await call(a, 'GET', '/api/requests')).json.claims.length, 0);
+  // the slot is taken, so a second person is turned away
+  assert.equal((await call(c2.session, 'POST', `/api/shifts/${open}/claim`)).status, 409);
+  assert.equal((await call(c1.session, 'POST', `/api/shifts/${open}/claim`)).status, 409);
+  // the claimant is told, and so are the coordinators
+  const t = await tenantOf(a);
+  const n = await withTenant(t, (c) => c.query("SELECT title FROM notifications WHERE title LIKE '%confirmed%' OR title LIKE '% took %'"));
+  assert.equal(n.rowCount, 2);
 
-  // rejecting frees the slot
+  // a coordinator can still remove someone, which frees the slot
   const open2 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Open2', startsAt: start(70), endsAt: start(74), headcount: 1, isOpen: true })).json.shift.id;
   const claim3 = await call(c3.session, 'POST', `/api/shifts/${open2}/claim`);
   assert.equal(claim3.status, 201);
-  assert.equal((await call(a, 'POST', `/api/assignments/${claim3.json.assignmentId}/reject`)).status, 200);
+  assert.equal((await call(a, 'DELETE', `/api/assignments/${claim3.json.assignmentId}`)).status, 200);
   assert.equal((await call(c2.session, 'POST', `/api/shifts/${open2}/claim`)).status, 201);
   // toggling a shift closed removes it from the list
   assert.equal((await call(a, 'PATCH', `/api/shifts/${open2}`, { isOpen: false })).status, 200);
@@ -1408,7 +1404,7 @@ test('open shift for a group: the email carries claim links that work without si
   const { claimToken } = await import('../src/notify/respond');
   const bad = await call(null, 'POST', '/api/respond', { t: claimToken(tid, sh, c2.id), response: 'accepted' });
   assert.equal(bad.status, 409);
-  assert.equal((await call(null, 'POST', '/api/respond', { t, response: 'accepted' })).json.status, 'pending');
+  assert.equal((await call(null, 'POST', '/api/respond', { t, response: 'accepted' })).json.status, 'accepted');
   assert.equal((await call(null, 'GET', `/api/respond/preview?t=${t}`)).json.shift.canRespond, false);
   assert.equal((await call(null, 'POST', '/api/respond', { t: 'x.y', response: 'accepted' })).status, 400);
 });

@@ -121,7 +121,7 @@ function Respond() {
           </>
         )}
         <p className="muted small center-text">
-          <Link href={shift?.kind === 'claim' ? '/open-shifts' : shift?.assignment_id ? `/my-shifts/${shift.assignment_id}` : '/my-shifts'}>{done === 'accepted' ? 'View this shift in LaborOps' : 'Open LaborOps'}</Link>
+          <Link href={shift?.kind === 'claim' ? (done === 'accepted' ? '/my-shifts' : '/open-shifts') : shift?.assignment_id ? `/my-shifts/${shift.assignment_id}` : '/my-shifts'}>{done === 'accepted' ? 'View this shift in LaborOps' : 'Open LaborOps'}</Link>
         </p>
       </div>
     </div>

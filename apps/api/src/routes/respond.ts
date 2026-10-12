@@ -63,7 +63,7 @@ export async function respondRoutes(app: FastifyInstance) {
         return claimShift(c, claim.tid, u, claim.sid);
       });
       if (r.code >= 400) return reply.code(r.code === 404 ? 409 : r.code).send({ error: r.error });
-      return { status: 'pending' };
+      return { status: 'accepted' };
     }
     const tok = readRespondToken(b.t);
     if (!tok) return reply.code(400).send({ error: 'This link is invalid or has expired. Open LaborOps to answer the shift.' });

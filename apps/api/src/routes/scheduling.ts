@@ -6,6 +6,7 @@ import { guard, authenticate } from '../auth';
 import { notify, notifyStaff, describeShift } from '../notify';
 import { loadRules, checkRules } from '../pay';
 import { claimLinks } from '../notify/respond';
+import { syncEventChannel } from './chat';
 import { evaluateShift, findClash, filledCount, certMessage } from '../eligibility';
 
 const uuid = z.string().uuid();
@@ -47,13 +48,18 @@ export async function claimShift(c: PoolClient, tid: string, user: { id: string;
   const chk = await checkRules(c, await loadRules(c), user.id, id, s.starts_at, s.ends_at, 'You');
   if (chk.blocks.length) return { code: 409, error: chk.blocks.join('. ') + '. Ask your coordinator if this shift is needed.' };
   const a = (
-    await c.query("INSERT INTO shift_assignments (tenant_id, shift_id, user_id, status) VALUES ($1,$2,$3,'pending') RETURNING id", [
+    await c.query("INSERT INTO shift_assignments (tenant_id, shift_id, user_id, status) VALUES ($1,$2,$3,'accepted') RETURNING id", [
       tid, id, user.id,
     ])
   ).rows[0];
   await audit(c, tid, user.id, 'claim.create', 'assignment', a.id, { shiftId: id });
-  const d = await describeShift(c, tid, id);
-  if (d) await notifyStaff(c, tid, { category: 'approval_request', title: `${user.name} wants ${d.role}`, body: `${user.name} asked to take a shift.\n\n${d.line}`, link: '/requests' });
+  const d = await describeShift(c, tid, id, user.id);
+  await syncEventChannel(c, tid, s.event_id, user.id, true);
+  if (d) {
+    // Claims are approved automatically: tell the coordinators for their information, and confirm to the crew member.
+    await notifyStaff(c, tid, { category: 'approval_result', title: `${user.name} took ${d.role}`, body: `${user.name} claimed an open shift and is confirmed.\n\n${d.line}`, link: '/events' });
+    await notify(c, tid, { userId: user.id, category: 'assignment', title: `You're confirmed: ${d.role}`, body: `${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nYou're on this shift.`, link: `/my-shifts/${a.id}`, sms: `Confirmed: ${d.role}, ${d.event}, ${d.when}.` });
+  }
   return { code: 201, assignmentId: a.id };
 }
 
