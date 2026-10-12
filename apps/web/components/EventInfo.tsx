@@ -319,6 +319,7 @@ type RmItem = NonNullable<RmView['equipment']>[number];
 export function RentmanCard({ eventId, isAdmin, onError }: { eventId: string; isAdmin: boolean; onError: (m: string) => void }) {
   const [v, setV] = useState<RmView | null>(null);
   const [pick, setPick] = useState<RmProject | null>(null);
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set()); // equipment groups start collapsed
   const [busy, setBusy] = useState(false);
   const load = () => api<RmView>(`/api/events/${eventId}/rentman`).then(setV).catch(() => {});
   useEffect(() => {
@@ -369,12 +370,20 @@ export function RentmanCard({ eventId, isAdmin, onError }: { eventId: string; is
             <div><span className="muted small">Planning period</span><b>{when(p.planperiod_start, p.planperiod_end)}</b></div>
             {p.usageperiod_start && <div><span className="muted small">Usage period</span><b>{when(p.usageperiod_start, p.usageperiod_end)}</b></div>}
           </div>
-          <h3>Equipment rentals ({v.equipment?.length ?? 0})</h3>
+          <div className="row space">
+            <h3>Equipment rentals ({v.equipment?.length ?? 0})</h3>
+            {!!v.equipment?.length && (
+              <span className="row">
+                <button className="btn ghost small" onClick={() => setOpenGroups(new Set(equipmentGroups(v.equipment!).map((g) => g.key)))}>Expand all</button>
+                <button className="btn ghost small" onClick={() => setOpenGroups(new Set())}>Collapse all</button>
+              </span>
+            )}
+          </div>
           {!v.equipment?.length ? (
             <p className="muted small">No equipment on this project yet. Use “Refresh equipment” to pull the latest from Rentman.</p>
           ) : (
             equipmentGroups(v.equipment).map((g) => (
-              <details key={g.key} open className="rm-group">
+              <details key={g.key} open={openGroups.has(g.key)} onToggle={(e) => { const o = (e.target as HTMLDetailsElement).open; setOpenGroups((cur) => (cur.has(g.key) === o ? cur : new Set(o ? [...cur, g.key] : [...cur].filter((k) => k !== g.key)))); }} className="rm-group">
                 <summary>
                   <b>{g.name}</b> <span className="muted small">{g.items.length} item{g.items.length === 1 ? '' : 's'}</span>
                 </summary>
