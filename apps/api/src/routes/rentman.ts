@@ -80,7 +80,7 @@ export async function rentmanRoutes(app: FastifyInstance) {
     if (!ev) return undefined;
     if (!ev.rentman_project_id) return { linked: false, connected: !!(await getToken(c)) };
     const project = (await c.query('SELECT * FROM rentman_projects WHERE id = $1', [ev.rentman_project_id])).rows[0] ?? null;
-    const equipment = (await c.query('SELECT item_id, name, quantity, unit_price, is_option, period_start, period_end, remark FROM rentman_equipment WHERE project_id = $1 ORDER BY sort', [ev.rentman_project_id])).rows
+    const equipment = (await c.query('SELECT item_id, name, quantity, unit_price, is_option, period_start, period_end, remark, group_id, group_name, group_sort, parent_id FROM rentman_equipment WHERE project_id = $1 ORDER BY sort', [ev.rentman_project_id])).rows
       .map((r: any) => (isAdmin ? r : { ...r, unit_price: undefined }));
     return { linked: true, connected: !!(await getToken(c)), project, equipment };
   };

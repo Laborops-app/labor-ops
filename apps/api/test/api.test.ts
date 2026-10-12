@@ -1454,9 +1454,13 @@ test('rentman: connect with a token, sync projects, link to an event, equipment 
     calls.push(url);
     if ((init?.headers as any)?.Authorization !== 'Bearer good-token-123456') return json({ error: 'nope' }, 401);
     if (url.includes('/contacts')) return json({ data: [{ id: 7, displayname: 'Utah Athletics' }, { id: 9, displayname: 'Rice-Eccles Stadium' }] });
+    if (url.includes('/projectequipmentgroup')) return json({ data: [{ id: 50, name: 'Audio', order: 1 }, { id: 51, name: 'Lighting', order: 2 }] });
     if (url.includes('/projectequipment')) return json({ data: [
-      { id: 1, displayname: 'Shure SM58', quantity_total: 12, unit_price: 9.5, is_option: false, planperiod_start: '2030-01-01T08:00:00+00:00', planperiod_end: '2030-01-02T22:00:00+00:00' },
-      { id: 2, displayname: 'JBL VTX A12', quantity_total: 24, unit_price: 80, is_option: true },
+      { id: 1, displayname: 'Shure SM58', quantity_total: 12, unit_price: 9.5, is_option: false, equipment_group: '/projectequipmentgroup/50', planperiod_start: '2030-01-01T08:00:00+00:00', planperiod_end: '2030-01-02T22:00:00+00:00' },
+      { id: 2, displayname: 'JBL VTX A12', quantity_total: 24, unit_price: 80, is_option: true, equipment_group: '/projectequipmentgroup/50' },
+      { id: 3, displayname: 'Cable pack', quantity_total: 1, parent: '/projectequipment/2', equipment_group: '/projectequipmentgroup/50' },
+      { id: 4, displayname: 'Moving head', quantity_total: 8, equipment_group: '/projectequipmentgroup/51' },
+      { id: 5, displayname: 'Ungrouped item', quantity_total: 2 },
     ] });
     if (url.includes('/projects')) return json({ data: [
       { id: 101, number: 2042, displayname: 'U of U Game Day', customer: '/contacts/7', location: '/contacts/9', reference: 'PO-77', project_type: 'Regular', planperiod_start: '2030-01-01T08:00:00+00:00', planperiod_end: '2030-01-02T22:00:00+00:00' },
@@ -1487,14 +1491,16 @@ test('rentman: connect with a token, sync projects, link to an event, equipment 
     assert.equal(v.linked, true);
     assert.equal(v.project.number, 2042);
     assert.equal(v.project.reference, 'PO-77');
-    assert.equal(v.equipment.length, 2);
+    assert.equal(v.equipment.length, 5);
     assert.equal(v.equipment[0].unit_price, '9.5'); // admin sees prices
+    assert.deepEqual([...new Set(v.equipment.map((e: any) => e.group_name))], ['Audio', 'Lighting', null]);
+    assert.equal(v.equipment.find((e: any) => e.item_id === 3).parent_id, 2);
 
     // link another event later, unlink, and coordinators do not see prices
     const ev2 = await mkEvent(a);
     assert.equal((await call(a, 'PUT', `/api/events/${ev2}/rentman`, { projectId: 999 })).status, 409);
     assert.equal((await call(a, 'PUT', `/api/events/${ev2}/rentman`, { projectId: 102 })).json.linked, true);
-    assert.equal((await call(a, 'POST', `/api/events/${ev}/rentman/refresh`)).json.equipment.length, 2);
+    assert.equal((await call(a, 'POST', `/api/events/${ev}/rentman/refresh`)).json.equipment.length, 5);
     assert.equal((await call(c1.session, 'GET', `/api/events/${ev}/rentman`)).status, 403);
     assert.equal((await call(a, 'PUT', `/api/events/${ev2}/rentman`, { projectId: null })).json.linked, false);
 

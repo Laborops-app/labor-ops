@@ -92,15 +92,21 @@ export async function syncProjects(c: PoolClient, tid: string, token: string) {
 
 /** Replace the cached equipment list of one project with what Rentman has now. */
 export async function syncEquipment(c: PoolClient, tid: string, token: string, projectId: number) {
-  const rows = await getAll(token, `/projects/${projectId}/projectequipment`);
+  const rows = await getAll(token, `/projects/${projectId}/projectequipment`, { sort: 'order' });
+  // The project's equipment groups (Audio, Lighting, ...). If they cannot be read the list is simply not grouped.
+  const groups = new Map<number, { name: string; sort: number }>();
+  (await getAll(token, `/projects/${projectId}/projectequipmentgroup`).catch(() => [] as any[])).forEach((g: any, i: number) =>
+    groups.set(Number(g.id), { name: String(g.displayname || g.name || 'Group'), sort: Number.isFinite(Number(g.order)) ? Number(g.order) : i }));
   await c.query('DELETE FROM rentman_equipment WHERE project_id = $1', [projectId]);
   let n = 0;
   for (const r of rows) {
+    const gid = refId(r.equipment_group);
+    const g = gid !== null ? groups.get(gid) : undefined;
     await c.query(
-      `INSERT INTO rentman_equipment (tenant_id, project_id, item_id, name, quantity, unit_price, is_option, period_start, period_end, remark, sort)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING`,
+      `INSERT INTO rentman_equipment (tenant_id, project_id, item_id, name, quantity, unit_price, is_option, period_start, period_end, remark, sort, group_id, group_name, group_sort, parent_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT DO NOTHING`,
       [tid, projectId, r.id, String(r.displayname || r.name || 'Equipment'), r.quantity_total ?? r.quantity ?? null, r.unit_price ?? null, !!r.is_option,
-       ts(r.planperiod_start), ts(r.planperiod_end), r.external_remark || null, n++],
+       ts(r.planperiod_start), ts(r.planperiod_end), r.external_remark || null, n++, gid, g?.name ?? null, g?.sort ?? null, refId(r.parent)],
     );
   }
   return rows.length;

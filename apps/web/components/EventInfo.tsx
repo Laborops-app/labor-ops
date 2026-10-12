@@ -305,8 +305,9 @@ export function Clocking({ ev, onSaved, onError }: { ev: EventFull; onSaved: () 
 type RmView = {
   linked: boolean; connected: boolean; warning?: string;
   project?: { id: number; number: number | null; name: string; customer: string | null; location: string | null; reference: string | null; project_type: string | null; tags: string | null; planperiod_start: string | null; planperiod_end: string | null; usageperiod_start: string | null; usageperiod_end: string | null; synced_at: string } | null;
-  equipment?: { item_id: number; name: string; quantity: string | null; unit_price?: string | null; is_option: boolean; period_start: string | null; period_end: string | null; remark: string | null }[];
+  equipment?: { item_id: number; name: string; quantity: string | null; unit_price?: string | null; is_option: boolean; period_start: string | null; period_end: string | null; remark: string | null; group_id: number | null; group_name: string | null; group_sort: number | null; parent_id: number | null }[];
 };
+type RmItem = NonNullable<RmView['equipment']>[number];
 
 /** The Rentman project linked to an event: project info and the equipment rental list. */
 export function RentmanCard({ eventId, isAdmin, onError }: { eventId: string; isAdmin: boolean; onError: (m: string) => void }) {
@@ -366,21 +367,28 @@ export function RentmanCard({ eventId, isAdmin, onError }: { eventId: string; is
           {!v.equipment?.length ? (
             <p className="muted small">No equipment on this project yet. Use “Refresh equipment” to pull the latest from Rentman.</p>
           ) : (
-            <div className="table-wrap">
-              <table>
-                <thead><tr><th>Item</th><th>Qty</th><th>Period</th>{isAdmin && <th>Unit price</th>}</tr></thead>
-                <tbody>
-                  {v.equipment.map((e) => (
-                    <tr key={e.item_id}>
-                      <td>{e.name}{e.is_option && <span className="chip warn">option</span>}{e.remark && <div className="muted small">{e.remark}</div>}</td>
-                      <td>{e.quantity ?? ''}</td>
-                      <td className="small">{e.period_start ? when(e.period_start, e.period_end) : ''}</td>
-                      {isAdmin && <td>{e.unit_price != null ? Number(e.unit_price).toLocaleString('en-US', { style: 'currency', currency: 'USD' }) : ''}</td>}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            equipmentGroups(v.equipment).map((g) => (
+              <details key={g.key} open className="rm-group">
+                <summary>
+                  <b>{g.name}</b> <span className="muted small">{g.items.length} item{g.items.length === 1 ? '' : 's'}</span>
+                </summary>
+                <div className="table-wrap">
+                  <table>
+                    <thead><tr><th>Item</th><th>Qty</th><th>Period</th>{isAdmin && <th>Unit price</th>}</tr></thead>
+                    <tbody>
+                      {g.items.map(({ e, child }) => (
+                        <tr key={e.item_id}>
+                          <td style={child ? { paddingLeft: '1.6rem' } : undefined}>{child ? '↳ ' : ''}{e.name}{e.is_option && <span className="chip warn">option</span>}{e.remark && <div className="muted small">{e.remark}</div>}</td>
+                          <td>{e.quantity ?? ''}</td>
+                          <td className="small">{e.period_start ? when(e.period_start, e.period_end) : ''}</td>
+                          {isAdmin && <td>{e.unit_price != null ? Number(e.unit_price).toLocaleString('en-US', { style: 'currency', currency: 'USD' }) : ''}</td>}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            ))
           )}
           <p className="muted small">Project details last synced {new Date(p.synced_at).toLocaleString()}.</p>
         </>
@@ -388,4 +396,26 @@ export function RentmanCard({ eventId, isAdmin, onError }: { eventId: string; is
       {v.linked && !p && <p className="muted small">The linked project is not in the local cache. Sync projects on the Integrations page.</p>}
     </section>
   );
+}
+
+/** Rentman equipment arranged by its project equipment group (in Rentman's order); kit items sit under their parent item. */
+function equipmentGroups(list: RmItem[]) {
+  const ids = new Set(list.map((e) => e.item_id));
+  const byGroup = new Map<string, { key: string; name: string; sort: number; items: RmItem[] }>();
+  for (const e of list) {
+    const key = e.group_id != null ? `g${e.group_id}` : 'none';
+    if (!byGroup.has(key)) byGroup.set(key, { key, name: e.group_name ?? (e.group_id != null ? 'Group' : 'Other equipment'), sort: e.group_id != null ? e.group_sort ?? 9999 : 99999, items: [] });
+    byGroup.get(key)!.items.push(e);
+  }
+  return [...byGroup.values()]
+    .sort((a, b) => a.sort - b.sort)
+    .map((g) => {
+      const tops = g.items.filter((e) => e.parent_id == null || !ids.has(e.parent_id));
+      const items: { e: RmItem; child: boolean }[] = [];
+      for (const t of tops) {
+        items.push({ e: t, child: false });
+        for (const k of g.items.filter((x) => x.parent_id === t.item_id)) items.push({ e: k, child: true });
+      }
+      return { key: g.key, name: g.name, items };
+    });
 }

@@ -557,3 +557,6 @@ button.star:hover, button.star:focus-visible { color: #e5a50a; }
 .phase-tabs .tab:hover:not(.on) { background: rgba(127, 127, 127, 0.1); }
 
 .field { display: grid; gap: 0.3rem; font-size: 0.88rem; font-weight: 600; color: var(--text); }
+
+.rm-group { margin: 0.6rem 0; }
+.rm-group > summary { cursor: pointer; padding: 0.35rem 0; }
