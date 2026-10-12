@@ -18,6 +18,7 @@ import { pushRoutes } from './routes/push';
 import { respondRoutes } from './routes/respond';
 import { rulesRoutes } from './routes/rules';
 import { groupRoutes } from './routes/groups';
+import { rentmanRoutes } from './routes/rentman';
 import { trainingRoutes } from './routes/trainings';
 import { chatRoutes } from './routes/chat';
 import { schedulingRoutes } from './routes/scheduling';
@@ -73,6 +74,7 @@ export async function buildApp() {
   await app.register(respondRoutes);
   await app.register(rulesRoutes);
   await app.register(groupRoutes);
+  await app.register(rentmanRoutes);
   await app.register(trainingRoutes);
   return app;
 }

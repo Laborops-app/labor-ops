@@ -6,8 +6,8 @@ import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { roleKey } from '@/components/Stars';
 import FillFromGroup from '@/components/FillFromGroup';
-import { api, ApiError, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
-import { EventDetails, Phases, Clocking, EventFull, Phase } from '@/components/EventInfo';
+import { api, ApiError, Me, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
+import { EventDetails, Phases, Clocking, RentmanCard, EventFull, Phase } from '@/components/EventInfo';
 import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 
 type Assignment = { id: string; user_id: string; user_name: string; status: string; clocked_in_at?: string | null; last_clock_out?: string | null };
@@ -51,7 +51,7 @@ const certs = (s: string) =>
     .filter(Boolean);
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-function Body() {
+function Body({ me }: { me: Me }) {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [d, setD] = useState<Detail | null>(null);
@@ -480,6 +480,7 @@ function Body() {
 
       <EventDetails ev={ev} hasPhases={d.phases.length > 0} onSaved={load} onError={setError} />
       <Phases eventId={id} phases={d.phases} onChanged={load} onError={setError} />
+      <RentmanCard eventId={id} isAdmin={me.role === 'admin'} onError={setError} />
       <Clocking ev={ev} onSaved={load} onError={setError} />
 
       <section className="card" ref={shiftForm}>
@@ -636,5 +637,5 @@ function Body() {
 }
 
 export default function Page() {
-  return <Shell roles={['admin', 'manager']}>{() => <Body />}</Shell>;
+  return <Shell roles={['admin', 'manager']}>{(me) => <Body me={me} />}</Shell>;
 }

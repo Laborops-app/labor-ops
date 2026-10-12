@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, fmtDate } from '@/lib/api';
+import RentmanPicker from '@/components/RentmanPicker';
 
 type Ev = { id: string; name: string; client: string | null; venue: string | null; start_date: string; end_date: string; shift_count: number; slots: number; accepted: number };
 const today = () => new Date().toISOString().slice(0, 10);
@@ -12,6 +13,7 @@ function Body() {
   const [list, setList] = useState<Ev[] | null>(null);
   const [error, setError] = useState('');
   const [f, setF] = useState({ name: '', client: '', venue: '', address: '', startDate: today(), endDate: today() });
+  const [rm, setRm] = useState<number | null>(null);
 
   const load = () =>
     api<{ events: Ev[] }>('/api/events')
@@ -25,7 +27,8 @@ function Body() {
     e.preventDefault();
     setError('');
     try {
-      await api('/api/events', { body: { ...f, client: f.client || null, venue: f.venue || null, address: f.address || null } });
+      await api('/api/events', { body: { ...f, client: f.client || null, venue: f.venue || null, address: f.address || null, rentmanProjectId: rm } });
+      setRm(null);
       setF({ name: '', client: '', venue: '', address: '', startDate: today(), endDate: today() });
       load();
     } catch (err) {
@@ -40,6 +43,24 @@ function Body() {
       <section className="card">
         <h2>New event</h2>
         <form className="grid-form" onSubmit={add}>
+          <div style={{ gridColumn: '1 / -1' }}>
+            <RentmanPicker
+              value={rm}
+              onPick={(p) => {
+                setRm(p ? p.id : null);
+                if (p)
+                  setF((x) => ({
+                    ...x,
+                    name: x.name || p.name,
+                    client: x.client || p.customer || '',
+                    venue: x.venue || p.location || '',
+                    startDate: p.planperiod_start ? p.planperiod_start.slice(0, 10) : x.startDate,
+                    endDate: p.planperiod_end ? p.planperiod_end.slice(0, 10) : p.planperiod_start ? p.planperiod_start.slice(0, 10) : x.endDate,
+                  }));
+              }}
+              label="Rentman project (optional, fills in the details below)"
+            />
+          </div>
           <label>
             Name
             <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required />

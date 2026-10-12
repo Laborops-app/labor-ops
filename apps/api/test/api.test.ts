@@ -1441,3 +1441,67 @@ test('coordinator can confirm an offered shift on the crew member\'s behalf', as
   assert.equal((await call(c1.session, 'GET', '/api/my/shifts')).json.shifts[0].status, 'accepted');
   assert.equal((await call(a, 'POST', `/api/assignments/${asg}/confirm`)).status, 404);
 });
+
+test('rentman: connect with a token, sync projects, link to an event, equipment and project info, admin-only settings', async () => {
+  const a = await register('rm');
+  const c1 = await mkCrew(a, 'rm1');
+  const calls: string[] = [];
+  const real = globalThis.fetch;
+  const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: { 'content-type': 'application/json' } });
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = String(input);
+    if (!url.startsWith('https://api.rentman.net')) return real(input, init);
+    calls.push(url);
+    if ((init?.headers as any)?.Authorization !== 'Bearer good-token-123456') return json({ error: 'nope' }, 401);
+    if (url.includes('/contacts')) return json({ data: [{ id: 7, displayname: 'Utah Athletics' }, { id: 9, displayname: 'Rice-Eccles Stadium' }] });
+    if (url.includes('/projectequipment')) return json({ data: [
+      { id: 1, displayname: 'Shure SM58', quantity_total: 12, unit_price: 9.5, is_option: false, planperiod_start: '2030-01-01T08:00:00+00:00', planperiod_end: '2030-01-02T22:00:00+00:00' },
+      { id: 2, displayname: 'JBL VTX A12', quantity_total: 24, unit_price: 80, is_option: true },
+    ] });
+    if (url.includes('/projects')) return json({ data: [
+      { id: 101, number: 2042, displayname: 'U of U Game Day', customer: '/contacts/7', location: '/contacts/9', reference: 'PO-77', project_type: 'Regular', planperiod_start: '2030-01-01T08:00:00+00:00', planperiod_end: '2030-01-02T22:00:00+00:00' },
+      { id: 102, number: 2043, displayname: 'Spring Concert', customer: '/contacts/7' },
+    ] });
+    return json({ error: 'unexpected' }, 404);
+  }) as typeof fetch;
+  try {
+    // admin only
+    assert.equal((await call(c1.session, 'GET', '/api/rentman/settings')).status, 403);
+    assert.equal((await call(a, 'PUT', '/api/rentman/settings', { token: 'bad-token-1234567' })).status, 400);
+    assert.equal((await call(a, 'GET', '/api/rentman/settings')).json.connected, false);
+    assert.equal((await call(a, 'POST', '/api/rentman/sync')).status, 409);
+    assert.equal((await call(a, 'PUT', '/api/rentman/settings', { token: 'good-token-123456' })).status, 200);
+    assert.equal((await call(a, 'GET', '/api/rentman/settings')).json.connected, true);
+
+    assert.equal((await call(a, 'POST', '/api/rentman/sync')).json.synced, 2);
+    const list = (await call(a, 'GET', '/api/rentman/projects?q=game')).json.projects;
+    assert.equal(list.length, 1);
+    assert.equal(list[0].customer, 'Utah Athletics');
+    assert.equal(list[0].location, 'Rice-Eccles Stadium');
+
+    // create an event already linked, equipment comes with it
+    const made = await call(a, 'POST', '/api/events', { name: 'Game Day', startDate: '2030-01-01', endDate: '2030-01-02', rentmanProjectId: 101 });
+    assert.equal(made.status, 201, made.text);
+    const ev = made.json.event.id;
+    const v = (await call(a, 'GET', `/api/events/${ev}/rentman`)).json;
+    assert.equal(v.linked, true);
+    assert.equal(v.project.number, 2042);
+    assert.equal(v.project.reference, 'PO-77');
+    assert.equal(v.equipment.length, 2);
+    assert.equal(v.equipment[0].unit_price, '9.5'); // admin sees prices
+
+    // link another event later, unlink, and coordinators do not see prices
+    const ev2 = await mkEvent(a);
+    assert.equal((await call(a, 'PUT', `/api/events/${ev2}/rentman`, { projectId: 999 })).status, 409);
+    assert.equal((await call(a, 'PUT', `/api/events/${ev2}/rentman`, { projectId: 102 })).json.linked, true);
+    assert.equal((await call(a, 'POST', `/api/events/${ev}/rentman/refresh`)).json.equipment.length, 2);
+    assert.equal((await call(c1.session, 'GET', `/api/events/${ev}/rentman`)).status, 403);
+    assert.equal((await call(a, 'PUT', `/api/events/${ev2}/rentman`, { projectId: null })).json.linked, false);
+
+    // the token is stored encrypted, never returned
+    assert.ok(!JSON.stringify((await call(a, 'GET', '/api/rentman/settings')).json).includes('good-token'));
+    assert.equal((await call(a, 'DELETE', '/api/rentman/settings')).json.connected, false);
+  } finally {
+    globalThis.fetch = real;
+  }
+});

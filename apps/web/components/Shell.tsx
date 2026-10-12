@@ -95,6 +95,16 @@ const NAV: { href: string; label: string; roles: Role[]; icon: React.ReactNode }
     ),
   },
   {
+    href: '/integrations',
+    label: 'Integrations',
+    roles: ['admin'],
+    icon: icon(
+      <>
+        <path d="M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0zM12 16v5" />
+      </>,
+    ),
+  },
+  {
     href: '/rules',
     label: 'Labor rules',
     roles: ['admin'],

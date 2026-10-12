@@ -1,5 +1,6 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import RentmanPicker, { RmProject } from '@/components/RentmanPicker';
 import { api, fmtDate, getPosition } from '@/lib/api';
 
 export type EventFull = { id: string; name: string; client: string | null; venue: string | null; address: string | null; notes: string | null; start_date: string; end_date: string; clock_mode?: 'self' | 'coordinator'; geo_lat?: number | null; geo_lng?: number | null; geofence_m?: number | null };
@@ -297,6 +298,94 @@ export function Clocking({ ev, onSaved, onError }: { ev: EventFull; onSaved: () 
           {saved && <span className="muted small">{saved}</span>}
         </div>
       </form>
+    </section>
+  );
+}
+
+type RmView = {
+  linked: boolean; connected: boolean; warning?: string;
+  project?: { id: number; number: number | null; name: string; customer: string | null; location: string | null; reference: string | null; project_type: string | null; tags: string | null; planperiod_start: string | null; planperiod_end: string | null; usageperiod_start: string | null; usageperiod_end: string | null; synced_at: string } | null;
+  equipment?: { item_id: number; name: string; quantity: string | null; unit_price?: string | null; is_option: boolean; period_start: string | null; period_end: string | null; remark: string | null }[];
+};
+
+/** The Rentman project linked to an event: project info and the equipment rental list. */
+export function RentmanCard({ eventId, isAdmin, onError }: { eventId: string; isAdmin: boolean; onError: (m: string) => void }) {
+  const [v, setV] = useState<RmView | null>(null);
+  const [pick, setPick] = useState<RmProject | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = () => api<RmView>(`/api/events/${eventId}/rentman`).then(setV).catch(() => {});
+  useEffect(() => {
+    load();
+  }, [eventId]);
+  const run = async (fn: () => Promise<RmView>) => {
+    onError('');
+    setBusy(true);
+    try {
+      const r = await fn();
+      setV(r);
+      if (r.warning) onError(r.warning);
+      setPick(null);
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!v || (!v.connected && !v.linked)) return null;
+  const when = (a: string | null, b: string | null) => (a ? (b && b.slice(0, 10) !== a.slice(0, 10) ? `${fmtDate(a.slice(0, 10))} – ${fmtDate(b.slice(0, 10))}` : fmtDate(a.slice(0, 10))) : '—');
+  const p = v.project;
+  return (
+    <section className="card">
+      <div className="row space">
+        <h2>Rentman</h2>
+        {v.linked && (
+          <span className="row">
+            <button className="btn small" disabled={busy} onClick={() => run(() => api<RmView>(`/api/events/${eventId}/rentman/refresh`, { body: {} }))}>Refresh equipment</button>
+            <button className="btn ghost small" disabled={busy} onClick={() => confirm('Unlink this event from its Rentman project?') && run(() => api<RmView>(`/api/events/${eventId}/rentman`, { method: 'PUT', body: { projectId: null } }))}>Unlink</button>
+          </span>
+        )}
+      </div>
+      {!v.linked && (
+        <>
+          <RentmanPicker value={pick?.id ?? null} onPick={setPick} label="Link a Rentman project" />
+          <button className="btn primary" disabled={!pick || busy} onClick={() => pick && run(() => api<RmView>(`/api/events/${eventId}/rentman`, { method: 'PUT', body: { projectId: pick.id } }))}>Link project</button>
+        </>
+      )}
+      {v.linked && p && (
+        <>
+          <div className="info-grid">
+            <div><span className="muted small">Project</span><b>{p.number ? `#${p.number} · ` : ''}{p.name}</b></div>
+            {p.customer && <div><span className="muted small">Customer</span><b>{p.customer}</b></div>}
+            {p.location && <div><span className="muted small">Location</span><b>{p.location}</b></div>}
+            {p.reference && <div><span className="muted small">Reference</span><b>{p.reference}</b></div>}
+            {p.project_type && <div><span className="muted small">Type</span><b>{p.project_type}</b></div>}
+            <div><span className="muted small">Planning period</span><b>{when(p.planperiod_start, p.planperiod_end)}</b></div>
+            {p.usageperiod_start && <div><span className="muted small">Usage period</span><b>{when(p.usageperiod_start, p.usageperiod_end)}</b></div>}
+          </div>
+          <h3>Equipment rentals ({v.equipment?.length ?? 0})</h3>
+          {!v.equipment?.length ? (
+            <p className="muted small">No equipment on this project yet. Use “Refresh equipment” to pull the latest from Rentman.</p>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Item</th><th>Qty</th><th>Period</th>{isAdmin && <th>Unit price</th>}</tr></thead>
+                <tbody>
+                  {v.equipment.map((e) => (
+                    <tr key={e.item_id}>
+                      <td>{e.name}{e.is_option && <span className="chip warn">option</span>}{e.remark && <div className="muted small">{e.remark}</div>}</td>
+                      <td>{e.quantity ?? ''}</td>
+                      <td className="small">{e.period_start ? when(e.period_start, e.period_end) : ''}</td>
+                      {isAdmin && <td>{e.unit_price != null ? Number(e.unit_price).toLocaleString('en-US', { style: 'currency', currency: 'USD' }) : ''}</td>}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="muted small">Project details last synced {new Date(p.synced_at).toLocaleString()}.</p>
+        </>
+      )}
+      {v.linked && !p && <p className="muted small">The linked project is not in the local cache. Sync projects on the Integrations page.</p>}
     </section>
   );
 }

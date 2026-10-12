@@ -18,6 +18,7 @@ const eventBody = z.object({
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   notes: z.string().max(5000).optional().nullable(),
+  rentmanProjectId: z.number().int().optional().nullable(),
 });
 const shiftBody = z.object({
   roleName: z.string().trim().min(1).max(100),
@@ -151,11 +152,18 @@ export async function eventRoutes(app: FastifyInstance) {
     const b = eventBody.parse(req.body);
     if (b.endDate < b.startDate) return reply.code(400).send({ error: 'End date is before the start date' });
     const row = await withTenant(req.user.tid, async (c) => {
+      const rentmanId = b.rentmanProjectId && (await c.query('SELECT 1 FROM rentman_projects WHERE id = $1', [b.rentmanProjectId])).rowCount ? b.rentmanProjectId : null;
       const r = await c.query(
-        `INSERT INTO events (tenant_id, name, client, venue, address, start_date, end_date, notes, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-        [req.user.tid, b.name, b.client || null, b.venue || null, b.address || null, b.startDate, b.endDate, b.notes ?? null, req.user.sub],
+        `INSERT INTO events (tenant_id, name, client, venue, address, start_date, end_date, notes, created_by, rentman_project_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+        [req.user.tid, b.name, b.client || null, b.venue || null, b.address || null, b.startDate, b.endDate, b.notes ?? null, req.user.sub, rentmanId],
       );
+      if (rentmanId) {
+        // Pull the equipment list now (best effort; the project must already be synced).
+        const { getToken, syncEquipment } = await import('../rentman');
+        const token = await getToken(c);
+        if (token) await syncEquipment(c, req.user.tid, token, rentmanId).catch(() => {});
+      }
       await audit(c, req.user.tid, req.user.sub, 'event.create', 'event', r.rows[0].id);
       return r.rows[0];
     });
