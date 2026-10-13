@@ -68,6 +68,7 @@ function Body() {
   const [sns, setSns] = useState({ region: 'us-west-2', accessKeyId: '', secretAccessKey: '', originationNumber: '', senderId: '' });
   const [twilio, setTwilio] = useState({ sid: '', token: '', from: '' });
   const [podium, setPodium] = useState({ clientId: '', clientSecret: '', locationUid: '' });
+  const [locs, setLocs] = useState<{ uid: string; name: string }[] | null>(null);
   const [hook, setHook] = useState<{ url: string; secret: string } | null>(null);
 
   const load = () =>
@@ -250,6 +251,18 @@ function Body() {
             </Field>
             <Field label="Location ID" hint="Podium location UID">
               <input value={podium.locationUid} onChange={(e) => setPodium({ ...podium, locationUid: e.target.value })} required />
+              {s.podium.connected && (
+                <div style={{ marginTop: 6 }}>
+                  <button type="button" className="btn ghost" disabled={!!busy} onClick={() => run('locs', async () => { const r = await api<{ locations: { uid: string; name: string }[] }>('/api/podium/locations'); setLocs(r.locations); if (!r.locations.length) return 'Podium returned no locations.'; })}>
+                    Find my locations
+                  </button>
+                  {locs?.map((l) => (
+                    <div key={l.uid} className="small">
+                      <button type="button" className="btn ghost" onClick={() => setPodium({ ...podium, locationUid: l.uid })}>Use</button> {l.name} <span className="muted">{l.uid}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </Field>
             <div className="form-actions">
               <button className="btn primary" disabled={!!busy}>Save Podium settings</button>

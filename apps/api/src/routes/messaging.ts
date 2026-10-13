@@ -12,7 +12,7 @@ import { notifyStaff } from '../notify';
 import {
   clearIntegration, emailLive, loadSettings, podiumConnected, publicView, saveIntegration, smsLive, smsSender, type Provider,
 } from '../notify/settings';
-import { authorizeUrl, exchangeCode, registerWebhook, verifyPodiumSignature } from '../notify/podium';
+import { authorizeUrl, exchangeCode, listPodiumLocations, registerWebhook, verifyPodiumSignature } from '../notify/podium';
 
 const STOP_WORDS = new Set(['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT']);
 const adm = guard('admin');
@@ -195,6 +195,16 @@ export async function messagingRoutes(app: FastifyInstance) {
       return { ok: true };
     } catch (e: any) {
       return reply.code(502).send({ error: `${e.message}. You can still add the webhook URL and secret shown below in Podium by hand.` });
+    }
+  });
+
+  app.get('/api/podium/locations', { preHandler: adm }, async (req, reply) => {
+    const cfg = await withTenant(req.user.tid, (c) => loadSettings(c, req.user.tid));
+    if (!podiumConnected(cfg.podium)) return reply.code(400).send({ error: 'Connect Podium first' });
+    try {
+      return { locations: await listPodiumLocations(cfg.podium, persistPodium(req.user.tid)) };
+    } catch (e: any) {
+      return reply.code(502).send({ error: e.message });
     }
   });
 

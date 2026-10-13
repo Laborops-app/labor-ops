@@ -97,3 +97,13 @@ export function verifyPodiumSignature(secret: string, timestamp: string, raw: st
   const eq = (a: string) => a.length === sig.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(sig));
   return eq(hex) || eq(b64);
 }
+
+/** Locations the connected Podium account can see (to find the right location UID). */
+export async function listPodiumLocations(p: Podium, persist?: (t: Tokens) => Promise<void>): Promise<{ uid: string; name: string }[]> {
+  const token = await accessToken(p, persist);
+  const res = await fetch(`${API}/v4/locations`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) });
+  const j: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`Podium ${res.status}: ${String(j?.message ?? j?.error ?? 'could not list locations').slice(0, 250)}`);
+  const rows: any[] = Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : [];
+  return rows.map((l) => ({ uid: String(l.uid ?? l.id ?? ''), name: String(l.name ?? l.displayName ?? l.uid ?? '') })).filter((l) => l.uid);
+}
