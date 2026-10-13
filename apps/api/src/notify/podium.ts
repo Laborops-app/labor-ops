@@ -76,7 +76,7 @@ export async function registerWebhook(p: Podium, url: string, secret: string, pe
   const res = await fetch(`${API}/v4/webhooks`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-    body: JSON.stringify({ url, secret, locationUid: p.locationUid, eventTypes: ['message.received', 'message.failed'], disabled: false }),
+    body: JSON.stringify({ url, secret, locationUid: p.locationUid, eventTypes: ['message.received', 'message.failed'] }),
     signal: AbortSignal.timeout(15_000),
   });
   const j: any = await res.json().catch(() => ({}));
