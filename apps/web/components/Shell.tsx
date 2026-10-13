@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { api, Me, Role, roleLabel } from '@/lib/api';
 import ThemeToggle from '@/components/ThemeToggle';
-import InstallApp from '@/components/InstallApp';
+import InstallApp, { InstallPopup } from '@/components/InstallApp';
 import NotificationBell from '@/components/NotificationBell';
 
 const icon = (d: React.ReactNode) => (
@@ -311,6 +311,7 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
           <span className="page-title">{current?.label ?? ''}</span>
           <span className="spacer" />
           <InstallApp className="btn small install-btn" />
+          <InstallPopup />
           <NotificationBell />
           <Link href="/profile" className="who" aria-label="My profile">
             <span className="avatar solid" aria-hidden="true">

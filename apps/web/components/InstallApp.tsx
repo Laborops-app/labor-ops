@@ -61,3 +61,52 @@ export function InstallCard() {
     </section>
   );
 }
+
+const KEY = 'lo-install-prompt'; // per browser/device: { installed?: true, dismissedAt?: ms }
+const DELAY_MS = 45_000;
+const SNOOZE_MS = 30 * 24 * 3600_000;
+const read = (): { installed?: boolean; dismissedAt?: number } => {
+  try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { return {}; }
+};
+const write = (v: object) => { try { localStorage.setItem(KEY, JSON.stringify({ ...read(), ...v })); } catch { /* storage blocked */ } };
+
+/** Pops up 45s after the page opens, offering to install. Never shown when the app is already installed on this device, or after it was dismissed in the last 30 days. */
+export function InstallPopup() {
+  const { canInstall, installed, install } = useInstall();
+  const [due, setDue] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [related, setRelated] = useState(false);
+
+  useEffect(() => {
+    const st = read();
+    if (installed) write({ installed: true });
+    if (st.installed || (st.dismissedAt && Date.now() - st.dismissedAt < SNOOZE_MS)) return;
+    // Installed earlier from this browser? (Chrome/Edge/Android; ignored where unsupported.)
+    (navigator as any).getInstalledRelatedApps?.().then((a: unknown[]) => { if (a?.length) { write({ installed: true }); setRelated(true); } }).catch(() => undefined);
+    const t = setTimeout(() => setDue(true), DELAY_MS);
+    return () => clearTimeout(t);
+  }, [installed]);
+
+  useEffect(() => {
+    if (due && canInstall && !installed && !related && !read().installed) setOpen(true);
+  }, [due, canInstall, installed, related]);
+
+  useEffect(() => {
+    const done = () => { write({ installed: true }); setOpen(false); };
+    window.addEventListener('appinstalled', done);
+    return () => window.removeEventListener('appinstalled', done);
+  }, []);
+
+  if (!open) return null;
+  const dismiss = () => { write({ dismissedAt: Date.now() }); setOpen(false); };
+  return (
+    <div role="dialog" aria-label="Install LaborOps" className="card" style={{ position: 'fixed', right: 16, bottom: 16, zIndex: 60, maxWidth: 340, boxShadow: '0 8px 30px rgba(0,0,0,.35)' }}>
+      <h3 style={{ marginTop: 0 }}>Install LaborOps</h3>
+      <p className="muted small">Add it to your desktop so it opens in its own window and is one click away.</p>
+      <div className="row">
+        <button className="btn primary small" onClick={async () => { await install(); write({ dismissedAt: Date.now() }); setOpen(false); }}>Install</button>
+        <button className="btn ghost small" onClick={dismiss}>Not now</button>
+      </div>
+    </div>
+  );
+}
