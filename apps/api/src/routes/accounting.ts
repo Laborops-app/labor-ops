@@ -109,8 +109,8 @@ export async function accountingRoutes(app: FastifyInstance) {
   app.get('/api/quickbooks/callback', { preHandler: adm }, async (req, reply) => {
     const q = z.object({ code: z.string().min(5).max(2000).optional(), state: z.string().min(10).max(4000), realmId: z.string().regex(/^\d{1,30}$/).optional(), error: z.string().optional() }).parse(req.query);
     const st = readState(q.state);
-    if (!st || st.sub !== req.user.sub || st.tid !== req.user.tid) return reply.redirect('/accounting?qbo=invalid');
-    if (q.error || !q.code || !q.realmId) return reply.redirect('/accounting?qbo=denied');
+    if (!st || st.sub !== req.user.sub || st.tid !== req.user.tid) return reply.redirect('/integrations?qbo=invalid');
+    if (q.error || !q.code || !q.realmId) return reply.redirect('/integrations?qbo=denied');
     try {
       await withTenant(req.user.tid, async (c) => {
         const cfg = await loadQbo(c);
@@ -121,10 +121,10 @@ export async function accountingRoutes(app: FastifyInstance) {
         if (name) await saveQbo(c, req.user.tid, null, { companyName: name });
         await audit(c, req.user.tid, req.user.sub, 'accounting.quickbooks.connect', 'integration', null, { realmId: q.realmId });
       });
-      return reply.redirect('/accounting?qbo=connected');
+      return reply.redirect('/integrations?qbo=connected');
     } catch (e) {
       req.log.error(e);
-      return reply.redirect('/accounting?qbo=failed');
+      return reply.redirect('/integrations?qbo=failed');
     }
   });
 
@@ -206,7 +206,7 @@ export async function accountingRoutes(app: FastifyInstance) {
         if (!bill.lines.length || bill.total <= 0) return { code: 400, error: 'Nothing to bill yet.' };
         if (!b.again && bill.invoices.some((i: any) => i.provider === 'qbo')) return { code: 409, error: 'This event already has a QuickBooks invoice. Create another one only if that is intended.', reason: 'duplicate' };
         const missing = bill.lines.filter((l) => !l.qboItemId);
-        if (missing.length) return { code: 400, error: `Choose a QuickBooks item for ${[...new Set(missing.map((l) => l.role))].join(', ')} (or a default item) under Accounting.` };
+        if (missing.length) return { code: 400, error: `Choose a QuickBooks item for ${[...new Set(missing.map((l) => l.role))].join(', ')} (or a default item) under Integrations.` };
         const qb = await qboSession(c, req.user.tid);
         let customerId = bill.customer.qbo_customer_id as string | null;
         if (!customerId) {
@@ -295,7 +295,7 @@ export async function accountingRoutes(app: FastifyInstance) {
       if (q.mark === '1' && q.provider !== 'csv') await markExported(c, req.user.tid, req.user.sub, q.provider, q, sum.people);
       return f;
     });
-    if (!out) return reply.code(400).send({ error: 'Turn that payroll provider on under Accounting first.' });
+    if (!out) return reply.code(400).send({ error: 'Turn that payroll provider on under Integrations first.' });
     return download(reply, `${out.name}-${q.from}-to-${q.to}.csv`, 'text/csv', out.body);
   });
 
@@ -305,7 +305,7 @@ export async function accountingRoutes(app: FastifyInstance) {
     try {
       const out = await withTenant(req.user.tid, async (c) => {
         const s = await loadAcct(c);
-        if (!s.payroll.enabled.includes('quickbooks')) return { code: 400, error: 'Turn QuickBooks payroll on under Accounting first.' };
+        if (!s.payroll.enabled.includes('quickbooks')) return { code: 400, error: 'Turn QuickBooks payroll on under Integrations first.' };
         const qb = await qboSession(c, req.user.tid);
         const sum = await payrollSummary(c, p.from, p.to);
         const emps = await qb.employees();

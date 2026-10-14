@@ -12,10 +12,10 @@ const SECTIONS: { title: string; items: string[] }[] = [
   { title: 'My work', items: ['/my-shifts', '/my-calendar', '/open-shifts', '/availability'] },
   { title: 'Sales', items: ['/customers', '/quotes'] },
   { title: 'People', items: ['/crew', '/skills', '/trainings'] },
-  { title: 'Admin', items: ['/accounting', '/rules', '/integrations', '/messaging'] },
+  { title: 'Admin', items: ['/payroll', '/rules', '/integrations', '/messaging'] },
   { title: 'Account', items: ['/profile'] },
 ];
-const CHILDREN: Record<string, string[]> = { '/quotes': ['/quote-layouts'], '/crew': ['/groups'], '/accounting': ['/payroll'] };
+const CHILDREN: Record<string, string[]> = { '/quotes': ['/quote-layouts'], '/crew': ['/groups'] };
 const KEY = 'lo_sb_collapsed';
 
 /** Glass sidebar (expanded 256px / collapsed 104px) with grouped sections, sub-menus and a quick action. */

@@ -1,6 +1,9 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import Shell from '@/components/Shell';
+import Panel from '@/components/Panel';
+import AccountingPanels from '@/components/AccountingPanels';
 import { Banner } from '@/components/ui';
 import { api } from '@/lib/api';
 
@@ -24,11 +27,12 @@ function Academy() {
   }, []);
   if (!a) return error ? <Banner>{error}</Banner> : null;
   return (
-    <section className="card">
-      <div className="row space">
-        <h2>Upstage Academy</h2>
-        <span className="small">{a.secretSet ? '● Secret set' : '○ Not set up'}</span>
-      </div>
+    <Panel
+      id="academy"
+      title="Upstage Academy"
+      summary="Add certificates students earn to their profiles"
+      status={a.secretSet ? <span className="chip open">Set up · {a.stats.applied}/{a.stats.total} added</span> : <span className="chip">Not set up</span>}
+    >
       <p className="muted small">
         Certificates students earn in the academy are added to their profile automatically. A student is matched by the email in their LaborOps account, which must be the same as their academy username. In the academy go to Academy → LaborOps, paste the webhook URL below, and paste the secret you generate here.
       </p>
@@ -96,11 +100,12 @@ function Academy() {
           </tbody>
         </table>
       )}
-    </section>
+    </Panel>
   );
 }
 
 function Body() {
+  const params = useSearchParams();
   const [s, setS] = useState<St | null>(null);
   const [token, setToken] = useState('');
   const [error, setError] = useState('');
@@ -130,13 +135,16 @@ function Body() {
   return (
     <>
       <h1>Integrations</h1>
+      <p className="muted">Click an integration to open its settings.</p>
+      <h2 className="panel-group-title">Apps</h2>
       {error && <Banner onClose={() => setError('')}>{error}</Banner>}
       {ok && <Banner kind="ok" onClose={() => setOk('')}>{ok}</Banner>}
-      <section className="card">
-        <div className="row space">
-          <h2>Rentman</h2>
-          <span className="small">{s.connected ? '● Connected' : '○ Not connected'}</span>
-        </div>
+      <Panel
+        id="rentman"
+        title="Rentman"
+        summary="Link events to Rentman projects and sync customers"
+        status={s.connected ? <span className="chip open">Connected · {s.projects} project{s.projects === 1 ? '' : 's'}</span> : <span className="chip">Not connected</span>}
+      >
         <p className="muted small">
           Link events to Rentman projects and see the project details and equipment rentals on the event page. In Rentman, open Settings → Extensions → API, create an API token and paste it here. The token is stored encrypted and is never shown again.
         </p>
@@ -179,12 +187,21 @@ function Body() {
             </div>
           </>
         )}
-      </section>
+      </Panel>
       <Academy />
+      <AccountingPanels qbo={params.get('qbo')} />
     </>
   );
 }
 
 export default function Page() {
-  return <Shell roles={['admin']}>{() => <Body />}</Shell>;
+  return (
+    <Shell roles={['admin']}>
+      {() => (
+        <Suspense fallback={<div className="muted">Loading…</div>}>
+          <Body />
+        </Suspense>
+      )}
+    </Shell>
+  );
 }

@@ -95,7 +95,7 @@ export class Qbo {
 
   private async token(force = false) {
     if (!force && this.q.accessToken && (this.q.expiresAt ?? 0) - 60_000 > Date.now()) return this.q.accessToken;
-    if (!this.q.refreshToken) throw new QboError('QuickBooks is not connected. Connect it again from Accounting settings.', 400);
+    if (!this.q.refreshToken) throw new QboError('QuickBooks is not connected. Connect it again under Integrations.', 400);
     const t = await tokenRequest(this.q, { grant_type: 'refresh_token', refresh_token: this.q.refreshToken });
     Object.assign(this.q, t);
     await this.persist(t);
@@ -189,8 +189,8 @@ export class Qbo {
 /** A ready QuickBooks session for this company, or an error explaining what is missing. */
 export async function qboSession(c: PoolClient, tid: string): Promise<Qbo> {
   const q = await loadQbo(c);
-  if (!qboConnected(q)) throw new QboError('QuickBooks Online is not connected. An admin can connect it under Accounting.', 400);
-  if (q.refreshExpiresAt && q.refreshExpiresAt < Date.now()) throw new QboError('The QuickBooks connection has expired. Connect it again under Accounting.', 400);
+  if (!qboConnected(q)) throw new QboError('QuickBooks Online is not connected. An admin can connect it under Integrations.', 400);
+  if (q.refreshExpiresAt && q.refreshExpiresAt < Date.now()) throw new QboError('The QuickBooks connection has expired. Connect it again under Integrations.', 400);
   return new Qbo(q, async (p) => {
     await saveQbo(c, tid, null, p);
   });

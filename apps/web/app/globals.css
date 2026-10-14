@@ -889,3 +889,17 @@ input, select, textarea { font-weight: 400; }
 /* compact controls inside tables and dense rows */
 td input, td select, td textarea, .money-input input { padding: 6px 10px; font-size: 14px; line-height: 20px; border-radius: 8px; }
 td .btn, .row .btn.small { white-space: nowrap; }
+
+/* ---- collapsible panels (integrations) ---- */
+.card.panel { padding: 0; overflow: hidden; }
+.panel-head { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; width: 100%; padding: 1.05rem 1.4rem; background: none; border: 0; border-radius: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.panel-head:hover { background: var(--surface-2); }
+.panel-head:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.panel-head .chev { flex: none; color: var(--muted); transition: transform 0.15s; }
+.card.panel.open .panel-head .chev { transform: rotate(90deg); }
+.panel-title { display: grid; gap: 2px; min-width: 0; }
+.panel-title b { font-size: 1.05rem; }
+.panel-status { justify-self: end; }
+.panel-body { padding: 0 1.4rem 1.3rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+.panel-group-title { margin: 1.4rem 0 0.6rem; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+@media (max-width: 640px) { .panel-head { grid-template-columns: 16px minmax(0, 1fr); padding: 0.9rem 1rem; } .panel-status { grid-column: 2; justify-self: start; } .panel-body { padding: 0.9rem 1rem 1.1rem; } }

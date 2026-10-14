@@ -1416,7 +1416,7 @@ test('accounting: event billing (time + schedule, per-job OT, day rates), QuickB
   assert.equal(conn.origin + conn.pathname, 'https://appcenter.intuit.com/connect/oauth2');
   assert.equal(conn.searchParams.get('scope'), 'com.intuit.quickbooks.accounting');
   const state = conn.searchParams.get('state')!;
-  assert.equal((await call(a, 'GET', `/api/quickbooks/callback?code=abcdef&realmId=123145&state=bogusbogus.signature`)).res.headers.location, '/accounting?qbo=invalid');
+  assert.equal((await call(a, 'GET', `/api/quickbooks/callback?code=abcdef&realmId=123145&state=bogusbogus.signature`)).res.headers.location, '/integrations?qbo=invalid');
 
   const real = globalThis.fetch;
   const seen: { url: string; init: any }[] = [];
@@ -1440,7 +1440,7 @@ test('accounting: event billing (time + schedule, per-job OT, day rates), QuickB
   }) as typeof fetch;
   try {
     const cb = await call(a, 'GET', `/api/quickbooks/callback?code=auth-code-1&realmId=123145&state=${encodeURIComponent(state)}`);
-    assert.equal(cb.res.headers.location, '/accounting?qbo=connected');
+    assert.equal(cb.res.headers.location, '/integrations?qbo=connected');
     const tok = seen.find((x) => x.url.startsWith('https://oauth.platform.intuit.com/'))!;
     assert.equal(tok.init.headers.authorization, 'Basic ' + Buffer.from('qb-client-id:qb-secret-123').toString('base64'));
     assert.match(tok.init.body, /grant_type=authorization_code/);

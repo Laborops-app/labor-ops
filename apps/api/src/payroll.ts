@@ -122,7 +122,7 @@ const split = (name: string) => {
 };
 const h = (n: number) => (n ? n.toFixed(2) : '');
 
-/** ADP Workforce Now pay data import (EPI-style CSV): one row per employee keyed by File #. Column codes are set under Accounting. */
+/** ADP Workforce Now pay data import (EPI-style CSV): one row per employee keyed by File #. Column codes are set under Integrations. */
 export function adpFile(s: AcctSettings['payroll']['adp'], people: PayPerson[]) {
   return csv([
     ['Co Code', 'Batch ID', 'File #', 'Reg Hours', 'O/T Hours', 'Hours 3 Code', 'Hours 3 Amount', 'Earnings 3 Code', 'Earnings 3 Amount'],

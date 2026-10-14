@@ -102,14 +102,14 @@ export default function InvoicePanel({ eventId, isAdmin }: { eventId: string; is
               <h2>Send to QuickBooks</h2>
               {b.quickbooks.connected ? (
                 <>
-                  {b.unmapped.length > 0 && <p className="small" style={{ color: 'var(--warn)' }}>Choose a QuickBooks item for {b.unmapped.join(', ')} under Accounting first.</p>}
+                  {b.unmapped.length > 0 && <p className="small" style={{ color: 'var(--warn)' }}>Choose a QuickBooks item for {b.unmapped.join(', ')} under Integrations first.</p>}
                   <button className="btn primary" disabled={busy || !b.customer || b.unmapped.length > 0} onClick={() => toQbo()}>
                     Create invoice in QuickBooks Online
                   </button>
                   <p className="muted small">It is created in QuickBooks{b.quickbooks.environment === 'sandbox' ? ' (sandbox company)' : ''} but not emailed; review and send it from QuickBooks.{b.customer && !b.customer.qbo_customer_id ? ` “${b.customer.name}” is matched by name, or added to QuickBooks.` : ''}</p>
                 </>
               ) : (
-                <p className="muted small">QuickBooks Online is not connected.{isAdmin ? ' Connect it under Accounting.' : ' Ask an admin to connect it under Accounting.'}</p>
+                <p className="muted small">QuickBooks Online is not connected.{isAdmin ? ' Connect it under Integrations.' : ' Ask an admin to connect it under Integrations.'}</p>
               )}
               <h3 style={{ marginTop: 14 }}>QuickBooks Desktop</h3>
               <div className="row">
