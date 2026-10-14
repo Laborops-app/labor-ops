@@ -308,7 +308,7 @@ export function Clocking({ ev, onSaved, onError }: { ev: EventFull; onSaved: () 
   );
 }
 
-type RmView = {
+export type RmView = {
   linked: boolean; connected: boolean; warning?: string;
   project?: { id: number; number: number | null; name: string; customer: string | null; location: string | null; reference: string | null; project_type: string | null; tags: string | null; planperiod_start: string | null; planperiod_end: string | null; usageperiod_start: string | null; usageperiod_end: string | null; synced_at: string } | null;
   equipment?: { item_id: number; name: string; quantity: string | null; unit_price?: string | null; is_option: boolean; period_start: string | null; period_end: string | null; remark: string | null; group_id: number | null; group_name: string | null; group_sort: number | null; parent_id: number | null }[];
@@ -316,21 +316,12 @@ type RmView = {
 type RmItem = NonNullable<RmView['equipment']>[number];
 
 /** The Rentman project linked to an event: project info and the equipment rental list. */
-export function RentmanCard({ eventId, isAdmin, onError }: { eventId: string; isAdmin: boolean; onError: (m: string) => void }) {
+export function RentmanCard({ eventId, isAdmin, onError, onView }: { eventId: string; isAdmin: boolean; onError: (m: string) => void; onView?: (v: RmView) => void }) {
   const [v, setV] = useState<RmView | null>(null);
   const [pick, setPick] = useState<RmProject | null>(null);
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set()); // equipment groups start collapsed
-  // The whole Rentman section starts collapsed; whether it was left open is remembered on this device.
-  const [rmOpen, setRmOpen] = useState(false);
-  useEffect(() => {
-    try { setRmOpen(localStorage.getItem('lo_rm_open') === '1'); } catch { /* storage unavailable */ }
-  }, []);
-  const toggleRm = (o: boolean) => {
-    setRmOpen(o);
-    try { localStorage.setItem('lo_rm_open', o ? '1' : '0'); } catch { /* storage unavailable */ }
-  };
   const [busy, setBusy] = useState(false);
-  const load = () => api<RmView>(`/api/events/${eventId}/rentman`).then(setV).catch(() => {});
+  const load = () => api<RmView>(`/api/events/${eventId}/rentman`).then((r) => { setV(r); onView?.(r); }).catch(() => {});
   useEffect(() => {
     load();
   }, [eventId]);
@@ -340,6 +331,7 @@ export function RentmanCard({ eventId, isAdmin, onError }: { eventId: string; is
     try {
       const r = await fn();
       setV(r);
+      onView?.(r);
       if (r.warning) onError(r.warning);
       setPick(null);
     } catch (e) {
@@ -352,15 +344,11 @@ export function RentmanCard({ eventId, isAdmin, onError }: { eventId: string; is
   const when = (a: string | null, b: string | null) => (a ? (b && b.slice(0, 10) !== a.slice(0, 10) ? `${fmtDate(a.slice(0, 10))} – ${fmtDate(b.slice(0, 10))}` : fmtDate(a.slice(0, 10))) : '—');
   const p = v.project;
   return (
-    <details className="card rm-card" open={rmOpen} onToggle={(e) => { const o = (e.target as HTMLDetailsElement).open; if (o !== rmOpen) toggleRm(o); }}>
-      <summary>
-        <h2 style={{ display: 'inline' }}>Rentman</h2>{' '}
+    <section className="card">
+      <div className="row space">
         <span className="muted small">
-          {v.linked && p ? `${p.number ? `#${p.number} · ` : ''}${p.name} · ${v.equipment?.length ?? 0} equipment item${v.equipment?.length === 1 ? '' : 's'}` : v.linked ? 'Linked project' : 'Not linked'}
+          {v.linked && p ? `${p.number ? `#${p.number} · ` : ''}${p.name} · ${v.equipment?.length ?? 0} equipment item${v.equipment?.length === 1 ? '' : 's'}` : v.linked ? 'Linked project' : 'Not linked to a Rentman project yet'}
         </span>
-      </summary>
-      <div className="row space" style={{ marginTop: '.6rem' }}>
-        <span />
         {v.linked && (
           <span className="row">
             <button className="btn small" disabled={busy} onClick={() => run(() => api<RmView>(`/api/events/${eventId}/rentman/refresh`, { body: {} }))}>Refresh equipment</button>
@@ -424,7 +412,7 @@ export function RentmanCard({ eventId, isAdmin, onError }: { eventId: string; is
         </>
       )}
       {v.linked && !p && <p className="muted small">The linked project is not in the local cache. Sync projects on the Integrations page.</p>}
-    </details>
+    </section>
   );
 }
 

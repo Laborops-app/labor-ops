@@ -10,7 +10,7 @@ import FillFromGroup from '@/components/FillFromGroup';
 import CrewPick, { PickOption } from '@/components/CrewPick';
 import CopyEvent from '@/components/CopyEvent';
 import { api, ApiError, Me, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
-import { EventDetails, Phases, Clocking, RentmanCard, EventFull, Phase } from '@/components/EventInfo';
+import { EventDetails, Phases, Clocking, RentmanCard, EventFull, Phase, RmView } from '@/components/EventInfo';
 import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 
 type Assignment = { id: string; user_id: string; user_name: string; status: string; clocked_in_at?: string | null; last_clock_out?: string | null };
@@ -114,7 +114,12 @@ function Body({ me }: { me: Me }) {
   const [tplId, setTplId] = useState('');
   const [tplPhase, setTplPhase] = useState('');
   // Event settings panel: clock-in, overtime and shift templates live here to keep the page short.
-  const [settings, setSettings] = useState<null | 'clock' | 'ot' | 'tpl'>(null);
+  const [settings, setSettings] = useState<null | 'clock' | 'ot' | 'tpl' | 'rentman'>(null);
+  // Rentman lives in the same side panel, opened from its own button next to Event settings.
+  const [rm, setRm] = useState<RmView | null>(null);
+  useEffect(() => {
+    api<RmView>(`/api/events/${id}/rentman`).then(setRm).catch(() => setRm(null));
+  }, [id]);
   useEffect(() => {
     if (!settings) return;
     const esc = (e: KeyboardEvent) => e.key === 'Escape' && setSettings(null);
@@ -532,6 +537,11 @@ function Body({ me }: { me: Me }) {
         <button className="btn small" onClick={() => setSettings('clock')} aria-haspopup="dialog">
           ⚙ Event settings
         </button>
+        {rm && (rm.connected || rm.linked) && (
+          <button className="btn small" onClick={() => setSettings('rentman')} aria-haspopup="dialog" title={rm.project ? rm.project.name : 'Link a Rentman project'}>
+            Rentman{rm.linked && rm.project ? ` · ${rm.project.number ? `#${rm.project.number}` : rm.project.name}` : ''}
+          </button>
+        )}
         <button
           className="btn small"
           onClick={() =>
@@ -568,7 +578,6 @@ function Body({ me }: { me: Me }) {
 
       <EventDetails ev={ev} hasPhases={d.phases.length > 0} onSaved={load} onError={setError} />
       <Phases eventId={id} phases={d.phases} onChanged={load} onError={setError} />
-      <RentmanCard eventId={id} isAdmin={me.role === 'admin'} onError={setError} />
 
       <section className="card" ref={shiftForm}>
         <h2>Add a shift</h2>
@@ -710,18 +719,19 @@ function Body({ me }: { me: Me }) {
 
       {settings && typeof document !== 'undefined' && createPortal(
         <div className="drawer-backdrop" onMouseDown={() => setSettings(null)}>
-          <aside className="drawer" role="dialog" aria-modal="true" aria-label="Event settings" onMouseDown={(e) => e.stopPropagation()}>
+          <aside className={settings === 'rentman' ? 'drawer wide' : 'drawer'} role="dialog" aria-modal="true" aria-label={settings === 'rentman' ? 'Rentman' : 'Event settings'} onMouseDown={(e) => e.stopPropagation()}>
             <div className="row space">
-              <h2 style={{ margin: 0 }}>Event settings</h2>
-              <button className="btn ghost small" aria-label="Close settings" onClick={() => setSettings(null)}>✕</button>
+              <h2 style={{ margin: 0 }}>{settings === 'rentman' ? 'Rentman' : 'Event settings'}</h2>
+              <button className="btn ghost small" aria-label="Close" onClick={() => setSettings(null)}>✕</button>
             </div>
-            <div className="phase-tabs" role="tablist" aria-label="Settings section" style={{ margin: '12px 0' }}>
+            {settings === 'rentman' && <div style={{ marginTop: 12 }}><RentmanCard eventId={id} isAdmin={me.role === 'admin'} onError={setError} onView={setRm} /></div>}
+            {settings !== 'rentman' && <div className="phase-tabs" role="tablist" aria-label="Settings section" style={{ margin: '12px 0' }}>
               {([['clock', 'Clock-in'], ['ot', 'Overtime'], ['tpl', 'Shift templates']] as const).map(([k, label]) => (
                 <button key={k} type="button" role="tab" aria-selected={settings === k} className={settings === k ? 'tab on' : 'tab'} onClick={() => setSettings(k)}>
                   {label}
                 </button>
               ))}
-            </div>
+            </div>}
             {settings === 'clock' && <Clocking ev={ev} onSaved={load} onError={setError} />}
             {settings === 'ot' && d.overtime && <OvertimeCard eventId={id} ot={d.overtime} onSaved={load} onError={setError} />}
             {settings === 'tpl' && (
