@@ -11,6 +11,7 @@ type St = { connected: boolean; projects: number; lastSync: string | null };
 
 type Ac = {
   url: string;
+  siteUrl: string;
   secretSet: boolean;
   stats: { total: number; applied: number };
   recent: { code: string; email: string; title: string; kind: string; issued_at: string; applied_at: string | null; user_name: string | null }[];
@@ -19,6 +20,7 @@ type Ac = {
 function Academy() {
   const [a, setA] = useState<Ac | null>(null);
   const [secret, setSecret] = useState('');
+  const [site, setSite] = useState<string | null>(null);
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
   const load = () => api<Ac>('/api/integrations/academy').then(setA).catch((e) => setError(e.message));
@@ -38,6 +40,28 @@ function Academy() {
       </p>
       {error && <Banner onClose={() => setError('')}>{error}</Banner>}
       {msg && <Banner kind="ok" onClose={() => setMsg('')}>{msg}</Banner>}
+      <form
+        className="row"
+        style={{ alignItems: 'flex-end', gap: 8, marginBottom: 12 }}
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setError('');
+          try {
+            await api('/api/integrations/academy/site', { method: 'PUT', body: { url: site ?? a.siteUrl } });
+            setSite(null);
+            setMsg('Academy address saved. Course groups can now be synced on the Trainings page.');
+            await load();
+          } catch (x) {
+            setError((x as Error).message);
+          }
+        }}
+      >
+        <label style={{ flex: 1, margin: 0 }}>
+          Academy web address <span className="muted small">(filled in automatically after the academy&apos;s first test ping)</span>
+          <input type="url" value={site ?? a.siteUrl} onChange={(e) => setSite(e.target.value)} placeholder="https://academy.example.com" />
+        </label>
+        <button className="btn" disabled={site === null || site === a.siteUrl}>Save address</button>
+      </form>
       <label>
         Webhook URL
         <input readOnly value={a.url} onFocus={(e) => e.currentTarget.select()} />

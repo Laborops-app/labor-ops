@@ -1,6 +1,8 @@
 'use client';
 import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
+import Panel from '@/components/Panel';
+import AcademyCourses from '@/components/AcademyCourses';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { api, fmtDateTime, Me } from '@/lib/api';
 
@@ -35,8 +37,7 @@ function NewTraining({ onDone, onError }: { onDone: () => void; onError: (m: str
     }
   };
   return (
-    <section className="card">
-      <h2>New training</h2>
+    <Panel id="new-training" title="Post an in-person training" summary="Crew can apply; you approve seats and grant the certificate">
       <p className="muted small">Crew are notified in the app, by push and by email. Anyone who already holds the certificate it grants is not.</p>
       <form onSubmit={submit}>
         <div className="grid2">
@@ -51,7 +52,7 @@ function NewTraining({ onDone, onError }: { onDone: () => void; onError: (m: str
         <label>Details<textarea rows={2} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} maxLength={2000} /></label>
         <button className="btn primary" disabled={busy}>Post training</button>
       </form>
-    </section>
+    </Panel>
   );
 }
 
@@ -72,8 +73,10 @@ function Body({ me }: { me: Me }) {
       <h1>Trainings</h1>
       {error && <Banner>{error}</Banner>}
       {note && <Banner kind="ok">{note}</Banner>}
+      <AcademyCourses role={me.role} />
+      <h2 className="panel-group-title">In-person trainings</h2>
       {staff && <NewTraining onDone={() => { setNote('Training posted and crew notified.'); load(); }} onError={setError} />}
-      {list.length === 0 && <Empty>No trainings right now.</Empty>}
+      {list.length === 0 && <Empty>No in-person trainings right now.</Empty>}
       {list.map((t) => {
         const upcoming = t.status === 'open' && new Date(t.starts_at) > new Date();
         return (

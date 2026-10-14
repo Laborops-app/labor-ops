@@ -4,7 +4,7 @@ const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 
 export const absUrl = (link?: string | null) => (link ? (link.startsWith('http') ? link : config.appUrl + link) : config.appUrl);
 
-export function renderEmail(opts: { title: string; body: string; link?: string | null; linkLabel?: string; footer?: string; actions?: { label: string; url: string; kind: 'accept' | 'decline' }[] }) {
+export function renderEmail(opts: { title: string; body: string; link?: string | null; linkLabel?: string; footer?: string; actions?: { label: string; url: string; kind: 'accept' | 'decline' | 'primary' }[] }) {
   const url = absUrl(opts.link);
   const label = opts.linkLabel ?? 'Open LaborOps';
   const footer = opts.footer ?? 'You are receiving this because of your notification settings in LaborOps. You can change them on your profile page.';
@@ -12,7 +12,7 @@ export function renderEmail(opts: { title: string; body: string; link?: string |
   const actText = acts.map((a) => `${a.label}: ${a.url}`).join('\n');
   const text = `${opts.body}\n\n${actText ? actText + '\n' : ''}${label}: ${url}\n\n— LaborOps\n${footer}`;
   const btn = (a: { label: string; url: string; kind: string }) =>
-    `<a href="${esc(a.url)}" style="background:${a.kind === 'accept' ? '#15803d' : '#b91c1c'};color:#fff;text-decoration:none;padding:11px 22px;border-radius:8px;display:inline-block;font-weight:600;margin:0 8px 8px 0">${esc(a.label)}</a>`;
+    `<a href="${esc(a.url)}" style="background:${a.kind === 'accept' ? '#15803d' : a.kind === 'primary' ? '#2563eb' : '#b91c1c'};color:#fff;text-decoration:none;padding:11px 22px;border-radius:8px;display:inline-block;font-weight:600;margin:0 8px 8px 0">${esc(a.label)}</a>`;
   const actHtml = acts.length ? `<p style="margin:20px 0 0">${acts.map(btn).join('')}</p>` : '';
   const paras = opts.body.split(/\n{2,}/).map((p) => `<p style="margin:0 0 14px;line-height:1.5">${esc(p).replace(/\n/g, '<br>')}</p>`).join('');
   const html = `<!doctype html><html><body style="margin:0;background:#f3f4f6;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#111827">

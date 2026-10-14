@@ -903,3 +903,14 @@ td .btn, .row .btn.small { white-space: nowrap; }
 .panel-body { padding: 0 1.4rem 1.3rem; border-top: 1px solid var(--border); padding-top: 1rem; }
 .panel-group-title { margin: 1.4rem 0 0.6rem; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
 @media (max-width: 640px) { .panel-head { grid-template-columns: 16px minmax(0, 1fr); padding: 0.9rem 1rem; } .panel-status { grid-column: 2; justify-self: start; } .panel-body { padding: 0.9rem 1rem 1.1rem; } }
+
+/* ---- academy courses ---- */
+.pick-list { max-height: 300px; overflow-y: auto; border: 1px solid var(--border); border-radius: 12px; margin-top: 8px; }
+.pick-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--border); margin: 0; font-weight: 500; cursor: pointer; }
+.pick-row:last-child { border-bottom: 0; }
+.pick-row:hover { background: var(--surface-2); }
+.course-list { margin: 0.2rem 0 0.8rem; padding-left: 1.3rem; display: grid; gap: 4px; }
+.course-list li.done { color: var(--muted); }
+.course-list li.done a { color: var(--muted); }
+.course-list li.done::marker { content: '✓  '; color: var(--good); font-weight: 700; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

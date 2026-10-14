@@ -21,7 +21,11 @@ export type NotifyInput = {
   /** Link used in the text message instead of `link`. */
   smsLink?: string;
   /** Extra buttons in the email (e.g. Accept / Decline). */
-  actions?: { label: string; url: string; kind: 'accept' | 'decline' }[];
+  actions?: { label: string; url: string; kind: 'accept' | 'decline' | 'primary' }[];
+  /** Label for the email's link back into LaborOps. */
+  linkLabel?: string;
+  /** Also text it (to people who opted in to texts), even though the category is not normally texted. */
+  allowSms?: boolean;
 };
 
 type Target = { id: string; email: string; phone: string | null; notify_email: boolean; notify_sms: boolean; sms_consent_at: Date | null };
@@ -57,7 +61,7 @@ export async function notify(c: PoolClient, tenantId: string, input: NotifyInput
       );
     }
     if (!n.quiet && u.notify_email && u.email) {
-      const m = renderEmail({ title: n.title, body: n.body, link: n.link, linkLabel: n.actions?.length ? 'Open the shift in LaborOps' : undefined, actions: n.actions });
+      const m = renderEmail({ title: n.title, body: n.body, link: n.link, linkLabel: n.linkLabel ?? (n.actions?.length ? 'Open the shift in LaborOps' : undefined), actions: n.actions });
       await c.query(
         `INSERT INTO deliveries (tenant_id, user_id, notification_id, channel, category, to_addr, subject, body, html)
          VALUES ($1,$2,$3,'email',$4,$5,$6,$7,$8)`,
@@ -65,7 +69,7 @@ export async function notify(c: PoolClient, tenantId: string, input: NotifyInput
       );
     }
     const phone = toE164(u.phone);
-    if (!n.quiet && SMS_CATEGORIES.has(n.category) && u.notify_sms && u.sms_consent_at && phone) {
+    if (!n.quiet && (SMS_CATEGORIES.has(n.category) || n.allowSms) && u.notify_sms && u.sms_consent_at && phone) {
       const text = `LaborOps: ${n.sms ?? n.title}${n.smsLink || n.link ? ' ' + absUrl(n.smsLink ?? n.link) : ''} Reply STOP to opt out.`;
       await c.query(
         `INSERT INTO deliveries (tenant_id, user_id, notification_id, channel, category, to_addr, body)
