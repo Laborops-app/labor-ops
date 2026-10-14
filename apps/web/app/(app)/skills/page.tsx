@@ -8,6 +8,7 @@ type Skill = { id: string; name: string; payRate: number; dayRate?: number; bill
 type Group = { id: string; name: string };
 type Edit = { name: string; payRate: string; dayRate: string; billRate: string; dayBillRate: string };
 
+const OPEN_KEY = 'lo_roles_open';
 const money = (n: number) => n.toLocaleString([], { style: 'currency', currency: 'USD' });
 
 /** A coordinator who may adjust rates sees both rates for every role and can change only those. */
@@ -74,6 +75,23 @@ function Body() {
   const [error, setError] = useState('');
   const [ok, setOk] = useState('');
   const [busy, setBusy] = useState('');
+  // Which groups are expanded in the roles table. Collapsed by default; remembered on this device.
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem(OPEN_KEY) ?? '[]');
+      if (Array.isArray(v)) setOpen(new Set(v.filter((x) => typeof x === 'string')));
+    } catch {}
+  }, []);
+  const setOpenSaved = (next: Set<string>) => {
+    setOpen(next);
+    try { localStorage.setItem(OPEN_KEY, JSON.stringify([...next])); } catch {}
+  };
+  const toggle = (k: string) => {
+    const next = new Set(open);
+    if (next.has(k)) next.delete(k); else next.add(k);
+    setOpenSaved(next);
+  };
 
   const load = () =>
     api<{ skills: Skill[]; groups: Group[] }>('/api/skills')
@@ -109,7 +127,10 @@ function Body() {
     e.preventDefault();
     const n = rateNum(f.payRate || '0');
     if (!Number.isFinite(n) || n < 0) return setError('Enter a pay rate of 0 or more.');
-    if (await act('add', `Added ${f.name}.`, () => api('/api/skills', { body: { name: f.name, payRate: n, dayRate: rateNum(f.dayRate || '0') || 0, billRate: rateNum(f.billRate || '0') || 0, dayBillRate: rateNum(f.dayBillRate || '0') || 0, groupId: f.groupId || null } }))) setF({ name: '', payRate: '', dayRate: '', billRate: '', dayBillRate: '', groupId: f.groupId });
+    if (await act('add', `Added ${f.name}.`, () => api('/api/skills', { body: { name: f.name, payRate: n, dayRate: rateNum(f.dayRate || '0') || 0, billRate: rateNum(f.billRate || '0') || 0, dayBillRate: rateNum(f.dayBillRate || '0') || 0, groupId: f.groupId || null } }))) {
+      if (!open.has(f.groupId || 'none')) toggle(f.groupId || 'none');
+      setF({ name: '', payRate: '', dayRate: '', billRate: '', dayBillRate: '', groupId: f.groupId });
+    }
   };
   const save = (s: Skill) => {
     const e = edits[s.id];
@@ -128,6 +149,15 @@ function Body() {
     ? [...groups.map((g) => ({ g: g as Group | null, rows: list.filter((s) => s.groupId === g.id) })), { g: null as Group | null, rows: list.filter((s) => !s.groupId || !groups.some((g) => g.id === s.groupId)) }].filter((x) => x.g || x.rows.length)
     : [];
 
+  // A single section has nothing to collapse into, so it always shows.
+  const isOpen = (k: string, rows: Skill[]) => sections.length <= 1 || open.has(k) || rows.some((r) => edits[r.id]);
+  const allOpen = sections.length > 0 && sections.every((x) => isOpen(x.g?.id ?? 'none', x.rows));
+  const range = (rows: Skill[]) => {
+    const r = rows.filter((x) => x.active).map((x) => x.payRate);
+    if (!r.length) return '';
+    const lo = Math.min(...r), hi = Math.max(...r);
+    return lo === hi ? `${money(lo)}/hr` : `${money(lo)}–${money(hi)}/hr`;
+  };
   const active = list?.filter((s) => s.active).length ?? 0;
   const avg = list && active ? list.filter((s) => s.active).reduce((n, s) => n + s.payRate, 0) / active : 0;
 
@@ -244,9 +274,16 @@ function Body() {
         <div className="row space">
           <h2>All skills &amp; roles</h2>
           {list && list.length > 0 && (
-            <span className="muted small">
-              {active} active · average {money(avg)}/hr
-            </span>
+            <div className="row" style={{ gap: 10 }}>
+              <span className="muted small">
+                {active} active · average {money(avg)}/hr
+              </span>
+              {sections.length > 1 && (
+                <button type="button" className="btn ghost small" onClick={() => setOpenSaved(allOpen ? new Set() : new Set(sections.map((x) => x.g?.id ?? 'none')))}>
+                  {allOpen ? 'Collapse all' : 'Expand all'}
+                </button>
+              )}
+            </div>
           )}
         </div>
         {!list ? (
@@ -269,21 +306,31 @@ function Body() {
                 </tr>
               </thead>
               <tbody>
-                {sections.map(({ g, rows }) => (
-                  <Fragment key={g?.id ?? 'none'}>
-                    <tr className="group-row">
-                      <td colSpan={5}>
-                        <b>{g ? g.name : groups.length ? 'No group' : 'Roles'}</b> <span className="muted small">{rows.length} role{rows.length === 1 ? '' : 's'}</span>
+                {sections.map(({ g, rows }) => {
+                  const k = g?.id ?? 'none';
+                  const shown = isOpen(k, rows);
+                  return (
+                  <Fragment key={k}>
+                    <tr className={`group-row${shown ? ' open' : ''}`}>
+                      <td colSpan={8}>
+                        <button type="button" className="group-toggle" aria-expanded={shown} onClick={() => toggle(k)} disabled={sections.length <= 1}>
+                          {sections.length > 1 && (
+                            <svg className="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+                          )}
+                          <b>{g ? g.name : groups.length ? 'No group' : 'Roles'}</b>
+                          <span className="muted small">{rows.length} role{rows.length === 1 ? '' : 's'}</span>
+                          {!shown && range(rows) && <span className="muted small grp-range">{range(rows)}</span>}
+                        </button>
                       </td>
                     </tr>
-                    {rows.length === 0 && (
+                    {shown && rows.length === 0 && (
                       <tr>
-                        <td colSpan={5} className="muted small">
+                        <td colSpan={8} className="muted small">
                           No roles in this group yet. Choose it in the Group column of a role, or when adding one.
                         </td>
                       </tr>
                     )}
-                {rows.map((s) => {
+                {shown && rows.map((s) => {
                   const e = edits[s.id];
                   return (
                     <tr key={s.id} className={s.active ? '' : 'inactive'}>
@@ -361,7 +408,8 @@ function Body() {
                   );
                 })}
                   </Fragment>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
