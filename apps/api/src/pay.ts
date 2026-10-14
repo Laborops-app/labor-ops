@@ -74,13 +74,16 @@ export function priceShift(rules: Rules | null, rate: number | undefined, starts
   const hours = hoursBetween(startsAt, endsAt);
   if (!rate) return { hours, rate: null, estimate: null, otHours: 0, dtHours: 0, premiumHours: 0, notes: [], payType: 'hourly' };
   if (!rules) return { hours, rate, estimate: Math.round(hours * rate * 100) / 100, otHours: 0, dtHours: 0, premiumHours: 0, notes: [], payType: 'hourly' };
-  const step = 5, h = step / 60;
+  const step = 5;
   let total = 0, ot = 0, dt = 0, prem = 0, week = Math.round(priorWeek * 60), day = 0, curDay = '', first = true;
   // This job's own overtime setting replaces the company daily threshold; the state sets the multipliers.
   const otMult = o.otMult ?? rules.otMult, dtMult = o.dtMult ?? 2;
   const dailyOtM = Math.round((o.otAfter ?? rules.dailyOt) * 60), weeklyOtM = Math.round(rules.weeklyOt * 60), dtM = o.dtAfter ? Math.round(o.dtAfter * 60) : 0;
   const notes = new Set<string>();
-  for (let t = +new Date(startsAt); t < +new Date(endsAt); t += step * 60000) {
+  const endMs = +new Date(endsAt);
+  for (let t = +new Date(startsAt); t < endMs; t += step * 60000) {
+    // the last slice may be shorter than a full step (start/end times with seconds or milliseconds)
+    const sliceMin = Math.min(step * 60000, endMs - t) / 60000, h = sliceMin / 60;
     const p = localParts(rules.tz, new Date(t + 30000));
     if (p.ymd !== curDay) { curDay = p.ymd; day = first ? Math.round((o.priorDay ?? 0) * 60) : 0; }
     first = false;
@@ -93,7 +96,7 @@ export function priceShift(rules: Rules | null, rate: number | undefined, starts
     const mult = Math.max(isDt ? dtMult : isOt ? otMult : 1, 1 + pct / 100);
     if (isDt) { dt += h; notes.add('double time'); } else if (isOt) { ot += h; notes.add('overtime'); }
     if (pct > 0) { prem += h; notes.add(hol ? 'holiday' : sun ? 'Sunday' : 'night'); }
-    total += h * rate * mult; day += step; week += step;
+    total += h * rate * mult; day += sliceMin; week += sliceMin;
   }
   const r2 = (n: number) => Math.round(n * 100) / 100;
   return { hours, rate, estimate: r2(total), otHours: r2(ot), dtHours: r2(dt), premiumHours: r2(prem), notes: [...notes], payType: 'hourly' };
