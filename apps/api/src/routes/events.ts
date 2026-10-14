@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg';
 import { notify, describeShift } from '../notify';
 import { syncEventChannel, sendDirectMessage } from './chat';
-import { loadRates, loadRules, estimateShift, checkRules, rateFor } from '../pay';
+import { loadRates, loadRules, estimateShift, checkRules, rateFor, eventState, loadStateOt, US_STATES } from '../pay';
 import { canAdjustRates } from '../rates';
 import { respondLinks } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
@@ -31,6 +31,7 @@ const shiftBody = z.object({
   isOpen: z.boolean().default(false),
   requiredCerts: z.array(z.string().trim().min(1).max(60)).max(10).default([]),
   phaseId: z.string().uuid().nullable().optional(),
+  payType: z.enum(['hourly', 'day']).default('hourly'),
 });
 
 const mgr = guard('admin', 'manager');
@@ -206,13 +207,30 @@ export async function eventRoutes(app: FastifyInstance) {
       const rules = rates ? await loadRules(c) : null;
       for (const s of shifts) {
         const pay = rates && rules ? await estimateShift(c, rules, rates, s.role_name, s.starts_at, s.ends_at, null, s.id) : null;
-        out.push({ ...s, ...(pay ? { hours: pay.hours, hourly_rate: pay.rate, role_rate: rateFor(rates!, s.role_name) ?? null, estimated_cost: pay.estimate ? Math.round(pay.estimate * s.headcount * 100) / 100 : null } : {}), assignments: assigns.filter((a) => a.shift_id === s.id), crew_status: await evaluateShift(c, s.id) });
+        out.push({ ...s, ...(pay ? { hours: pay.hours, hourly_rate: pay.rate, pay_type: pay.payType, ot_hours: pay.otHours, dt_hours: pay.dtHours, role_rate: rateFor(rates!, s.role_name) ?? null, estimated_cost: pay.estimate ? Math.round(pay.estimate * s.headcount * 100) / 100 : null } : {}), assignments: assigns.filter((a) => a.shift_id === s.id), crew_status: await evaluateShift(c, s.id) });
       }
       const phases = (await c.query('SELECT id, label, starts_on, ends_on FROM event_phases WHERE event_id = $1 ORDER BY starts_on, ends_on, created_at', [eventId])).rows;
-      return { event: ev, shifts: out, phases };
+      const rl = await loadRules(c);
+      const fallback = (await c.query('SELECT default_state FROM labor_rules LIMIT 1')).rows[0]?.default_state ?? null;
+      const st = eventState(ev, fallback);
+      const so = await loadStateOt(c, st, rl);
+      const overtime = { otAfter: ev.ot_after === null ? null : Number(ev.ot_after), state: ev.state ?? null, effectiveState: st, stateFromAddress: !ev.state && !!st && st !== fallback, companyDailyOt: rl.dailyOt, otMult: so.otMult, dtAfter: so.dtAfter, dtMult: so.dtMult };
+      return { event: ev, shifts: out, phases, overtime };
     });
     if (!out) return reply.code(404).send({ error: 'Event not found' });
     return out;
+  });
+
+  // Overtime for this job: after 8, 10 or 15 hours a day (or null for the company default), and the state whose rates apply.
+  app.put('/api/events/:id/overtime', { preHandler: mgr }, async (req, reply) => {
+    const { id: eventId } = id.parse(req.params);
+    const b = z.object({ otAfter: z.union([z.literal(8), z.literal(10), z.literal(15)]).nullable(), state: z.string().trim().toUpperCase().refine((x) => US_STATES.includes(x)).nullable().optional() }).parse(req.body);
+    const row = await withTenant(req.user.tid, async (c) => {
+      const r = await c.query('UPDATE events SET ot_after = $2, state = CASE WHEN $3::boolean THEN $4 ELSE state END WHERE id = $1 RETURNING ot_after, state', [eventId, b.otAfter, b.state !== undefined, b.state ?? null]);
+      if (r.rows[0]) await audit(c, req.user.tid, req.user.sub, 'event.overtime', 'event', eventId, b);
+      return r.rows[0];
+    });
+    return row ? { ok: true, otAfter: row.ot_after === null ? null : Number(row.ot_after), state: row.state } : reply.code(404).send({ error: 'Event not found' });
   });
 
   // Edit the event's details. While phases exist the overall dates follow them.
@@ -307,9 +325,9 @@ export async function eventRoutes(app: FastifyInstance) {
       if (!(await c.query('SELECT 1 FROM events WHERE id = $1', [eventId])).rowCount) return null;
       if (b.phaseId && !(await c.query('SELECT 1 FROM event_phases WHERE id = $1 AND event_id = $2', [b.phaseId, eventId])).rowCount) return { error: 'That phase belongs to a different event' };
       const r = await c.query(
-        `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs, phase_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-        [req.user.tid, eventId, b.roleName, b.startsAt, b.endsAt, b.headcount, b.isOpen, b.requiredCerts, b.phaseId ?? null],
+        `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs, phase_id, pay_type)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+        [req.user.tid, eventId, b.roleName, b.startsAt, b.endsAt, b.headcount, b.isOpen, b.requiredCerts, b.phaseId ?? null, b.payType],
       );
       await audit(c, req.user.tid, req.user.sub, 'shift.create', 'shift', r.rows[0].id);
       return r.rows[0];

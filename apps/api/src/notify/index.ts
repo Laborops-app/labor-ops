@@ -117,7 +117,7 @@ export async function describeShift(c: PoolClient, tenantId: string, shiftId: st
     hours: pay.hours,
     rate: pay.rate,
     estimate: pay.estimate,
-    payLine: pay.rate ? `Pay: ${money(pay.rate)}/hr · est. ${money(pay.estimate!)} for ${pay.hours} h${pay.notes.length ? ` incl. ${pay.notes.join(' + ')} pay` : ''} (before taxes)` : null,
+    payLine: pay.rate && pay.payType === 'day' ? `Pay: ${money(pay.rate)} flat day rate (before taxes)` : pay.rate ? `Pay: ${money(pay.rate)}/hr · est. ${money(pay.estimate!)} for ${pay.hours} h${pay.notes.length ? ` incl. ${pay.notes.join(' + ')} pay` : ''} (before taxes)` : null,
     role: r.role_name,
     event: r.event_name,
     venue: r.venue,

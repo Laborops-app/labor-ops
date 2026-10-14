@@ -66,40 +66,95 @@ function localParts(tz: string, d: Date) {
   return { ymd: `${p.year}-${p.month}-${p.day}`, min: Number(p.hour) * 60 + Number(p.minute), sunday: p.weekday === 'Sun' };
 }
 
-export type Priced = { hours: number; rate: number | null; estimate: number | null; otHours: number; premiumHours: number; notes: string[] };
+export type Priced = { hours: number; rate: number | null; estimate: number | null; otHours: number; dtHours: number; premiumHours: number; notes: string[]; payType: 'hourly' | 'day' };
+export type PriceOpts = { otAfter?: number | null; otMult?: number; dtAfter?: number | null; dtMult?: number; priorDay?: number };
 
 /** Price one shift: scheduled hours x rate with overtime (daily/weekly) and night / Sunday / holiday premiums. Overtime and premium do not stack: the larger multiplier applies. */
-export function priceShift(rules: Rules | null, rate: number | undefined, startsAt: Date | string, endsAt: Date | string, priorWeek = 0): Priced {
+export function priceShift(rules: Rules | null, rate: number | undefined, startsAt: Date | string, endsAt: Date | string, priorWeek = 0, o: PriceOpts = {}): Priced {
   const hours = hoursBetween(startsAt, endsAt);
-  if (!rate) return { hours, rate: null, estimate: null, otHours: 0, premiumHours: 0, notes: [] };
-  if (!rules) return { hours, rate, estimate: Math.round(hours * rate * 100) / 100, otHours: 0, premiumHours: 0, notes: [] };
+  if (!rate) return { hours, rate: null, estimate: null, otHours: 0, dtHours: 0, premiumHours: 0, notes: [], payType: 'hourly' };
+  if (!rules) return { hours, rate, estimate: Math.round(hours * rate * 100) / 100, otHours: 0, dtHours: 0, premiumHours: 0, notes: [], payType: 'hourly' };
   const step = 5, h = step / 60;
-  let total = 0, ot = 0, prem = 0, week = Math.round(priorWeek * 60), day = 0, curDay = '';
-  const dailyOtM = Math.round(rules.dailyOt * 60), weeklyOtM = Math.round(rules.weeklyOt * 60);
+  let total = 0, ot = 0, dt = 0, prem = 0, week = Math.round(priorWeek * 60), day = 0, curDay = '', first = true;
+  // This job's own overtime setting replaces the company daily threshold; the state sets the multipliers.
+  const otMult = o.otMult ?? rules.otMult, dtMult = o.dtMult ?? 2;
+  const dailyOtM = Math.round((o.otAfter ?? rules.dailyOt) * 60), weeklyOtM = Math.round(rules.weeklyOt * 60), dtM = o.dtAfter ? Math.round(o.dtAfter * 60) : 0;
   const notes = new Set<string>();
   for (let t = +new Date(startsAt); t < +new Date(endsAt); t += step * 60000) {
     const p = localParts(rules.tz, new Date(t + 30000));
-    if (p.ymd !== curDay) { curDay = p.ymd; day = 0; }
-    const isOt = (dailyOtM > 0 && day >= dailyOtM) || (weeklyOtM > 0 && week >= weeklyOtM);
+    if (p.ymd !== curDay) { curDay = p.ymd; day = first ? Math.round((o.priorDay ?? 0) * 60) : 0; }
+    first = false;
+    const isDt = dtM > 0 && dailyOtM > 0 && day >= Math.max(dtM, dailyOtM);
+    const isOt = isDt || (dailyOtM > 0 && day >= dailyOtM) || (weeklyOtM > 0 && week >= weeklyOtM);
     const night = rules.nightPct > 0 && (rules.nightStart <= rules.nightEnd ? p.min >= rules.nightStart && p.min < rules.nightEnd : p.min >= rules.nightStart || p.min < rules.nightEnd);
     const hol = rules.holidayPct > 0 && rules.holidays.includes(p.ymd);
     const sun = rules.sundayPct > 0 && p.sunday;
     const pct = Math.max(night ? rules.nightPct : 0, sun ? rules.sundayPct : 0, hol ? rules.holidayPct : 0);
-    const mult = Math.max(isOt ? rules.otMult : 1, 1 + pct / 100);
-    if (isOt) { ot += h; notes.add('overtime'); }
+    const mult = Math.max(isDt ? dtMult : isOt ? otMult : 1, 1 + pct / 100);
+    if (isDt) { dt += h; notes.add('double time'); } else if (isOt) { ot += h; notes.add('overtime'); }
     if (pct > 0) { prem += h; notes.add(hol ? 'holiday' : sun ? 'Sunday' : 'night'); }
     total += h * rate * mult; day += step; week += step;
   }
   const r2 = (n: number) => Math.round(n * 100) / 100;
-  return { hours, rate, estimate: r2(total), otHours: r2(ot), premiumHours: r2(prem), notes: [...notes] };
+  return { hours, rate, estimate: r2(total), otHours: r2(ot), dtHours: r2(dt), premiumHours: r2(prem), notes: [...notes], payType: 'hourly' };
 }
 
-/** Estimate for a specific person (counts the hours they already work that week) or, without a user, for the shift on its own. */
+/** Hours this person already works on the same job (event) earlier that company-time-zone day. Daily overtime is counted per job. */
+export async function priorJobDayHours(c: PoolClient, rules: Rules, userId: string, eventId: string, shiftId: string | null, startsAt: Date | string): Promise<number> {
+  const r = await c.query(
+    `WITH d AS (SELECT (($3::timestamptz AT TIME ZONE $4)::date)::timestamp AT TIME ZONE $4 AS ds)
+     SELECT COALESCE(SUM(GREATEST(0, EXTRACT(epoch FROM (LEAST(s.ends_at, $3::timestamptz) - GREATEST(s.starts_at, d.ds))))), 0) / 3600 AS h
+       FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id, d
+      WHERE a.user_id = $1 AND a.status <> 'declined' AND s.event_id = $2 AND s.pay_type = 'hourly' AND ($5::uuid IS NULL OR s.id <> $5)
+        AND s.starts_at < $3::timestamptz AND s.ends_at > d.ds`,
+    [userId, eventId, startsAt, rules.tz, shiftId],
+  );
+  return Number(r.rows[0].h);
+}
+
+/** Estimate for a specific person (counts the hours they already work that week and on this job that day) or, without a user, for the shift on its own.
+ *  Hourly shifts use the job's overtime threshold and the state's multipliers; day-rate shifts pay one flat amount. */
 export async function estimateShift(c: PoolClient, rules: Rules, rates: Map<string, number>, role: string, startsAt: Date | string, endsAt: Date | string, userId?: string | null, shiftId: string | null = null): Promise<Priced> {
+  const sh = shiftId
+    ? (await c.query(
+        `SELECT s.event_id, s.pay_type, s.pay_rate_override, e.ot_after, e.state, e.address, k.day_rate
+           FROM shifts s JOIN events e ON e.id = s.event_id
+           LEFT JOIN skills k ON lower(k.name) = lower(trim(regexp_replace($2, '\\s*\\(.*\\)\\s*$', ''))) AND k.tenant_id = s.tenant_id
+          WHERE s.id = $1`, [shiftId, role])).rows[0]
+    : null;
+  const override = Number(sh?.pay_rate_override ?? 0);
+  if (sh?.pay_type === 'day') {
+    const rate = override > 0 ? override : Number(sh.day_rate ?? 0) > 0 ? Number(sh.day_rate) : null;
+    return { hours: hoursBetween(startsAt, endsAt), rate, estimate: rate, otHours: 0, dtHours: 0, premiumHours: 0, notes: ['day rate'], payType: 'day' };
+  }
   const prior = userId ? await priorWeekHours(c, rules, userId, shiftId, startsAt) : 0;
-  // A rate set on this one shift replaces the role's rate.
-  const override = shiftId ? Number((await c.query('SELECT pay_rate_override FROM shifts WHERE id = $1', [shiftId])).rows[0]?.pay_rate_override ?? 0) : 0;
-  return priceShift(rules, override > 0 ? override : rateFor(rates, role), startsAt, endsAt, prior);
+  const priorDay = userId && sh ? await priorJobDayHours(c, rules, userId, sh.event_id, shiftId, startsAt) : 0;
+  const st = sh ? await loadStateOt(c, eventState(sh, (await c.query('SELECT default_state FROM labor_rules LIMIT 1')).rows[0]?.default_state), rules) : null;
+  return priceShift(rules, override > 0 ? override : rateFor(rates, role), startsAt, endsAt, prior, {
+    otAfter: sh?.ot_after === null || sh?.ot_after === undefined ? null : Number(sh.ot_after),
+    otMult: st?.otMult, dtAfter: st?.dtAfter, dtMult: st?.dtMult, priorDay,
+  });
+}
+
+// ---------- state overtime ----------
+export const US_STATES = 'AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' ');
+export type StateOt = { otMult: number; dtAfter: number | null; dtMult: number };
+/** Starting point only: 1.5x everywhere, and double time after 12 hours in California. Admins can change any state; check current law for your jobs. */
+export const stateDefault = (state: string | null | undefined, fallbackMult: number): StateOt =>
+  state === 'CA' ? { otMult: 1.5, dtAfter: 12, dtMult: 2 } : { otMult: fallbackMult, dtAfter: null, dtMult: 2 };
+
+/** The state a job works in: set on the event, else read from the address ("..., Denver, CO 80202"), else the company default. */
+export function eventState(ev: { state?: string | null; address?: string | null }, fallback?: string | null): string | null {
+  if (ev.state) return ev.state;
+  const m = [...String(ev.address ?? '').toUpperCase().matchAll(/\b([A-Z]{2})\b(?=[\s,]*(?:\d{5}(?:-\d{4})?)?\s*(?:USA|US|UNITED STATES)?\s*$)/g)].map((x) => x[1]).filter((x) => US_STATES.includes(x));
+  return m.length ? m[m.length - 1] : fallback ?? null;
+}
+
+export async function loadStateOt(c: PoolClient, state: string | null, rules: Rules): Promise<StateOt> {
+  const def = stateDefault(state, rules.otMult);
+  if (!state) return def;
+  const r = (await c.query('SELECT ot_mult, dt_after, dt_mult FROM state_ot_rules WHERE state = $1', [state])).rows[0];
+  return r ? { otMult: Number(r.ot_mult), dtAfter: r.dt_after === null ? null : Number(r.dt_after), dtMult: Number(r.dt_mult) } : def;
 }
 
 export const fmtH = (n: number) => `${Math.round(n * 10) / 10} h`;

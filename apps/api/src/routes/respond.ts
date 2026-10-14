@@ -26,7 +26,7 @@ export async function respondRoutes(app: FastifyInstance) {
         const row = r.rows[0];
         if (!row) return row;
         const pay = await estimateShift(c, await loadRules(c), await loadRates(c), row.role_name, row.starts_at, row.ends_at, claim.uid, row.shift_id);
-        return { ...row, kind: 'claim', status: row.mine ?? 'open', hours: pay.hours, hourly_rate: pay.rate, estimated_pay: pay.estimate, pay_notes: pay.notes };
+        return { ...row, kind: 'claim', status: row.mine ?? 'open', hours: pay.hours, hourly_rate: pay.rate, estimated_pay: pay.estimate, pay_notes: pay.notes, pay_type: pay.payType };
       });
       if (!out) return reply.code(404).send({ error: 'This shift is no longer available.' });
       const reason = out.ended ? 'This shift has already ended.' : out.mine ? `You already asked for this shift (${out.mine}).` : !out.open ? 'This shift has been filled or is no longer open.' : null;
@@ -46,7 +46,7 @@ export async function respondRoutes(app: FastifyInstance) {
       const row = r.rows[0];
       if (!row) return row;
       const pay = await estimateShift(c, await loadRules(c), await loadRates(c), row.role_name, row.starts_at, row.ends_at, tok.uid, row.shift_id);
-      return { ...row, hours: pay.hours, hourly_rate: pay.rate, estimated_pay: pay.estimate, pay_notes: pay.notes };
+      return { ...row, hours: pay.hours, hourly_rate: pay.rate, estimated_pay: pay.estimate, pay_notes: pay.notes, pay_type: pay.payType };
     });
     if (!out) return reply.code(404).send({ error: 'This shift is no longer available.' });
     return { shift: { ...out, canRespond: out.open && !out.worked, reason: !out.open ? 'This shift has already ended.' : out.worked ? 'You have already clocked in for this shift.' : null } };

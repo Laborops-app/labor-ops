@@ -23,6 +23,7 @@ type Detail = {
     end_date: string;
     hours: number;
     hourly_rate: number | null;
+    pay_type?: 'hourly' | 'day';
     estimated_pay: number | null;
   };
   coworkers: { user_id: string; name: string; phone: string | null; shift_id: string; role_name: string; starts_at: string; ends_at: string; status: string }[];
@@ -120,7 +121,7 @@ function Body() {
             <div className="pay-box">
               <div>
                 <span className="muted small">Hourly rate</span>
-                <b>{money(s.hourly_rate)}/hr</b>
+                <b>{money(s.hourly_rate)}{s.pay_type === 'day' ? ' day rate' : '/hr'}</b>
               </div>
               <div>
                 <span className="muted small">Estimated earnings</span>

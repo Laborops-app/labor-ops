@@ -6,8 +6,9 @@ import { api } from '@/lib/api';
 
 type Rules = {
   minRestHours: number; maxDailyHours: number; dailyOtAfter: number; weeklyOtAfter: number; otMultiplier: number;
-  nightStart: string; nightEnd: string; nightPremiumPct: number; sundayPremiumPct: number; holidayPremiumPct: number; holidays: string[];
+  nightStart: string; nightEnd: string; nightPremiumPct: number; sundayPremiumPct: number; holidayPremiumPct: number; holidays: string[]; defaultState: string | null;
 };
+type StateRule = { state: string; otMult: number; dtAfter: number | null; dtMult: number; custom: boolean };
 
 function Num({ label, hint, value, onChange, step = 0.5, suffix }: { label: string; hint?: string; value: number; onChange: (n: number) => void; step?: number; suffix?: string }) {
   return (
@@ -25,10 +26,13 @@ function Num({ label, hint, value, onChange, step = 0.5, suffix }: { label: stri
 function Body() {
   const [r, setR] = useState<Rules | null>(null);
   const [hol, setHol] = useState('');
+  const [states, setStates] = useState<StateRule[]>([]);
+  const loadStates = () => api<{ states: StateRule[] }>('/api/state-ot-rules').then((x) => setStates(x.states)).catch(() => undefined);
   const [error, setError] = useState('');
   const [ok, setOk] = useState('');
   useEffect(() => {
     api<Rules>('/api/labor-rules').then(setR).catch((e) => setError(e.message));
+    loadStates();
   }, []);
   if (!r) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
   const set = (p: Partial<Rules>) => setR({ ...r, ...p });
@@ -99,7 +103,69 @@ function Body() {
         </section>
         <button className="btn primary">Save rules</button>
       </form>
+      <StateOvertime states={states} defaultState={r.defaultState} onDefault={(s) => set({ defaultState: s })} onChanged={loadStates} onError={setError} onOk={setOk} />
     </>
+  );
+}
+
+/** Overtime multipliers per state. Each job picks when daily overtime starts (8, 10 or 15 h); these say what it pays and where double time starts. */
+function StateOvertime({ states, defaultState, onDefault, onChanged, onError, onOk }: { states: StateRule[]; defaultState: string | null; onDefault: (s: string | null) => void; onChanged: () => void; onError: (m: string) => void; onOk: (m: string) => void }) {
+  const [draft, setDraft] = useState<Record<string, { ot: string; dtAfter: string; dt: string }>>({});
+  const [all, setAll] = useState(false);
+  const shown = all ? states : states.filter((s) => s.custom || s.state === 'CA' || s.state === defaultState);
+  const act = async (fn: () => Promise<unknown>, msg: string) => {
+    onError('');
+    try {
+      await fn();
+      onOk(msg);
+      onChanged();
+    } catch (e) {
+      onError((e as Error).message);
+    }
+  };
+  return (
+    <section className="card" style={{ marginTop: '1rem' }}>
+      <h2>Overtime by state</h2>
+      <p className="muted small">
+        Each job picks when daily overtime starts (after 8, 10 or 15 hours) on its event page. The state the job works in decides the multiplier and where double time starts. The values start at 1.5× everywhere and double time after 12 h in California. State and local law changes, so check yours and adjust. Overtime is counted per person, per day, on the same job.
+      </p>
+      <label style={{ display: 'block', maxWidth: 320, marginBottom: 10 }}>
+        Default state for jobs with no state in the address
+        <select value={defaultState ?? ''} onChange={(e) => onDefault(e.target.value || null)}>
+          <option value="">None (company multiplier)</option>
+          {states.map((s) => (
+            <option key={s.state} value={s.state}>{s.state}</option>
+          ))}
+        </select>
+        <span className="muted small">Save the rules above to keep this.</span>
+      </label>
+      <div style={{ overflowX: 'auto' }}>
+        <table className="table">
+          <thead><tr><th>State</th><th>Overtime ×</th><th>Double time after (h)</th><th>Double time ×</th><th></th></tr></thead>
+          <tbody>
+            {shown.map((s) => {
+              const d = draft[s.state] ?? { ot: String(s.otMult), dtAfter: s.dtAfter === null ? '' : String(s.dtAfter), dt: String(s.dtMult) };
+              const set = (p: Partial<typeof d>) => setDraft({ ...draft, [s.state]: { ...d, ...p } });
+              return (
+                <tr key={s.state}>
+                  <td><b>{s.state}</b> {s.custom && <span className="chip">Custom</span>}</td>
+                  <td><input type="number" min={1} max={4} step={0.05} value={d.ot} onChange={(e) => set({ ot: e.target.value })} style={{ width: '5rem' }} aria-label={`Overtime multiplier for ${s.state}`} /></td>
+                  <td><input type="number" min={1} max={24} step={0.5} value={d.dtAfter} placeholder="none" onChange={(e) => set({ dtAfter: e.target.value })} style={{ width: '5rem' }} aria-label={`Double time starts after, ${s.state}`} /></td>
+                  <td><input type="number" min={1} max={4} step={0.05} value={d.dt} onChange={(e) => set({ dt: e.target.value })} style={{ width: '5rem' }} aria-label={`Double time multiplier for ${s.state}`} /></td>
+                  <td>
+                    <div className="row">
+                      <button type="button" className="btn small primary" onClick={() => act(() => api(`/api/state-ot-rules/${s.state}`, { method: 'PUT', body: { otMult: Number(d.ot), dtAfter: d.dtAfter === '' ? null : Number(d.dtAfter), dtMult: Number(d.dt) } }).then(() => setDraft((x) => { const n = { ...x }; delete n[s.state]; return n; })), `${s.state} saved.`)}>Save</button>
+                      {s.custom && <button type="button" className="btn small" onClick={() => act(() => api(`/api/state-ot-rules/${s.state}`, { method: 'DELETE' }), `${s.state} is back to the starting values.`)}>Reset</button>}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <button type="button" className="btn ghost small" onClick={() => setAll(!all)}>{all ? 'Show only changed states' : 'Show all states'}</button>
+    </section>
   );
 }
 

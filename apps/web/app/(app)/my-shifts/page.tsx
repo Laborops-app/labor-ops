@@ -22,6 +22,7 @@ type MyShift = {
   swap_id: string | null;
   can_offer_swap: boolean;
   hourly_rate: number | null;
+  pay_type?: 'hourly' | 'day';
   estimated_pay: number | null;
   hours: number;
 };
@@ -86,7 +87,7 @@ function Body() {
                 </div>
                 {s.hourly_rate != null && s.estimated_pay != null && (
                   <div className="small pay-line">
-                    {money(s.hourly_rate)}/hr · est. <b>{money(s.estimated_pay)}</b>
+                    {money(s.hourly_rate)}{s.pay_type === 'day' ? ' day rate' : '/hr'} · est. <b>{money(s.estimated_pay)}</b>
                   </div>
                 )}
               </div>

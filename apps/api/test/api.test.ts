@@ -1254,6 +1254,97 @@ test('pay rules: weekly overtime and night / Sunday / holiday premiums', async (
   assert.equal(priceShift(rules, undefined, '2030-01-01T10:00:00Z', '2030-01-01T14:00:00Z').estimate, null);
 });
 
+test('overtime: per-job threshold (8/10/15), state rates and double time, counted per job per day; day-rate shifts', async () => {
+  const { priceShift, eventState } = await import('../src/pay');
+  const rules = { tz: 'UTC', minRest: 8, maxDaily: 14, dailyOt: 0, weeklyOt: 0, otMult: 1.5, nightStart: 0, nightEnd: 0, nightPct: 0, sundayPct: 0, holidayPct: 0, holidays: [] as string[] };
+  // 14 h at $20, OT after 8, California: 8 x 20 + 4 x 30 + 2 x 40
+  const ca = priceShift(rules, 20, '2030-03-05T06:00:00Z', '2030-03-05T20:00:00Z', 0, { otAfter: 8, otMult: 1.5, dtAfter: 12, dtMult: 2 });
+  assert.equal(ca.estimate, 360);
+  assert.equal(ca.otHours, 4);
+  assert.equal(ca.dtHours, 2);
+  // same shift, 10 h threshold, 1.5x everywhere else: 10 x 20 + 4 x 30
+  assert.equal(priceShift(rules, 20, '2030-03-05T06:00:00Z', '2030-03-05T20:00:00Z', 0, { otAfter: 10, otMult: 1.5 }).estimate, 320);
+  // 15 h threshold: no overtime on 14 h
+  assert.equal(priceShift(rules, 20, '2030-03-05T06:00:00Z', '2030-03-05T20:00:00Z', 0, { otAfter: 15, otMult: 1.5 }).estimate, 280);
+  // hours already worked on the job that day count toward the threshold
+  assert.equal(priceShift(rules, 20, '2030-03-05T13:00:00Z', '2030-03-05T19:00:00Z', 0, { otAfter: 8, otMult: 1.5, priorDay: 5 }).estimate, 3 * 20 + 3 * 30);
+  // a state with a 1.75x rule
+  assert.equal(priceShift(rules, 20, '2030-03-05T06:00:00Z', '2030-03-05T10:00:00Z', 0, { otAfter: 2, otMult: 1.75 }).estimate, 2 * 20 + 2 * 35);
+  // state comes from the event, else the address
+  assert.equal(eventState({ state: 'NV', address: 'x, Denver, CO 80202' }), 'NV');
+  assert.equal(eventState({ address: '123 Main St, Los Angeles, CA 90001' }), 'CA');
+  assert.equal(eventState({ address: '1 Arena Way, Las Vegas, NV' }), 'NV');
+  assert.equal(eventState({ address: 'Somewhere' }, 'TX'), 'TX');
+  assert.equal(eventState({ address: 'Somewhere' }), null);
+
+  const a = await register('ot');
+  const c1 = await mkCrew(a, 'ot1');
+  assert.equal((await call(a, 'POST', '/api/crew', { name: 'Coord', email: `ot2-${run}@test.example`, role: 'manager', password: 'password123' })).status, 201);
+  const coord = { session: await login(`ot2-${run}@test.example`, 'password123') };
+  assert.equal((await call(a, 'POST', '/api/skills', { name: 'Tech', payRate: 20, dayRate: 200 })).status, 201);
+  assert.equal((await call(a, 'GET', '/api/skills')).json.skills.find((x: any) => x.name === 'Tech').dayRate, 200);
+  const ev = (await call(a, 'POST', '/api/events', { name: 'LA show', address: '123 Main St, Los Angeles, CA 90001', startDate: '2030-03-05', endDate: '2030-03-05' })).json.event.id as string;
+  const d0 = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  assert.equal(d0.overtime.effectiveState, 'CA');
+  assert.equal(d0.overtime.otAfter, null);
+  assert.equal(d0.overtime.dtAfter, 12);
+
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/overtime`, { otAfter: 9 })).status, 400);
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/overtime`, { otAfter: 8, state: 'ZZ' })).status, 400);
+  assert.equal((await call(c1.session, 'PUT', `/api/events/${ev}/overtime`, { otAfter: 8 })).status, 403);
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/overtime`, { otAfter: 8 })).status, 200);
+
+  const long = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Tech', startsAt: '2030-03-05T14:00:00Z', endsAt: '2030-03-06T04:00:00Z', headcount: 1 })).json.shift.id as string;
+  const cost = async () => (await call(a, 'GET', `/api/events/${ev}`)).json.shifts.find((x: any) => x.id === long).estimated_cost;
+  assert.equal(await cost(), 360); // California: double time after 12 h
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/overtime`, { otAfter: 10, state: 'CO' })).status, 200);
+  assert.equal(await cost(), 320);
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/overtime`, { otAfter: 15 })).status, 200);
+  assert.equal(await cost(), 280);
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/overtime`, { otAfter: null })).status, 200);
+  assert.equal(await cost(), 280); // company default has no daily overtime
+
+  // day rate: one flat amount, no overtime; a per-shift override replaces the role's day rate
+  assert.equal((await call(a, 'PATCH', `/api/shifts/${long}`, { payType: 'day' })).status, 200);
+  assert.equal(await cost(), 200);
+  assert.equal((await call(a, 'PATCH', `/api/shifts/${long}`, { payRate: 250 })).status, 200);
+  assert.equal(await cost(), 250);
+  const dayShift = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Tech', startsAt: '2030-03-06T14:00:00Z', endsAt: '2030-03-06T22:00:00Z', headcount: 2, payType: 'day' })).json.shift;
+  assert.equal(dayShift.pay_type, 'day');
+  assert.equal((await call(a, 'GET', `/api/events/${ev}`)).json.shifts.find((x: any) => x.id === dayShift.id).estimated_cost, 400);
+
+  // daily hours are counted per person across the job's shifts
+  const ev2 = (await call(a, 'POST', '/api/events', { name: 'Two part', startDate: '2030-04-02', endDate: '2030-04-02' })).json.event.id as string;
+  await call(a, 'PUT', `/api/events/${ev2}/overtime`, { otAfter: 8 });
+  const p1 = (await call(a, 'POST', `/api/events/${ev2}/shifts`, { roleName: 'Tech', startsAt: '2030-04-02T13:00:00Z', endsAt: '2030-04-02T18:00:00Z', headcount: 1 })).json.shift.id;
+  const p2 = (await call(a, 'POST', `/api/events/${ev2}/shifts`, { roleName: 'Tech', startsAt: '2030-04-02T19:00:00Z', endsAt: '2030-04-03T01:00:00Z', headcount: 1 })).json.shift.id;
+  assert.equal((await call(a, 'POST', `/api/shifts/${p1}/assign`, { userId: c1.id })).status, 201);
+  assert.equal((await call(a, 'POST', `/api/shifts/${p2}/assign`, { userId: c1.id })).status, 201);
+  const mine = (await call(c1.session, 'GET', '/api/my/shifts')).json.shifts;
+  assert.equal(mine.find((x: any) => x.shift_id === p1).estimated_pay, 100);
+  assert.equal(mine.find((x: any) => x.shift_id === p2).estimated_pay, 3 * 20 + 3 * 30);
+
+  // copying an event keeps its overtime setting and the shifts' pay type
+  const cp = await call(a, 'POST', `/api/events/${ev}/copy`, { name: 'LA show 2', startDate: '2030-05-05' });
+  assert.equal(cp.status, 201, cp.text);
+  const cpd = (await call(a, 'GET', `/api/events/${cp.json.event.id}`)).json;
+  assert.equal(cpd.event.state, 'CO');
+  assert.ok(cpd.shifts.some((x: any) => x.pay_type === 'day'));
+  // a labor coordinator can set a job's overtime
+  assert.equal((await call(coord.session, 'PUT', `/api/events/${ev}/overtime`, { otAfter: 10 })).status, 200);
+
+  // state rules: starting defaults, admin edits and resets
+  const sr = (await call(a, 'GET', '/api/state-ot-rules')).json.states;
+  assert.equal(sr.length, 51);
+  assert.deepEqual(sr.find((x: any) => x.state === 'CA'), { state: 'CA', otMult: 1.5, dtAfter: 12, dtMult: 2, custom: false });
+  assert.equal((await call(coord.session, 'PUT', '/api/state-ot-rules/NV', { otMult: 1.5, dtAfter: null, dtMult: 2 })).status, 403);
+  assert.equal((await call(a, 'PUT', '/api/state-ot-rules/XX', { otMult: 1.5, dtAfter: null, dtMult: 2 })).status, 400);
+  assert.equal((await call(a, 'PUT', '/api/state-ot-rules/CA', { otMult: 1.5, dtAfter: 10, dtMult: 2 })).status, 200);
+  assert.equal((await call(a, 'GET', '/api/state-ot-rules')).json.states.find((x: any) => x.state === 'CA').dtAfter, 10);
+  assert.equal((await call(a, 'DELETE', '/api/state-ot-rules/CA')).status, 200);
+  assert.equal((await call(a, 'GET', '/api/state-ot-rules')).json.states.find((x: any) => x.state === 'CA').custom, false);
+});
+
 test('ratings: coordinators rate crew per position, crew cannot, base role name is used', async () => {
   const a = await register('rate');
   const c1 = await mkCrew(a, 'rt1');

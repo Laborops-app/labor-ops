@@ -31,6 +31,7 @@ export const shiftInput = z.object({
   isOpen: z.boolean().default(false),
   requiredCerts: certList.default([]),
   phaseId: z.string().uuid().nullable().optional(),
+  payType: z.enum(['hourly', 'day']).default('hourly'),
 });
 
 /** A crew member asks for an open shift (held as pending until a coordinator approves). Shared by the app and the email links. */
@@ -77,9 +78,9 @@ export async function schedulingRoutes(app: FastifyInstance) {
       const ids: string[] = [];
       for (const s of shifts) {
         const r = await c.query(
-          `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs, phase_id)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-          [req.user.tid, eventId, s.roleName, s.startsAt, s.endsAt, s.headcount, s.isOpen, s.requiredCerts, s.phaseId ?? null],
+          `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs, phase_id, pay_type)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+          [req.user.tid, eventId, s.roleName, s.startsAt, s.endsAt, s.headcount, s.isOpen, s.requiredCerts, s.phaseId ?? null, s.payType],
         );
         ids.push(r.rows[0].id);
       }
@@ -94,10 +95,10 @@ export async function schedulingRoutes(app: FastifyInstance) {
   app.patch('/api/shifts/:id', { preHandler: mgr }, async (req, reply) => {
     const { id } = idParam.parse(req.params);
     const b = z
-      .object({ isOpen: z.boolean().optional(), requiredCerts: certList.optional(), headcount: z.number().int().min(1).max(500).optional(), phaseId: z.string().uuid().nullable().optional(), payRate: z.number().min(0.01).max(10000).multipleOf(0.01).nullable().optional() })
+      .object({ isOpen: z.boolean().optional(), requiredCerts: certList.optional(), headcount: z.number().int().min(1).max(500).optional(), phaseId: z.string().uuid().nullable().optional(), payRate: z.number().min(0.01).max(10000).multipleOf(0.01).nullable().optional(), payType: z.enum(['hourly', 'day']).optional() })
       .parse(req.body);
     const row = await withTenant(req.user.tid, async (c) => {
-      if (b.payRate !== undefined && !(await canAdjustRates(c, req.user))) return { error: 'You are not allowed to change pay rates. Ask an admin.', forbidden: true };
+      if ((b.payRate !== undefined || b.payType !== undefined) && !(await canAdjustRates(c, req.user))) return { error: 'You are not allowed to change pay rates. Ask an admin.', forbidden: true };
       if (b.headcount !== undefined) {
         const filled = await filledCount(c, id);
         if (b.headcount < filled) return { error: `${filled} people are already on this shift` };
@@ -107,12 +108,13 @@ export async function schedulingRoutes(app: FastifyInstance) {
       const r = await c.query(
         `UPDATE shifts SET offer_group_id = CASE WHEN $2::boolean IS FALSE THEN NULL ELSE offer_group_id END, is_open = COALESCE($2, is_open), required_certs = COALESCE($3, required_certs), headcount = COALESCE($4, headcount),
                 phase_id = CASE WHEN $5::boolean THEN $6::uuid ELSE phase_id END,
-                pay_rate_override = CASE WHEN $7::boolean THEN $8::numeric ELSE pay_rate_override END
+                pay_rate_override = CASE WHEN $7::boolean THEN $8::numeric ELSE pay_rate_override END,
+                pay_type = COALESCE($9, pay_type)
          WHERE id = $1 RETURNING *`,
-        [id, b.isOpen ?? null, b.requiredCerts ?? null, b.headcount ?? null, b.phaseId !== undefined, b.phaseId ?? null, b.payRate !== undefined, b.payRate ?? null],
+        [id, b.isOpen ?? null, b.requiredCerts ?? null, b.headcount ?? null, b.phaseId !== undefined, b.phaseId ?? null, b.payRate !== undefined, b.payRate ?? null, b.payType ?? null],
       );
       // People already on the shift hear about a pay change (their pay line is recalculated from the new rate).
-      if (r.rows[0] && b.payRate !== undefined) {
+      if (r.rows[0] && (b.payRate !== undefined || b.payType !== undefined)) {
         const who = (await c.query("SELECT user_id FROM shift_assignments WHERE shift_id = $1 AND status <> 'declined'", [id])).rows;
         for (const w of who) {
           const d = await describeShift(c, req.user.tid, id, w.user_id);

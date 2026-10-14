@@ -7,7 +7,7 @@ import ThemeToggle from '@/components/ThemeToggle';
 import { Banner } from '@/components/ui';
 import { api, money } from '@/lib/api';
 
-type Shift = { kind?: 'claim'; assignment_id?: string; hours: number; hourly_rate: number | null; estimated_pay: number | null; status: string; person: string; role_name: string; starts_at: string; ends_at: string; event_name: string; venue: string | null; timezone: string; canRespond: boolean; reason?: string | null };
+type Shift = { kind?: 'claim'; assignment_id?: string; hours: number; hourly_rate: number | null; pay_type?: 'hourly' | 'day'; estimated_pay: number | null; status: string; person: string; role_name: string; starts_at: string; ends_at: string; event_name: string; venue: string | null; timezone: string; canRespond: boolean; reason?: string | null };
 
 const when = (s: Shift) => {
   const o = { timeZone: s.timezone };
@@ -73,7 +73,7 @@ function Respond() {
               <div className="pay-box">
                 <div>
                   <span className="muted small">Hourly rate</span>
-                  <b>{money(shift.hourly_rate)}/hr</b>
+                  <b>{money(shift.hourly_rate)}{shift.pay_type === 'day' ? ' day rate' : '/hr'}</b>
                 </div>
                 <div>
                   <span className="muted small">Estimated earnings</span>

@@ -61,7 +61,7 @@ export async function timeRoutes(app: FastifyInstance) {
       const shifts = [];
       for (const r of rows) {
         const pay = await estimateShift(c, rules, rates, r.role_name, r.starts_at, r.ends_at, req.user.sub, r.shift_id);
-        shifts.push({ ...r, hours: pay.hours, hourly_rate: pay.rate, estimated_pay: pay.estimate, pay_notes: pay.notes });
+        shifts.push({ ...r, hours: pay.hours, hourly_rate: pay.rate, estimated_pay: pay.estimate, pay_notes: pay.notes, pay_type: pay.payType });
       }
       return { shifts };
     }),
@@ -107,7 +107,7 @@ export async function timeRoutes(app: FastifyInstance) {
         )
       ).rows;
       const pay = await estimateShift(c, await loadRules(c), await loadRates(c), me.role_name, me.starts_at, me.ends_at, req.user.sub, me.shift_id);
-      return { shift: { ...me, hours: pay.hours, hourly_rate: pay.rate, estimated_pay: pay.estimate, pay_notes: pay.notes }, coworkers };
+      return { shift: { ...me, hours: pay.hours, hourly_rate: pay.rate, estimated_pay: pay.estimate, pay_notes: pay.notes, pay_type: pay.payType }, coworkers };
     });
     if (!out) return reply.code(404).send({ error: 'Shift not found' });
     return out;

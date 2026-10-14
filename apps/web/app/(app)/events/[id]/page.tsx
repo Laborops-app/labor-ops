@@ -28,8 +28,12 @@ type Shift = {
   role_rate?: number | null;
   pay_rate_override?: string | null;
   estimated_cost?: number | null;
+  pay_type?: 'hourly' | 'day';
+  ot_hours?: number;
+  dt_hours?: number;
 };
-type Detail = { event: EventFull; shifts: Shift[]; phases: Phase[] };
+type Overtime = { otAfter: number | null; state: string | null; effectiveState: string | null; stateFromAddress: boolean; companyDailyOt: number; otMult: number; dtAfter: number | null; dtMult: number };
+type Detail = { event: EventFull; shifts: Shift[]; phases: Phase[]; overtime?: Overtime };
 type Member = { id: string; name: string; role: string; skills: string[]; active: boolean; ratings?: Record<string, number> };
 type TplItem = { role: string; section?: string; dayOffset: number; start: string; end: string; headcount: number; isOpen: boolean; requiredCerts: string[] };
 type Template = { id: string; name: string; items: TplItem[]; customer_id?: string | null };
@@ -94,6 +98,7 @@ function Body({ me }: { me: Me }) {
       certs: '',
       isOpen: false,
       phaseId: '',
+      payType: 'hourly' as 'hourly' | 'day',
       repeat: false,
       days: [] as number[],
       until: '',
@@ -149,7 +154,7 @@ function Body({ me }: { me: Me }) {
     e.preventDefault();
     const start = new Date(f.startsAt);
     const end = new Date(f.endsAt);
-    const base = { roleName: f.roleName, headcount: Number(f.headcount), isOpen: f.isOpen, requiredCerts: certs(f.certs), phaseId: f.phaseId || null };
+    const base = { roleName: f.roleName, headcount: Number(f.headcount), isOpen: f.isOpen, requiredCerts: certs(f.certs), phaseId: f.phaseId || null, payType: f.payType };
     let ok: boolean;
     if (f.repeat) {
       if (!f.until || f.days.length === 0) return setError('Choose the days to repeat on and an end date.');
@@ -257,8 +262,10 @@ function Body({ me }: { me: Me }) {
                     {s.hourly_rate != null && (
                       <>
                         {' · '}
-                        {money(s.hourly_rate)}/hr
+                        {money(s.hourly_rate)}{s.pay_type === 'day' ? ' day rate' : '/hr'}
                         {s.estimated_cost != null && ` · est. cost ${money(s.estimated_cost)} for ${s.headcount}`}
+                        {!!s.ot_hours && ` · ${s.ot_hours} h overtime`}
+                        {!!s.dt_hours && ` · ${s.dt_hours} h double time`}
                       </>
                     )}
                   </div>
@@ -268,14 +275,16 @@ function Body({ me }: { me: Me }) {
                         <span className="row" style={{ gap: '.4rem', flexWrap: 'wrap' }}>
                           <span aria-hidden="true">$</span>
                           <input type="number" min={0.01} step="0.01" autoFocus value={payEdit.value} onChange={(e) => setPayEdit({ id: s.id, value: e.target.value })} aria-label="Pay rate for this shift" style={{ width: '6.5rem' }} />
-                          <span className="muted">/hr for this shift only{s.role_rate ? ` (role rate ${money(s.role_rate)})` : ''}</span>
+                          <span className="muted">{s.pay_type === 'day' ? ' per day' : '/hr'} for this shift only{s.role_rate ? ` (role rate ${money(s.role_rate)})` : ''}</span>
                           <button className="btn small primary" disabled={!(Number(payEdit.value) > 0)} onClick={() => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { payRate: Math.round(Number(payEdit.value) * 100) / 100 } }), 'Pay rate updated. Anyone on the shift has been told.').then(() => setPayEdit(null))}>Save</button>
                           {s.pay_rate_override && <button className="btn small" onClick={() => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { payRate: null } }), 'Back to the role pay rate.').then(() => setPayEdit(null))}>Use role rate</button>}
                           <button className="btn ghost small" onClick={() => setPayEdit(null)}>Cancel</button>
                         </span>
                       ) : (
                         <>
+                          <span className="chip">{s.pay_type === 'day' ? 'Day rate' : 'Hourly'}</span>{' '}
                           {s.pay_rate_override && <span className="chip">Custom pay rate</span>}{' '}
+                          <button className="btn ghost small" onClick={() => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { payType: s.pay_type === 'day' ? 'hourly' : 'day' } }), s.pay_type === 'day' ? 'Now paid hourly.' : 'Now paid a flat day rate.')}>{s.pay_type === 'day' ? 'Pay hourly' : 'Pay day rate'}</button>{' '}
                           <button className="btn ghost small" onClick={() => setPayEdit({ id: s.id, value: String(s.hourly_rate ?? s.role_rate ?? '') })}>Change pay rate</button>
                         </>
                       )}
@@ -514,6 +523,7 @@ function Body({ me }: { me: Me }) {
       )}
 
       <EventDetails ev={ev} hasPhases={d.phases.length > 0} onSaved={load} onError={setError} />
+      {d.overtime && <OvertimeCard eventId={id} ot={d.overtime} onSaved={load} onError={setError} />}
       <Phases eventId={id} phases={d.phases} onChanged={load} onError={setError} />
       <RentmanCard eventId={id} isAdmin={me.role === 'admin'} onError={setError} />
       <Clocking ev={ev} onSaved={load} onError={setError} />
@@ -575,6 +585,17 @@ function Body({ me }: { me: Me }) {
             People needed
             <input type="number" min={1} max={500} value={f.headcount} onChange={(e) => setF({ ...f, headcount: Number(e.target.value) })} required />
           </label>
+          <div role="group" aria-label="How this shift is paid" style={{ gridColumn: '1 / -1' }}>
+            <div className="small muted" style={{ marginBottom: 4 }}>Paid</div>
+            <div className="phase-tabs">
+              {([['hourly', 'Hourly'], ['day', 'Day rate']] as const).map(([k, label]) => (
+                <button key={k} type="button" aria-pressed={f.payType === k} className={f.payType === k ? 'tab on' : 'tab'} onClick={() => setF({ ...f, payType: k })}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            {f.payType === 'day' && <div className="small muted">One flat amount for the day (the role&apos;s day rate), no overtime.</div>}
+          </div>
           <label>
             Required certificates
             <input value={f.certs} onChange={(e) => setF({ ...f, certs: e.target.value })} placeholder="Forklift, Rigging (comma separated)" />
@@ -674,4 +695,58 @@ function Body({ me }: { me: Me }) {
 
 export default function Page() {
   return <Shell roles={['admin', 'manager']}>{(me) => <Body me={me} />}</Shell>;
+}
+
+const US_STATES = 'AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' ');
+
+/** Daily overtime for this job: after 8, 10 or 15 hours, using the multipliers of the state the job works in. */
+function OvertimeCard({ eventId, ot, onSaved, onError }: { eventId: string; ot: Overtime; onSaved: () => void; onError: (m: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const save = async (body: { otAfter: number | null; state?: string | null }) => {
+    setBusy(true);
+    try {
+      await api(`/api/events/${eventId}/overtime`, { method: 'PUT', body });
+      onSaved();
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const opts: [number | null, string][] = [[null, ot.companyDailyOt > 0 ? `Company default (after ${ot.companyDailyOt} h)` : 'Company default'], [8, 'After 8 hours'], [10, 'After 10 hours'], [15, 'After 15 hours']];
+  return (
+    <section className="card">
+      <h2>Overtime for this job</h2>
+      <div className="phase-tabs" role="group" aria-label="Daily overtime starts">
+        {opts.map(([v, label]) => (
+          <button key={String(v)} type="button" disabled={busy} aria-pressed={ot.otAfter === v} className={ot.otAfter === v ? 'tab on' : 'tab'} onClick={() => save({ otAfter: v })}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <label style={{ display: 'block', marginTop: 10, maxWidth: 320 }}>
+        State the job works in
+        <select value={ot.state ?? ''} disabled={busy} onChange={(e) => save({ otAfter: ot.otAfter, state: e.target.value || null })}>
+          <option value="">{ot.effectiveState ? `Automatic (${ot.effectiveState}${ot.stateFromAddress ? ', from the address' : ''})` : 'Automatic (not found in the address)'}</option>
+          {US_STATES.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="muted small" style={{ marginTop: 8 }}>
+        {ot.otAfter ?? (ot.companyDailyOt || 0) ? (
+          <>
+            Each person&apos;s hours on this job are counted per day. Past {ot.otAfter ?? ot.companyDailyOt} h they earn {ot.otMult}× their position&apos;s rate
+            {ot.dtAfter ? `, and ${ot.dtMult}× after ${ot.dtAfter} h` : ''}
+            {ot.effectiveState ? ` (${ot.effectiveState} rules)` : ''}.
+          </>
+        ) : (
+          'No daily overtime on this job. Weekly overtime from the company rules still applies.'
+        )}{' '}
+        State rates are set under Labor rules. Day-rate shifts never earn overtime.
+      </p>
+    </section>
+  );
 }
