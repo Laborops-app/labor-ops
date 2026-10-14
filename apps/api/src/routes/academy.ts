@@ -7,6 +7,7 @@ import { guard, authenticate } from '../auth';
 import { config } from '../config';
 import { notify } from '../notify';
 import { readAcademy, writeAcademy, siteOrigin, fetchCatalog, signupUrl, AcademyError, type CatalogCourse } from '../academy';
+import { academyCertificatePdf } from '../academyPdf';
 
 /**
  * Upstage Academy certificate sync.
@@ -30,7 +31,44 @@ function verify(secret: string, ts: string, raw: string, header: string): boolea
 }
 
 /** Adds one received certificate to the matching user's profile. Returns true when a user was matched. */
-async function applyCert(c: PoolClient, tid: string, row: { id: string; code: string; email: string; username: string | null; title: string; kind?: string }): Promise<boolean> {
+type CertRow = {
+  id: string; code: string; email: string; username: string | null; title: string;
+  kind?: string; issued_at?: string | Date; student_name?: string | null; url?: string | null;
+};
+
+/** Stores the certificate as a PDF on the person's certificate so they and the coordinators can open it.
+ *  A scan the person or a coordinator uploaded themselves is never replaced. */
+async function attachPdf(c: PoolClient, tid: string, certId: string, userName: string, row: CertRow): Promise<void> {
+  const data = await academyCertificatePdf({
+    studentName: row.student_name || userName,
+    title: row.title,
+    kind: row.kind === 'group' ? 'group' : 'course',
+    issuedAt: row.issued_at ? new Date(row.issued_at) : new Date(),
+    code: row.code,
+    verifyUrl: row.url,
+  });
+  await c.query(
+    `INSERT INTO cert_files (tenant_id, cert_id, filename, content_type, size, data) VALUES ($1,$2,$3,'application/pdf',$4,$5)
+     ON CONFLICT (cert_id) DO UPDATE SET filename = EXCLUDED.filename, content_type = EXCLUDED.content_type,
+       size = EXCLUDED.size, data = EXCLUDED.data, uploaded_at = now()
+     WHERE cert_files.filename LIKE 'academy-%'`,
+    [tid, certId, `academy-${row.code}.pdf`, data.length, data],
+  );
+}
+
+/** Makes the PDF for a certificate that was already imported but has none yet (repeat deliveries, older imports). */
+async function ensurePdf(c: PoolClient, tid: string, row: CertRow & { user_id: string }): Promise<void> {
+  const k = (
+    await c.query(
+      `SELECT k.id, u.name, (f.cert_id IS NOT NULL) AS has_file FROM user_certs k JOIN users u ON u.id = k.user_id
+       LEFT JOIN cert_files f ON f.cert_id = k.id WHERE k.user_id = $1 AND k.external_ref = $2`,
+      [row.user_id, row.code],
+    )
+  ).rows[0];
+  if (k && !k.has_file) await attachPdf(c, tid, k.id, k.name, row);
+}
+
+async function applyCert(c: PoolClient, tid: string, row: CertRow): Promise<boolean> {
   const u = (
     await c.query(
       'SELECT id, name FROM users WHERE active AND (lower(email) = lower($1) OR lower(email) = lower($2)) ORDER BY (lower(email) = lower($1)) DESC LIMIT 1',
@@ -47,6 +85,7 @@ async function applyCert(c: PoolClient, tid: string, row: { id: string; code: st
     [tid, u.id, row.title.slice(0, 60), row.code],
   );
   await c.query('UPDATE academy_certs SET user_id = $2, applied_at = now() WHERE id = $1', [row.id, u.id]);
+  await attachPdf(c, tid, r.rows[0].id, u.name, row);
   await audit(c, tid, null, 'cert.academy_import', 'cert', r.rows[0].id, { code: row.code, title: row.title });
   await notify(c, tid, {
     userId: u.id,
@@ -119,7 +158,8 @@ const payload = z.object({
     title: z.string().trim().min(1).max(200),
     issued_at: z.string().datetime({ offset: true }),
     url: z.string().trim().max(500).optional(),
-  }).partial({ type: true, url: true }).optional(),
+    student_name: z.string().trim().max(200).optional(),
+  }).partial({ type: true, url: true, student_name: true }).optional(),
   user: z.object({ email: z.string().trim().max(254).default(''), username: z.string().trim().max(254).default('') }).optional(),
 });
 
@@ -161,7 +201,7 @@ export async function academyRoutes(app: FastifyInstance) {
 
   app.post('/api/integrations/academy/apply', { preHandler: adm }, async (req) =>
     withTenant(req.user.tid, async (c) => {
-      const pending = (await c.query('SELECT id, code, email, username, title, kind FROM academy_certs WHERE applied_at IS NULL ORDER BY issued_at')).rows;
+      const pending = (await c.query('SELECT id, code, email, username, title, kind, issued_at, student_name, url FROM academy_certs WHERE applied_at IS NULL ORDER BY issued_at')).rows;
       let matched = 0;
       for (const p of pending) if (await applyCert(c, req.user.tid, p)) matched++;
       return { checked: pending.length, matched };
@@ -346,17 +386,23 @@ export async function academyRoutes(app: FastifyInstance) {
       const matched = await withTenant(tenantId, async (c) => {
         const certUrl = cert.url && siteOrigin(cert.url) ? cert.url : null;
         const ins = await c.query(
-          `INSERT INTO academy_certs (tenant_id, code, email, username, title, kind, issued_at, url) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-           ON CONFLICT (tenant_id, code) DO UPDATE SET email = EXCLUDED.email, url = COALESCE(EXCLUDED.url, academy_certs.url)
-           RETURNING id, code, email, username, title, kind, applied_at`,
-          [tenantId, cert.code, email.toLowerCase(), p.data.user!.username || null, cert.title, cert.type ?? 'course', cert.issued_at, certUrl],
+          `INSERT INTO academy_certs (tenant_id, code, email, username, title, kind, issued_at, url, student_name)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           ON CONFLICT (tenant_id, code) DO UPDATE SET email = EXCLUDED.email, url = COALESCE(EXCLUDED.url, academy_certs.url),
+             student_name = COALESCE(EXCLUDED.student_name, academy_certs.student_name)
+           RETURNING id, code, email, username, title, kind, issued_at, student_name, url, user_id, applied_at`,
+          [tenantId, cert.code, email.toLowerCase(), p.data.user!.username || null, cert.title, cert.type ?? 'course', cert.issued_at, certUrl, cert.student_name || null],
         );
         // The first signed delivery tells us where the academy lives, if no one has entered it yet.
         if (certUrl) {
           const cfg = await readAcademy(c);
           if (!cfg.url) await writeAcademy(c, tenantId, { url: siteOrigin(certUrl)! }, null);
         }
-        if (ins.rows[0].applied_at) return true; // already imported: a repeat delivery
+        const row = ins.rows[0];
+        if (row.applied_at) { // already imported: a repeat delivery. Make sure the PDF exists.
+          await ensurePdf(c, tenantId, row);
+          return true;
+        }
         return applyCert(c, tenantId, ins.rows[0]);
       });
       return { ok: true, matched };

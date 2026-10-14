@@ -61,11 +61,32 @@ test('academy: signed certificates are imported to the matching user, verified a
   const r1 = await hook(a.tid, secret, ev(email, 'UA-AAAA-000001'));
   assert.equal(r1.statusCode, 200, r1.body);
   assert.equal(r1.json().matched, true);
+  // the PDF is made on the first delivery, not only when the academy sends it again
+  assert.equal((await withTenant(a.tid, (c) => c.query("SELECT 1 FROM user_certs k JOIN cert_files f ON f.cert_id = k.id WHERE k.external_ref = 'UA-AAAA-000001'"))).rowCount, 1);
   // repeat delivery changes nothing
   assert.equal((await hook(a.tid, secret, ev(email, 'UA-AAAA-000001'))).json().matched, true);
   const certs = await withTenant(a.tid, (c) => c.query("SELECT name, verified, external_ref, source FROM user_certs WHERE source = 'academy'"));
   assert.equal(certs.rowCount, 1);
   assert.deepEqual(certs.rows[0], { name: 'Stage Hand Basics', verified: true, external_ref: 'UA-AAAA-000001', source: 'academy' });
+
+  // a PDF of the certificate is attached, and a manager can download it
+  const f = await withTenant(a.tid, (c) => c.query("SELECT k.id, f.filename, f.content_type, f.size, substring(f.data from 1 for 5) AS head FROM user_certs k JOIN cert_files f ON f.cert_id = k.id WHERE k.external_ref = 'UA-AAAA-000001'"));
+  assert.equal(f.rowCount, 1);
+  assert.equal(f.rows[0].content_type, 'application/pdf');
+  assert.equal(f.rows[0].filename, 'academy-UA-AAAA-000001.pdf');
+  assert.equal(Buffer.from(f.rows[0].head).toString(), '%PDF-');
+  const dl = await app.inject({ method: 'GET', url: `/api/certs/${f.rows[0].id}/file`, headers: { cookie: a.cookie } });
+  assert.equal(dl.statusCode, 200);
+  assert.equal(dl.headers['content-type'], 'application/pdf');
+  assert.ok(dl.rawPayload.length > 1000);
+
+  // certificates imported before PDFs existed get one when the academy sends them again; a person's own scan is kept
+  await withTenant(a.tid, (c) => c.query("DELETE FROM cert_files WHERE cert_id = $1", [f.rows[0].id]));
+  await hook(a.tid, secret, ev(email, 'UA-AAAA-000001'));
+  assert.equal((await withTenant(a.tid, (c) => c.query('SELECT 1 FROM cert_files WHERE cert_id = $1', [f.rows[0].id]))).rowCount, 1);
+  await withTenant(a.tid, (c) => c.query("UPDATE cert_files SET filename = 'my-scan.pdf' WHERE cert_id = $1", [f.rows[0].id]));
+  await hook(a.tid, secret, ev(email, 'UA-AAAA-000001'));
+  assert.equal((await withTenant(a.tid, (c) => c.query('SELECT filename FROM cert_files WHERE cert_id = $1', [f.rows[0].id]))).rows[0].filename, 'my-scan.pdf');
 
   // unknown person: kept, then applied once the user exists
   const late = `late-${run}@test.example`;
