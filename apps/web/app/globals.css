@@ -565,3 +565,20 @@ button.star:hover, button.star:focus-visible { color: #e5a50a; }
 .pill.draft { background: var(--warn-bg); color: var(--warn); }
 .pill.sent { background: var(--info-bg); color: var(--info); }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 0.85rem; }
+
+/* quick add / remove crew on shifts */
+.crew-slots { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin: 0.25rem 0 0.5rem; }
+.slot-add { appearance: none; border: 1.5px dashed var(--border-strong); background: transparent; color: var(--link); border-radius: 999px; padding: 0.2rem 0.75rem; font-weight: 600; font-size: 0.85rem; cursor: pointer; }
+.slot-add:hover { border-color: var(--primary); background: var(--primary-soft); }
+.crew-chip { display: inline-flex; align-items: center; gap: 0.3rem; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 0.15rem 0.35rem 0.15rem 0.7rem; font-size: 0.85rem; }
+.crew-pick-anchor { position: relative; }
+.crew-pick { position: absolute; z-index: 40; top: 100%; left: 0; margin-top: 4px; width: min(360px, calc(100vw - 32px)); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.18); padding: 10px; }
+.crew-pick-list { max-height: 260px; overflow-y: auto; margin-top: 6px; }
+.crew-pick-head { font-size: 0.75rem; font-weight: 700; color: var(--muted); padding: 6px 6px 2px; text-transform: uppercase; letter-spacing: .03em; }
+.crew-pick-item { display: flex; width: 100%; justify-content: space-between; gap: 0.5rem; text-align: left; appearance: none; border: 0; background: transparent; color: var(--text); padding: 6px 8px; border-radius: 8px; cursor: pointer; font: inherit; }
+.crew-pick-item:hover:not(:disabled), .crew-pick-item:focus-visible { background: var(--primary-soft); }
+.crew-pick-item:disabled { opacity: .5; cursor: not-allowed; }
+.rm-card > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
+.rm-card > summary::-webkit-details-marker { display: none; }
+.rm-card > summary::before { content: '▸'; color: var(--muted); transition: transform .15s; display: inline-block; }
+.rm-card[open] > summary::before { transform: rotate(90deg); }

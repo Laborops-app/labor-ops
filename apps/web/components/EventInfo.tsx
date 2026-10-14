@@ -320,6 +320,15 @@ export function RentmanCard({ eventId, isAdmin, onError }: { eventId: string; is
   const [v, setV] = useState<RmView | null>(null);
   const [pick, setPick] = useState<RmProject | null>(null);
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set()); // equipment groups start collapsed
+  // The whole Rentman section starts collapsed; whether it was left open is remembered on this device.
+  const [rmOpen, setRmOpen] = useState(false);
+  useEffect(() => {
+    try { setRmOpen(localStorage.getItem('lo_rm_open') === '1'); } catch { /* storage unavailable */ }
+  }, []);
+  const toggleRm = (o: boolean) => {
+    setRmOpen(o);
+    try { localStorage.setItem('lo_rm_open', o ? '1' : '0'); } catch { /* storage unavailable */ }
+  };
   const [busy, setBusy] = useState(false);
   const load = () => api<RmView>(`/api/events/${eventId}/rentman`).then(setV).catch(() => {});
   useEffect(() => {
@@ -343,9 +352,15 @@ export function RentmanCard({ eventId, isAdmin, onError }: { eventId: string; is
   const when = (a: string | null, b: string | null) => (a ? (b && b.slice(0, 10) !== a.slice(0, 10) ? `${fmtDate(a.slice(0, 10))} – ${fmtDate(b.slice(0, 10))}` : fmtDate(a.slice(0, 10))) : '—');
   const p = v.project;
   return (
-    <section className="card">
-      <div className="row space">
-        <h2>Rentman</h2>
+    <details className="card rm-card" open={rmOpen} onToggle={(e) => { const o = (e.target as HTMLDetailsElement).open; if (o !== rmOpen) toggleRm(o); }}>
+      <summary>
+        <h2 style={{ display: 'inline' }}>Rentman</h2>{' '}
+        <span className="muted small">
+          {v.linked && p ? `${p.number ? `#${p.number} · ` : ''}${p.name} · ${v.equipment?.length ?? 0} equipment item${v.equipment?.length === 1 ? '' : 's'}` : v.linked ? 'Linked project' : 'Not linked'}
+        </span>
+      </summary>
+      <div className="row space" style={{ marginTop: '.6rem' }}>
+        <span />
         {v.linked && (
           <span className="row">
             <button className="btn small" disabled={busy} onClick={() => run(() => api<RmView>(`/api/events/${eventId}/rentman/refresh`, { body: {} }))}>Refresh equipment</button>
@@ -409,7 +424,7 @@ export function RentmanCard({ eventId, isAdmin, onError }: { eventId: string; is
         </>
       )}
       {v.linked && !p && <p className="muted small">The linked project is not in the local cache. Sync projects on the Integrations page.</p>}
-    </section>
+    </details>
   );
 }
 

@@ -6,6 +6,7 @@ import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { roleKey } from '@/components/Stars';
 import FillFromGroup from '@/components/FillFromGroup';
+import CrewPick, { PickOption } from '@/components/CrewPick';
 import CopyEvent from '@/components/CopyEvent';
 import { api, ApiError, Me, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
 import { EventDetails, Phases, Clocking, RentmanCard, EventFull, Phase } from '@/components/EventInfo';
@@ -67,7 +68,8 @@ function Body({ me }: { me: Me }) {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
-  const [pick, setPick] = useState<Record<string, string>>({});
+  const [adding, setAdding] = useState<string | null>(null); // shift id whose crew picker is open ('new' = the add-shift form)
+  const [busyAdd, setBusyAdd] = useState(false);
   const [payEdit, setPayEdit] = useState<{ id: string; value: string } | null>(null);
   // "Confirm automatically": crew are put straight on the shift instead of being asked to accept. Remembered on this device.
   const [autoConfirm, setAutoConfirmState] = useState(false);
@@ -99,6 +101,7 @@ function Body({ me }: { me: Me }) {
       isOpen: false,
       phaseId: '',
       payType: 'hourly' as 'hourly' | 'day',
+      crew: [] as string[],
       repeat: false,
       days: [] as number[],
       until: '',
@@ -171,9 +174,24 @@ function Body({ me }: { me: Me }) {
       if (list.length > 120) return setError('That would create more than 120 shifts. Choose a shorter range.');
       ok = await run(() => api(`/api/events/${id}/shifts/bulk`, { body: { shifts: list } }), `Created ${list.length} shifts.`);
     } else {
-      ok = await run(() => api(`/api/events/${id}/shifts`, { body: { ...base, startsAt: start.toISOString(), endsAt: end.toISOString() } }));
+      // Crew picked in the form go straight onto the new shift (one more spot is added for each extra person).
+      const picked = f.crew;
+      let shiftId = '';
+      ok = await run(async () => {
+        shiftId = (await api<{ shift: { id: string } }>(`/api/events/${id}/shifts`, { body: { ...base, headcount: Math.max(base.headcount, picked.length), startsAt: start.toISOString(), endsAt: end.toISOString() } })).shift.id;
+      });
+      if (ok && picked.length) {
+        const failed: string[] = [];
+        for (const uid of picked) {
+          const err = await assignUser(shiftId, uid);
+          if (err) failed.push(`${crew.find((m) => m.id === uid)?.name ?? 'Someone'}: ${err}`);
+        }
+        await load();
+        if (failed.length) setError(`Shift added, but not everyone could be put on it. ${failed.join(' ')}`);
+        else setNote(`Shift added with ${picked.length} crew.`);
+      }
     }
-    if (ok) setF((x) => ({ ...x, roleName: '' }));
+    if (ok) setF((x) => ({ ...x, roleName: '', crew: [] }));
   };
 
   const applyTemplate = () => {
@@ -214,25 +232,36 @@ function Body({ me }: { me: Me }) {
     }
   };
 
-  const assign = (shiftId: string) => {
-    const raw = pick[shiftId];
-    if (!raw) return;
-    const override = raw.startsWith('o:');
-    const userId = override ? raw.slice(2) : raw;
-    const send = async (ov: boolean) => {
-      setError('');
-      setNote('');
-      try {
-        const r = await api<{ warnings?: string[] }>(`/api/shifts/${shiftId}/assign`, { body: { userId, override: ov || undefined, confirmed: autoConfirm || undefined } });
-        setPick((p) => ({ ...p, [shiftId]: '' }));
-        if (r.warnings?.length) setNote(r.warnings.join(' '));
-        await load();
-      } catch (err) {
-        if (err instanceof ApiError && err.reason === 'rules' && !ov && confirm(`${err.message}\n\nAssign anyway?`)) return send(true);
-        setError((err as Error).message);
+  /** Put one person on a shift. Returns an error message, or null when they were added. Rule breaks ask before overriding when `ask` is set. */
+  const assignUser = async (shiftId: string, userId: string, override = false, ask = true): Promise<string | null> => {
+    try {
+      const r = await api<{ warnings?: string[] }>(`/api/shifts/${shiftId}/assign`, { body: { userId, override: override || undefined, confirmed: autoConfirm || undefined } });
+      if (r.warnings?.length) setNote(r.warnings.join(' '));
+      return null;
+    } catch (err) {
+      if (ask && err instanceof ApiError && err.reason === 'rules' && !override && confirm(`${err.message}\n\nAssign anyway?`)) return assignUser(shiftId, userId, true, false);
+      return (err as Error).message;
+    }
+  };
+
+  /** "+" on a shift: adds the person, and when every spot is taken adds a spot first. */
+  const addCrew = async (s: Shift, userId: string, override: boolean, full: boolean) => {
+    setError('');
+    setNote('');
+    setBusyAdd(true);
+    try {
+      if (full) await api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { headcount: s.headcount + 1 } });
+      const err = await assignUser(s.id, userId, override);
+      if (err) {
+        if (full) await api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { headcount: s.headcount } }).catch(() => undefined);
+        setError(err);
       }
-    };
-    send(override);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusyAdd(false);
+    }
   };
 
   if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
@@ -357,8 +386,8 @@ function Body({ me }: { me: Me }) {
                             </button>
                           </>
                         )}
-                        <button className="btn ghost small" onClick={() => run(() => api(`/api/assignments/${a.id}`, { method: 'DELETE' }))}>
-                          Remove
+                        <button className="btn ghost small" aria-label={`Remove ${a.user_name} from this shift`} title="Remove from this shift" onClick={() => run(() => api(`/api/assignments/${a.id}`, { method: 'DELETE' }), `${a.user_name} removed.`)}>
+                          ✕ Remove
                         </button>
                       </span>
                     </li>
@@ -379,45 +408,39 @@ function Body({ me }: { me: Me }) {
                   </button>
                 </div>
               )}
-              {!full && (
-                <div className="row">
-                  <select value={pick[s.id] ?? ''} onChange={(e) => setPick({ ...pick, [s.id]: e.target.value })} aria-label={`Choose crew for ${s.role_name}`}>
-                    <option value="">Choose crew…</option>
-                    {ok.map(({ m }) => (
-                      <option key={m.id} value={m.id}>
-                        {stars(m) ? `${'★'.repeat(stars(m))}${'☆'.repeat(5 - stars(m))} ` : ''}
-                        {m.name}
-                        {m.skills.length ? ` — ${m.skills.join(', ')}` : ''}
-                      </option>
-                    ))}
-                    {soft.length > 0 && (
-                      <optgroup label="Outside availability (override)">
-                        {soft.map(({ m, e }) => (
-                          <option key={m.id} value={`o:${m.id}`}>
-                            {m.name} — {e?.time_off ? 'time off' : 'not available then'}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {blocked.length > 0 && (
-                      <optgroup label="Missing certificate">
-                        {blocked.map(({ m, e }) => (
-                          <option key={m.id} value={m.id} disabled>
-                            {m.name} — needs {e?.missing_certs.join(', ')}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                  </select>
-                  <button className="btn small" disabled={!pick[s.id]} onClick={() => assign(s.id)}>
-                    {autoConfirm ? 'Assign & confirm' : 'Assign'}
+              <div className="crew-slots crew-pick-anchor">
+                {Array.from({ length: Math.min(Math.max(0, s.headcount - active.length), 6) }).map((_, n) => (
+                  <button key={n} type="button" className="slot-add" onClick={() => setAdding(adding === s.id ? null : s.id)} aria-label={`Add crew to ${s.role_name}`}>
+                    + Add crew
                   </button>
-                  <label className="row small" style={{ gap: '.35rem', alignItems: 'center' }}>
-                    <input type="checkbox" style={{ width: 'auto' }} checked={autoConfirm} onChange={(e) => setAutoConfirm(e.target.checked)} />
-                    Confirm automatically
-                  </label>
-                </div>
-              )}
+                ))}
+                {s.headcount - active.length > 6 && <span className="muted small">{s.headcount - active.length - 6} more open spots</span>}
+                {full && (
+                  <button type="button" className="slot-add" onClick={() => setAdding(adding === s.id ? null : s.id)} title="Adds one more spot to this shift and puts the person in it">
+                    + Add another person
+                  </button>
+                )}
+                <label className="row small" style={{ gap: '.35rem', alignItems: 'center', marginLeft: 'auto' }}>
+                  <input type="checkbox" style={{ width: 'auto' }} checked={autoConfirm} onChange={(e) => setAutoConfirm(e.target.checked)} />
+                  Confirm automatically
+                </label>
+                {adding === s.id && (
+                  <CrewPick
+                    title={full ? `Add a spot on ${s.role_name}` : `Add crew to ${s.role_name} (${s.headcount - active.length} open)`}
+                    busy={busyAdd}
+                    onClose={() => setAdding(null)}
+                    options={[
+                      ...ok.map(({ m }) => ({ id: m.id, name: m.name, sub: m.skills.join(', '), stars: stars(m), kind: 'ok' as const })),
+                      ...soft.map(({ m, e }) => ({ id: m.id, name: m.name, kind: 'soft' as const, note: e?.time_off ? 'time off' : 'not available then' })),
+                      ...blocked.map(({ m, e }) => ({ id: m.id, name: m.name, kind: 'blocked' as const, note: `needs ${e?.missing_certs.join(', ')}` })),
+                    ]}
+                    onPick={(o) => {
+                      if (active.length + 1 >= s.headcount && !full) setAdding(null);
+                      addCrew(s, o.id, o.kind === 'soft', full);
+                    }}
+                  />
+                )}
+              </div>
               {!full && crewGroups.length > 0 && (
                 <FillFromGroup shiftId={s.id} groups={crewGroups} confirmed={autoConfirm} onError={setError} onDone={(m) => { setNote(m); load(); }} />
               )}
@@ -596,6 +619,36 @@ function Body({ me }: { me: Me }) {
             </div>
             {f.payType === 'day' && <div className="small muted">One flat amount for the day (the role&apos;s day rate), no overtime.</div>}
           </div>
+          {!f.repeat && (
+            <div style={{ gridColumn: '1 / -1' }}>
+              <div className="small muted" style={{ marginBottom: 4 }}>Crew (optional)</div>
+              <div className="crew-slots crew-pick-anchor">
+                {f.crew.map((uid) => (
+                  <span key={uid} className="crew-chip">
+                    {crew.find((m) => m.id === uid)?.name ?? 'Crew'}
+                    <button type="button" className="chip-x" aria-label={`Take ${crew.find((m) => m.id === uid)?.name ?? 'them'} off`} onClick={() => setF((x) => ({ ...x, crew: x.crew.filter((y) => y !== uid) }))}>✕</button>
+                  </span>
+                ))}
+                <button type="button" className="slot-add" onClick={() => setAdding(adding === 'new' ? null : 'new')}>
+                  + Add crew
+                </button>
+                {f.crew.length > Number(f.headcount) && <span className="muted small">People needed will be raised to {f.crew.length}.</span>}
+                {adding === 'new' && (
+                  <CrewPick
+                    title="Add crew to the new shift"
+                    onClose={() => setAdding(null)}
+                    options={crew
+                      .filter((m) => !f.crew.includes(m.id))
+                      .map((m) => ({ m, fit: !!f.roleName && m.skills.some((k) => roleKey(k) === roleKey(f.roleName)) }))
+                      .sort((a, b) => Number(b.fit) - Number(a.fit) || a.m.name.localeCompare(b.m.name))
+                      .map(({ m, fit }) => ({ id: m.id, name: m.name, sub: fit ? `${m.skills.join(', ')} · matches role` : m.skills.join(', ') }))}
+                    onPick={(o) => setF((x) => ({ ...x, crew: [...x.crew, o.id] }))}
+                  />
+                )}
+              </div>
+              <div className="muted small">They are checked against certificates, availability and labor rules when the shift is saved.</div>
+            </div>
+          )}
           <label>
             Required certificates
             <input value={f.certs} onChange={(e) => setF({ ...f, certs: e.target.value })} placeholder="Forklift, Rigging (comma separated)" />
