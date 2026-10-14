@@ -14,6 +14,7 @@ import { skillRoutes } from './routes/skills';
 import { profileRoutes } from './routes/profile';
 import { notificationRoutes } from './routes/notifications';
 import { messagingRoutes } from './routes/messaging';
+import { academyRoutes } from './routes/academy';
 import { pushRoutes } from './routes/push';
 import { respondRoutes } from './routes/respond';
 import { rulesRoutes } from './routes/rules';
@@ -72,6 +73,7 @@ export async function buildApp() {
   await app.register(skillRoutes);
   await app.register(notificationRoutes);
   await app.register(messagingRoutes);
+  await app.register(academyRoutes);
   await app.register(pushRoutes);
   await app.register(chatRoutes);
   await app.register(respondRoutes);
