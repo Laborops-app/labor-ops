@@ -2,6 +2,7 @@
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { roleKey } from '@/components/Stars';
@@ -112,8 +113,14 @@ function Body({ me }: { me: Me }) {
   const [otherRole, setOtherRole] = useState(false);
   const [tplId, setTplId] = useState('');
   const [tplPhase, setTplPhase] = useState('');
-  const [tplOpen, setTplOpen] = useState(false);
-  const tplBox = useRef<HTMLDetailsElement>(null);
+  // Event settings panel: clock-in, overtime and shift templates live here to keep the page short.
+  const [settings, setSettings] = useState<null | 'clock' | 'ot' | 'tpl'>(null);
+  useEffect(() => {
+    if (!settings) return;
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setSettings(null);
+    document.addEventListener('keydown', esc);
+    return () => document.removeEventListener('keydown', esc);
+  }, [settings]);
   const shiftForm = useRef<HTMLElement>(null);
   const [tplStart, setTplStart] = useState('');
   const [tplName, setTplName] = useState('');
@@ -464,8 +471,7 @@ function Body({ me }: { me: Me }) {
   const templateForPhase = (p: Phase) => {
     setTplPhase(p.id);
     setTplStart(p.starts_on.slice(0, 10));
-    setTplOpen(true);
-    setTimeout(() => tplBox.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+    setSettings('tpl');
   };
   const groupSection = (g: { key: string; phase: Phase | null; shifts: Shift[] }) => (
     <div key={g.key} className="phase-group">
@@ -509,8 +515,23 @@ function Body({ me }: { me: Me }) {
             {fmtDate(ev.start_date.slice(0, 10))}
             {ev.end_date.slice(0, 10) !== ev.start_date.slice(0, 10) && <> – {fmtDate(ev.end_date.slice(0, 10))}</>}
           </div>
+          <div className="row small" style={{ gap: '.35rem', marginTop: '.35rem', flexWrap: 'wrap' }}>
+            <button type="button" className="chip" style={{ border: 0, cursor: 'pointer' }} onClick={() => setSettings('clock')}>
+              {ev.clock_mode === 'coordinator' ? 'Coordinator clocks crew in' : 'Crew clock themselves in'}
+              {ev.geofence_m ? ` · within ${ev.geofence_m} m` : ''}
+            </button>
+            {d.overtime && (
+              <button type="button" className="chip" style={{ border: 0, cursor: 'pointer' }} onClick={() => setSettings('ot')}>
+                {d.overtime.otAfter ? `OT after ${d.overtime.otAfter} h` : 'Company overtime'}
+                {d.overtime.effectiveState ? ` · ${d.overtime.effectiveState}` : ''}
+              </button>
+            )}
+          </div>
         </div>
         <div className="row" style={{ gap: '0.4rem' }}>
+        <button className="btn small" onClick={() => setSettings('clock')} aria-haspopup="dialog">
+          ⚙ Event settings
+        </button>
         <button
           className="btn small"
           onClick={() =>
@@ -546,10 +567,8 @@ function Body({ me }: { me: Me }) {
       )}
 
       <EventDetails ev={ev} hasPhases={d.phases.length > 0} onSaved={load} onError={setError} />
-      {d.overtime && <OvertimeCard eventId={id} ot={d.overtime} onSaved={load} onError={setError} />}
       <Phases eventId={id} phases={d.phases} onChanged={load} onError={setError} />
       <RentmanCard eventId={id} isAdmin={me.role === 'admin'} onError={setError} />
-      <Clocking ev={ev} onSaved={load} onError={setError} />
 
       <section className="card" ref={shiftForm}>
         <h2>Add a shift</h2>
@@ -685,11 +704,31 @@ function Body({ me }: { me: Me }) {
         </form>
       </section>
 
-      <details className="card" ref={tplBox} open={tplOpen} onToggle={(e) => setTplOpen((e.target as HTMLDetailsElement).open)}>
-        <summary>
-          <b>Shift templates</b> <span className="muted small">Create a whole day or week of shifts in one step</span>
-        </summary>
-        <div className="adv">
+
+      {(
+        <>{groups.map((g) => groupSection(g))}</>      )}
+
+      {settings && typeof document !== 'undefined' && createPortal(
+        <div className="drawer-backdrop" onMouseDown={() => setSettings(null)}>
+          <aside className="drawer" role="dialog" aria-modal="true" aria-label="Event settings" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="row space">
+              <h2 style={{ margin: 0 }}>Event settings</h2>
+              <button className="btn ghost small" aria-label="Close settings" onClick={() => setSettings(null)}>✕</button>
+            </div>
+            <div className="phase-tabs" role="tablist" aria-label="Settings section" style={{ margin: '12px 0' }}>
+              {([['clock', 'Clock-in'], ['ot', 'Overtime'], ['tpl', 'Shift templates']] as const).map(([k, label]) => (
+                <button key={k} type="button" role="tab" aria-selected={settings === k} className={settings === k ? 'tab on' : 'tab'} onClick={() => setSettings(k)}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            {settings === 'clock' && <Clocking ev={ev} onSaved={load} onError={setError} />}
+            {settings === 'ot' && d.overtime && <OvertimeCard eventId={id} ot={d.overtime} onSaved={load} onError={setError} />}
+            {settings === 'tpl' && (
+              <section className="card">
+                <h2>Shift templates</h2>
+                <p className="muted small">Create a whole day or week of shifts in one step, or save this event&apos;s shifts for next time.</p>
+        <div>
           <div className="row">
             <select value={tplId} onChange={(e) => setTplId(e.target.value)} aria-label="Template">
               <option value="">Choose a template…</option>
@@ -738,10 +777,14 @@ function Body({ me }: { me: Me }) {
             {customerId && <label className="check"><input type="checkbox" checked={tplForCustomer} onChange={(e) => setTplForCustomer(e.target.checked)} /> Only for {d.event.client}</label>}
           </div>
         </div>
-      </details>
-
-      {(
-        <>{groups.map((g) => groupSection(g))}</>      )}
+              </section>
+            )}
+            {error && <Banner onClose={() => setError('')}>{error}</Banner>}
+            {note && <Banner kind="ok" onClose={() => setNote('')}>{note}</Banner>}
+          </aside>
+        </div>,
+        document.body,
+      )}
     </>
   );
 }
