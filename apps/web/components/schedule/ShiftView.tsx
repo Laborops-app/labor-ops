@@ -2,7 +2,8 @@
 import Link from 'next/link';
 import { useMemo } from 'react';
 import Ic from './Ic';
-import { Group, HOUR_PX, fmtH, fmtMoney, groupByEventDay, hhmm, initials, isoWeek, key, lanes, minutesOfDay, S, segments } from '@/lib/schedule';
+import PhaseRow from './PhaseRow';
+import { Group, Phase, phaseTone, HOUR_PX, fmtH, fmtMoney, groupByEventDay, hhmm, initials, isoWeek, key, lanes, minutesOfDay, S, segments } from '@/lib/schedule';
 
 const fmtMin = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 
@@ -13,8 +14,12 @@ function Card({ g, seePay, style }: { g: Group; seePay: boolean; style: React.CS
   const shown = g.people.slice(0, 3);
   const extra = g.people.length - shown.length;
   return (
-    <Link href={`/events/${g.event_id}`} className={`sx-sg ${tone} ${size}`} style={{ ...style, height: Math.max(h - 2, 36) }} title={`${g.name}${g.venue ? ' · ' + g.venue : ''}`}>
-      <span className="nm">{g.name}</span>
+    <Link href={`/events/${g.event_id}`} className={`sx-sg ${tone} ${size}`} style={{ ...style, height: Math.max(h - 2, 36) }} title={`${g.phase ? g.phase + ' · ' : ''}${g.name}${g.venue ? ' · ' + g.venue : ''}`}>
+      <span className="nm">
+        {g.phase && <b className={`ph ${phaseTone(g.phase)}`}>{g.phase}</b>}
+        {g.phase ? ' · ' : ''}
+        {g.name}
+      </span>
       <span className="head">
         <span>{fmtMin(g.startMin)}</span>
         <span>–</span>
@@ -64,7 +69,7 @@ function Card({ g, seePay, style }: { g: Group; seePay: boolean; style: React.CS
   );
 }
 
-export default function ShiftView({ days, shifts, seePay, now }: { days: Date[]; shifts: S[]; seePay: boolean; now: Date }) {
+export default function ShiftView({ days, shifts, phases, seePay, now }: { days: Date[]; shifts: S[]; phases: Phase[]; seePay: boolean; now: Date }) {
   const groups = useMemo(() => groupByEventDay(segments(shifts)), [shifts]);
   const byDay = useMemo(() => {
     const m = new Map<string, Group[]>();
@@ -78,7 +83,8 @@ export default function ShiftView({ days, shifts, seePay, now }: { days: Date[];
 
   return (
     <>
-      <div className="sx-fixed sx-row">
+      <div className="sx-fixed">
+      <div className="sx-row">
         <div className="sx-weekh">
           <div className="w">Week</div>
           <div className="big">{wk}</div>
@@ -107,6 +113,8 @@ export default function ShiftView({ days, shifts, seePay, now }: { days: Date[];
             </div>
           );
         })}
+      </div>
+      <PhaseRow days={days} phases={phases} now={now} />
       </div>
       <div className="sx-body">
         <div className="sx-times">

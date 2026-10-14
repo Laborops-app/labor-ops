@@ -9,7 +9,7 @@ import StaffView from '@/components/schedule/StaffView';
 import MonthView from '@/components/schedule/MonthView';
 import FilterPanel from '@/components/schedule/FilterPanel';
 import { api } from '@/lib/api';
-import { CalResp, Filters, NO_FILTERS, STATUS_LABEL, HOUR_PX, addDays, applyFilters, filtersActive, isoWeek, weekStart } from '@/lib/schedule';
+import { CalResp, Filters, NO_FILTERS, STATUS_LABEL, HOUR_PX, addDays, applyFilters, filterPhases, filtersActive, isoWeek, weekStart } from '@/lib/schedule';
 
 function Body() {
   const [mode, setMode] = useState<'shift' | 'staff'>('shift');
@@ -56,8 +56,12 @@ function Body() {
   }, [range, mode, start]);
 
   const shifts = useMemo(() => applyFilters(data.shifts, filters), [data.shifts, filters]);
+  const phases = useMemo(() => filterPhases(data.phases ?? [], filters), [data.phases, filters]);
   const teams = useMemo(() => [...new Set([...data.shifts.map((s) => s.role_name), ...filters.teams])].sort(), [data.shifts, filters.teams]);
-  const events = useMemo(() => [...new Map(data.shifts.map((s) => [s.event_id, s.event_name])).entries()].map(([id, name]) => ({ id, name })), [data.shifts]);
+  const events = useMemo(
+    () => [...new Map([...data.shifts.map((s) => [s.event_id, s.event_name] as const), ...(data.phases ?? []).map((p) => [p.event_id, p.event_name] as const)]).entries()].map(([id, name]) => ({ id, name })),
+    [data.shifts, data.phases],
+  );
 
   const step = (dir: number) => {
     const a = new Date(anchor);
@@ -172,6 +176,7 @@ function Body() {
                 count={count}
                 month={anchor.getMonth()}
                 shifts={shifts}
+                phases={phases}
                 now={now}
                 onOpenDay={(d) => {
                   setAnchor(d);
@@ -181,9 +186,9 @@ function Body() {
             ) : (
               <div className={`sx-inner ${mode === 'staff' ? 'staff' : ''}`}>
                 {mode === 'shift' ? (
-                  <ShiftView days={days} shifts={shifts} seePay={data.can_see_pay} now={now} />
+                  <ShiftView days={days} shifts={shifts} phases={phases} seePay={data.can_see_pay} now={now} />
                 ) : (
-                  <StaffView days={days} shifts={shifts} timeOff={data.time_off} seePay={data.can_see_pay} now={now} teamFilter={filters.teams} />
+                  <StaffView days={days} shifts={shifts} phases={phases} timeOff={data.time_off} seePay={data.can_see_pay} now={now} teamFilter={filters.teams} />
                 )}
               </div>
             )}

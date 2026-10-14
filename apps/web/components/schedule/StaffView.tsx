@@ -2,14 +2,15 @@
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import Ic from './Ic';
-import { Leave, S, fmtH, fmtMoney, initials, isoWeek, key, segCostOne, segments } from '@/lib/schedule';
+import PhaseRow from './PhaseRow';
+import { Leave, Phase, S, phaseTitle, fmtH, fmtMoney, initials, isoWeek, key, segCostOne, segments } from '@/lib/schedule';
 
 const fmtMin = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 
 type Item = { id: string; day: string; event_id: string; name: string; start: number; end: number; hours: number; cost: number | null; pending: boolean; role: string };
 type Person = { id: string; name: string; team: string; items: Item[]; leave: Leave[]; hours: number; cost: number };
 
-export default function StaffView({ days, shifts, timeOff, seePay, now, teamFilter }: { days: Date[]; shifts: S[]; timeOff: Leave[]; seePay: boolean; now: Date; teamFilter: string[] }) {
+export default function StaffView({ days, shifts, phases, timeOff, seePay, now, teamFilter }: { days: Date[]; shifts: S[]; phases: Phase[]; timeOff: Leave[]; seePay: boolean; now: Date; teamFilter: string[] }) {
   const [closed, setClosed] = useState<Record<string, boolean>>({});
   const todayKey = key(now);
   const dayKeys = days.map(key);
@@ -24,7 +25,7 @@ export default function StaffView({ days, shifts, timeOff, seePay, now, teamFilt
     };
     for (const sg of segments(shifts)) {
       const s = sg.shift;
-      const base = { day: sg.day, event_id: s.event_id, name: s.event_name, start: sg.startMin, end: sg.endMin, hours: sg.hours, role: s.role_name };
+      const base = { day: sg.day, event_id: s.event_id, name: phaseTitle(s.phase_label, s.event_name), start: sg.startMin, end: sg.endMin, hours: sg.hours, role: s.role_name };
       for (const a of s.assignees) {
         const p = get(a.user_id, a.name);
         const c = segCostOne(sg);
@@ -82,18 +83,21 @@ export default function StaffView({ days, shifts, timeOff, seePay, now, teamFilt
 
   return (
     <>
-      <div className="sx-fixed sx-row">
-        <div className="sx-weekh">
-          <div className="w">Week</div>
-          <div className="big">{isoWeek(days[0]!)}</div>
-          <div className="cap">{total} staff</div>
-        </div>
-        {days.map((d) => (
-          <div key={key(d)} className={`sx-dayh ${key(d) === todayKey ? 'today' : ''}`}>
-            <div className="dow">{d.toLocaleDateString([], { weekday: 'short' })}</div>
-            <div className="num">{d.getDate()}</div>
+      <div className="sx-fixed">
+        <div className="sx-row">
+          <div className="sx-weekh">
+            <div className="w">Week</div>
+            <div className="big">{isoWeek(days[0]!)}</div>
+            <div className="cap">{total} staff</div>
           </div>
-        ))}
+          {days.map((d) => (
+            <div key={key(d)} className={`sx-dayh ${key(d) === todayKey ? 'today' : ''}`}>
+              <div className="dow">{d.toLocaleDateString([], { weekday: 'short' })}</div>
+              <div className="num">{d.getDate()}</div>
+            </div>
+          ))}
+        </div>
+        <PhaseRow days={days} phases={phases} now={now} />
       </div>
 
       {open.length > 0 && (

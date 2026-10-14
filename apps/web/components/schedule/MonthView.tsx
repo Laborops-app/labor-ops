@@ -1,11 +1,11 @@
 'use client';
 import Link from 'next/link';
 import { useMemo } from 'react';
-import { S, addDays, groupByEventDay, key, segments } from '@/lib/schedule';
+import { Phase, S, addDays, groupByEventDay, key, phaseTone, phasesOn, segments } from '@/lib/schedule';
 
 const fmtMin = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 
-export default function MonthView({ start, count, month, shifts, now, onOpenDay }: { start: Date; count: number; month: number; shifts: S[]; now: Date; onOpenDay: (d: Date) => void }) {
+export default function MonthView({ start, count, month, shifts, phases, now, onOpenDay }: { start: Date; count: number; month: number; shifts: S[]; phases: Phase[]; now: Date; onOpenDay: (d: Date) => void }) {
   const byDay = useMemo(() => {
     const m = new Map<string, ReturnType<typeof groupByEventDay>>();
     for (const g of groupByEventDay(segments(shifts))) m.set(g.day, [...(m.get(g.day) ?? []), g].sort((a, b) => a.startMin - b.startMin));
@@ -35,9 +35,23 @@ export default function MonthView({ start, count, month, shifts, now, onOpenDay 
                   </small>
                 )}
               </div>
+              {phasesOn(phases, k).map((p) => {
+                const isStart = p.starts_on.slice(0, 10) === k || d.getDay() === 1;
+                return (
+                  <Link key={p.id} href={`/events/${p.event_id}`} className={`sx-mph ${phaseTone(p.label)}`} title={`${p.label} · ${p.event_name}`}>
+                    {isStart ? (
+                      <>
+                        <b>{p.label}</b> · {p.event_name}
+                      </>
+                    ) : (
+                      <span className="cont">{p.label}</span>
+                    )}
+                  </Link>
+                );
+              })}
               {gs.slice(0, 3).map((g) => (
                 <Link key={g.id} href={`/events/${g.event_id}`} className={`sx-mev ${g.total === 0 || g.filled >= g.total ? 'good' : g.filled === 0 ? 'bad' : 'warn'}`}>
-                  <b>{g.name}</b>
+                  <b>{g.phase ? `${g.phase} · ${g.name}` : g.name}</b>
                   <span>
                     {fmtMin(g.startMin)} – {fmtMin(g.endMin)}
                   </span>

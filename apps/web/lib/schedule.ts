@@ -10,6 +10,9 @@ export type S = {
   event_id: string;
   event_name: string;
   venue: string | null;
+  /** The event phase this shift belongs to (its own, or the phase covering its day). */
+  phase_id?: string | null;
+  phase_label?: string | null;
   filled: number;
   confirmed: number;
   assignees: Assignee[];
@@ -18,7 +21,46 @@ export type S = {
   unit_cost?: number | null;
 };
 export type Leave = { user_id: string; name: string; starts_on: string; ends_on: string; note: string | null };
-export type CalResp = { shifts: S[]; time_off: Leave[]; can_see_pay: boolean };
+/** A dated stretch of an event (load in, show days, load out ...). Dates are YYYY-MM-DD, inclusive. */
+export type Phase = { id: string; event_id: string; event_name: string; label: string; starts_on: string; ends_on: string };
+export type CalResp = { shifts: S[]; phases?: Phase[]; time_off: Leave[]; can_see_pay: boolean };
+
+/** Colour family for a phase, from its name. */
+export type PhaseTone = 'in' | 'show' | 'out' | 'other';
+export function phaseTone(label: string | null | undefined): PhaseTone {
+  const l = (label ?? '').toLowerCase();
+  if (/load.?out|strike|tear.?down|teardown|de-?rig|wrap|out$/.test(l)) return 'out';
+  if (/load.?in|set.?up|setup|install|build|rig|prep|in$/.test(l)) return 'in';
+  if (/show|event|game|perform|concert|day|live|rehears/.test(l)) return 'show';
+  return 'other';
+}
+/** "Load In · U of U Game Day" */
+export const phaseTitle = (phase: string | null | undefined, event: string) => (phase ? `${phase} · ${event}` : event);
+
+/** Phase bars across the visible days, stacked into rows so overlapping phases don't collide. */
+export type PhaseBar = { phase: Phase; from: number; to: number; row: number; contL: boolean; contR: boolean };
+export function phaseBars(days: Date[], phases: Phase[]): PhaseBar[] {
+  const keys = days.map(key);
+  const first = keys[0]!, last = keys[keys.length - 1]!;
+  const bars = phases
+    .filter((p) => p.ends_on.slice(0, 10) >= first && p.starts_on.slice(0, 10) <= last)
+    .map((p) => {
+      const s = p.starts_on.slice(0, 10), e = p.ends_on.slice(0, 10);
+      const from = s < first ? 0 : keys.indexOf(s);
+      const to = e > last ? keys.length - 1 : keys.indexOf(e);
+      return { phase: p, from: Math.max(0, from), to: to < 0 ? keys.length - 1 : to, row: 0, contL: s < first, contR: e > last };
+    })
+    .sort((a, b) => a.from - b.from || b.to - a.to);
+  const rowEnds: number[] = [];
+  for (const b of bars) {
+    let r = rowEnds.findIndex((end) => end < b.from);
+    if (r < 0) r = rowEnds.length;
+    rowEnds[r] = b.to;
+    b.row = r;
+  }
+  return bars;
+}
+export const phasesOn = (phases: Phase[], day: string) => phases.filter((p) => p.starts_on.slice(0, 10) <= day && p.ends_on.slice(0, 10) >= day);
 
 export type Tone = 'good' | 'warn' | 'bad';
 export const toneOf = (filled: number, total: number): Tone => (filled >= total ? 'good' : filled === 0 ? 'bad' : 'warn');
@@ -107,6 +149,7 @@ export type Group = {
   day: string;
   event_id: string;
   name: string;
+  phase: string | null;
   venue: string | null;
   startMin: number;
   endMin: number;
@@ -124,10 +167,11 @@ export function groupByEventDay(segs: Seg[]): Group[] {
   const seen = new Map<string, Set<string>>();
   for (const sg of segs) {
     const s = sg.shift;
-    const k = `${sg.day}|${s.event_id}`;
+    // One card per event, phase and day: a load-in and a show on the same day stay separate.
+    const k = `${sg.day}|${s.event_id}|${s.phase_id ?? ''}`;
     let g = m.get(k);
     if (!g) {
-      g = { id: k, day: sg.day, event_id: s.event_id, name: s.event_name, venue: s.venue, startMin: sg.startMin, endMin: sg.endMin, filled: 0, confirmed: 0, total: 0, hours: 0, cost: null, people: [], continued: !sg.first };
+      g = { id: k, day: sg.day, event_id: s.event_id, name: s.event_name, phase: s.phase_label ?? null, venue: s.venue, startMin: sg.startMin, endMin: sg.endMin, filled: 0, confirmed: 0, total: 0, hours: 0, cost: null, people: [], continued: !sg.first };
       m.set(k, g);
       seen.set(k, new Set());
     }
@@ -186,4 +230,5 @@ export function applyFilters(shifts: S[], f: Filters): S[] {
     return true;
   });
 }
+export const filterPhases = (phases: Phase[], f: Filters) => phases.filter((p) => !f.eventId || p.event_id === f.eventId);
 export const filtersActive = (f: Filters) => f.status !== 'all' || f.teams.length > 0 || !!f.eventId;

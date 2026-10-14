@@ -139,17 +139,35 @@ export async function eventRoutes(app: FastifyInstance) {
     const { from, to } = q.data;
     if (new Date(to).getTime() - new Date(from).getTime() > 62 * 86400000) return reply.code(400).send({ error: 'Range too large' });
     const out = await withTenant(req.user.tid, async (c) => {
+      const tz = (await c.query('SELECT timezone FROM tenants LIMIT 1')).rows[0]?.timezone ?? 'America/Denver';
       const rows = (
         await c.query(
           `SELECT s.id, s.role_name, s.starts_at, s.ends_at, s.headcount, e.id AS event_id, e.name AS event_name, e.venue,
+              ph.id AS phase_id, ph.label AS phase_label,
               (SELECT count(*)::int FROM shift_assignments a WHERE a.shift_id = s.id AND a.status <> 'declined') AS filled,
               (SELECT count(*)::int FROM shift_assignments a WHERE a.shift_id = s.id AND a.status = 'accepted') AS confirmed,
               COALESCE((SELECT json_agg(json_build_object('user_id', u.id, 'name', u.name, 'status', a.status) ORDER BY a.created_at)
                  FROM shift_assignments a JOIN users u ON u.id = a.user_id
                  WHERE a.shift_id = s.id AND a.status <> 'declined'), '[]'::json) AS assignees
            FROM shifts s JOIN events e ON e.id = s.event_id
+           -- The shift's own phase, or else the event phase whose dates cover the day it starts.
+           LEFT JOIN LATERAL (
+             SELECT p.id, p.label FROM event_phases p
+             WHERE p.event_id = e.id AND (p.id = s.phase_id OR (s.phase_id IS NULL AND (s.starts_at AT TIME ZONE $3)::date BETWEEN p.starts_on AND p.ends_on))
+             ORDER BY (p.id = s.phase_id) DESC, p.starts_on, p.created_at LIMIT 1
+           ) ph ON true
            WHERE s.starts_at >= $1 AND s.starts_at < $2 ORDER BY s.starts_at, e.name`,
-          [from, to],
+          [from, to, tz],
+        )
+      ).rows;
+      // Event phases (load in, show days, load out ...) that overlap the range, drawn as all-day bars.
+      const phases = (
+        await c.query(
+          `SELECT p.id, p.event_id, e.name AS event_name, p.label, to_char(p.starts_on, 'YYYY-MM-DD') AS starts_on, to_char(p.ends_on, 'YYYY-MM-DD') AS ends_on
+           FROM event_phases p JOIN events e ON e.id = p.event_id
+           WHERE p.ends_on >= ($1::timestamptz AT TIME ZONE $3)::date AND p.starts_on <= ($2::timestamptz AT TIME ZONE $3)::date
+           ORDER BY p.starts_on, e.name, p.created_at`,
+          [from, to, tz],
         )
       ).rows;
       // Approved time off overlapping the range, shown as "Approved leave" in the staff view.
@@ -172,7 +190,7 @@ export async function eventRoutes(app: FastifyInstance) {
           s.unit_cost = p.estimate != null ? Math.round(p.estimate * 100) / 100 : null;
         }
       }
-      return { shifts: rows, time_off: timeOff, can_see_pay: seePay };
+      return { shifts: rows, phases, time_off: timeOff, can_see_pay: seePay };
     });
     return out;
   });

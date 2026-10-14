@@ -8,6 +8,24 @@ export default function FilterPanel({ filters, teams, events, selected, now, onA
   const [draft, setDraft] = useState(filters);
   const [month, setMonth] = useState(() => new Date(selected.getFullYear(), selected.getMonth(), 1));
   const [tones, setTones] = useState<Map<string, Tone[]>>(new Map());
+  // The month calendar can be folded away; remembered on this device.
+  const [miniOpen, setMiniOpen] = useState(true);
+  useEffect(() => {
+    try {
+      setMiniOpen(localStorage.getItem('lo_sx_mini') !== '0');
+    } catch {
+      /* storage blocked */
+    }
+  }, []);
+  const toggleMini = () =>
+    setMiniOpen((o) => {
+      try {
+        localStorage.setItem('lo_sx_mini', o ? '0' : '1');
+      } catch {
+        /* storage blocked */
+      }
+      return !o;
+    });
 
   const first = month;
   const gridStart = addDays(first, -first.getDay());
@@ -49,8 +67,12 @@ export default function FilterPanel({ filters, teams, events, selected, now, onA
         </button>
       </div>
       <div className="sx-panel-b">
-        <div className="sx-mini">
+        <div className={`sx-mini ${miniOpen ? '' : 'closed'}`}>
           <div className="sx-mini-h">
+            <button className="sx-mini-toggle" onClick={toggleMini} aria-expanded={miniOpen} aria-controls="sx-mini-body" title={miniOpen ? 'Hide calendar' : 'Show calendar'}>
+              <Ic n="caret-down-sm" size={16} className={miniOpen ? '' : 'flip'} />
+              <span className="sr-only">{miniOpen ? 'Hide calendar' : 'Show calendar'}</span>
+            </button>
             <button className="sx-btn sq" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))} aria-label="Previous month">
               <Ic n="caret-down-sm" className="flip" />
             </button>
@@ -59,7 +81,8 @@ export default function FilterPanel({ filters, teams, events, selected, now, onA
               <Ic n="caret-down-sm" className="flip-r" />
             </button>
           </div>
-          <div>
+          {miniOpen && (
+          <div id="sx-mini-body">
             <div className="sx-mini-days" aria-hidden="true">
               {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
                 <span key={d}>{d}</span>
@@ -81,6 +104,7 @@ export default function FilterPanel({ filters, teams, events, selected, now, onA
               })}
             </div>
           </div>
+          )}
         </div>
 
         <div className="sx-fgroup">
