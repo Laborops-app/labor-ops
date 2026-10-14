@@ -1,7 +1,7 @@
 -- Upstage Academy certificate sync: a shared secret per company, and a log of certificates received.
 ALTER TABLE integration_settings DROP CONSTRAINT IF EXISTS integration_settings_provider_check;
 ALTER TABLE integration_settings
-  ADD CONSTRAINT integration_settings_provider_check CHECK (provider IN ('ses', 'twilio', 'sns', 'podium', 'academy'));
+  ADD CONSTRAINT integration_settings_provider_check CHECK (provider IN ('ses', 'twilio', 'sns', 'podium', 'rentman', 'quickbooks', 'academy'));
 
 -- Certificates that came from the academy are verified and carry the academy certificate code.
 ALTER TABLE user_certs
