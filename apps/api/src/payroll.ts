@@ -1,5 +1,5 @@
 import type { PoolClient } from 'pg';
-import { loadRules, loadRates, rateFor, priceShift, eventState, loadStateOt, type StateOt } from './pay';
+import { loadRules, loadRates, rateFor, priceShift, eventState, loadStateOt, type StateOt, loadDayRates, roleKeyOf } from './pay';
 import { localDate, baseRole, type AcctSettings, type PayrollProvider } from './accounting';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -27,7 +27,7 @@ const weekOf = (ymd: string) => {
 export async function payrollSummary(c: PoolClient, from: string, to: string) {
   const rules = await loadRules(c);
   const rates = await loadRates(c);
-  const dayRates = new Map<string, number>((await c.query('SELECT lower(name) AS k, day_rate FROM skills')).rows.map((r) => [r.k, Number(r.day_rate)]));
+  const dayRates = await loadDayRates(c);
   const fallbackState = (await c.query('SELECT default_state FROM labor_rules LIMIT 1')).rows[0]?.default_state ?? null;
   const rows = (
     await c.query(
@@ -75,7 +75,7 @@ export async function payrollSummary(c: PoolClient, from: string, to: string) {
       if (dayPaid.has(k)) continue;
       dayPaid.add(k);
       if (!inPeriod || !p) continue;
-      const amt = override > 0 ? override : dayRates.get(baseRole(r.role_name).toLowerCase()) ?? 0;
+      const amt = override > 0 ? override : dayRates.get(roleKeyOf(r.role_name)) ?? 0;
       const hours = r2((+new Date(r.clock_out) - +new Date(r.clock_in)) / 3600000);
       if (!(amt > 0)) p.missingRate = true;
       p.days += 1;

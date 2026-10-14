@@ -2203,3 +2203,23 @@ test('crew pay: a personal hourly or day rate per crew member per event drives e
   const row = (await call(a, 'GET', '/api/events')).json.events.find((e: any) => e.id === ev);
   assert.deepEqual([row.slots, row.filled], [3, 2]);
 });
+
+test('pay: role names match loosely, and shifts are costed seat by seat even when the role has no rate', async () => {
+  const a = await register('rolekeys');
+  await call(a, 'POST', '/api/skills', { name: 'Fork Lift Op', payRate: 25 });
+  await call(a, 'POST', '/api/skills', { name: 'Loaders', payRate: 20 });
+  const c1 = await mkCrew(a, 'rkey1');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Expo', startDate: '2030-06-03', endDate: '2030-06-03' })).json.event.id;
+  const mk = async (roleName: string, headcount: number) => (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName, startsAt: '2030-06-03T14:00:00Z', endsAt: '2030-06-03T18:00:00Z', headcount })).json.shift.id;
+  const fork = await mk('Forklift Operator', 2);
+  const load = await mk('loader (Strike)', 1);
+  const rig = await mk('Rigger', 3); // no such role in the list
+  await call(a, 'POST', `/api/shifts/${rig}/assign`, { userId: c1.id, confirmed: true });
+  await call(a, 'PUT', `/api/events/${ev}/crew-rates/${c1.id}`, { payType: 'hourly', rate: 40 });
+  const d = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  const by = Object.fromEntries(d.shifts.map((s: any) => [s.id, s]));
+  assert.deepEqual([by[fork].hourly_rate, by[fork].estimated_cost, by[fork].unpriced_seats], [25, 200, 0]);
+  assert.deepEqual([by[load].hourly_rate, by[load].estimated_cost], [20, 80]);
+  // Rigger: no role rate; the one person with their own rate is still costed, the other two seats are flagged
+  assert.deepEqual([by[rig].hourly_rate, by[rig].estimated_cost, by[rig].unpriced_seats], [null, 160, 2]);
+});

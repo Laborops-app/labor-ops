@@ -1,14 +1,40 @@
 import type { PoolClient } from 'pg';
 
 /** Hourly rates from the Roles & pay rates list, keyed by lower-case role name. */
+/**
+ * How a role name is matched to the Roles & rates list, everywhere pay or billing is worked out.
+ * Ignores case, spacing and punctuation, a trailing "(Show)" style note, a plural "s", and treats "Op"/"Ops" as "Operator":
+ * "Forklift Operator", "Fork Lift Op" and "forklift-operator" are the same role.
+ */
+export function roleKeyOf(name: string): string {
+  let s = String(name ?? '').replace(/\s*\(.*\)\s*$/, '').trim().toLowerCase();
+  s = s.replace(/\b(op|ops|opr)\.?$/, 'operator').replace(/\btechs?\.?$/, 'technician');
+  s = s.replace(/[^a-z0-9]/g, '');
+  return s.length > 3 ? s.replace(/s$/, '') : s;
+}
+/** Builds a lookup keyed by roleKeyOf; when two roles match the same key, one with a value set wins. */
+export function byRoleKey<T>(rows: { name: string }[], val: (r: any) => T, isSet: (v: T) => boolean): Map<string, T> {
+  const m = new Map<string, T>();
+  for (const r of rows) {
+    const k = roleKeyOf(r.name);
+    const v = val(r);
+    if (!m.has(k) || (!isSet(m.get(k)!) && isSet(v))) m.set(k, v);
+  }
+  return m;
+}
+
 export async function loadRates(c: PoolClient): Promise<Map<string, number>> {
-  const { rows } = await c.query('SELECT lower(name) AS n, pay_rate FROM skills');
-  return new Map(rows.map((r: any) => [r.n as string, Number(r.pay_rate)]));
+  const { rows } = await c.query('SELECT name, pay_rate FROM skills');
+  return byRoleKey(rows, (r) => Number(r.pay_rate), (v) => v > 0);
+}
+export async function loadDayRates(c: PoolClient): Promise<Map<string, number>> {
+  const { rows } = await c.query('SELECT name, day_rate FROM skills');
+  return byRoleKey(rows, (r) => Number(r.day_rate), (v) => v > 0);
 }
 
 /** A shift's role may carry a suffix such as "Audio (Lead)"; the rate is looked up by the base name. A rate of 0 means "not set". */
 export function rateFor(rates: Map<string, number>, role: string): number | undefined {
-  const r = rates.get(role.replace(/\s*\(.*\)\s*$/, '').trim().toLowerCase());
+  const r = rates.get(roleKeyOf(role));
   return r && r > 0 ? r : undefined;
 }
 
@@ -121,12 +147,12 @@ export async function estimateShift(c: PoolClient, rules: Rules, rates: Map<stri
   // A rate set for this person on this event wins over the shift's rate and the role's rate.
   const sh = shiftId
     ? (await c.query(
-        `SELECT s.event_id, s.pay_type, s.pay_rate_override, e.ot_after, e.state, e.address, k.day_rate, cr.pay_type AS cr_type, cr.rate AS cr_rate
+        `SELECT s.event_id, s.pay_type, s.pay_rate_override, e.ot_after, e.state, e.address, cr.pay_type AS cr_type, cr.rate AS cr_rate
            FROM shifts s JOIN events e ON e.id = s.event_id
-           LEFT JOIN skills k ON lower(k.name) = lower(trim(regexp_replace($2, '\\s*\\(.*\\)\\s*$', ''))) AND k.tenant_id = s.tenant_id
-           LEFT JOIN event_crew_rates cr ON cr.event_id = s.event_id AND cr.user_id = $3::uuid
-          WHERE s.id = $1`, [shiftId, role, userId ?? null])).rows[0]
+           LEFT JOIN event_crew_rates cr ON cr.event_id = s.event_id AND cr.user_id = $2::uuid
+          WHERE s.id = $1`, [shiftId, userId ?? null])).rows[0]
     : null;
+  if (sh) sh.day_rate = (await loadDayRates(c)).get(roleKeyOf(role)) ?? 0;
   const personal = Number(sh?.cr_rate ?? 0) > 0;
   const payType: 'hourly' | 'day' = personal ? sh.cr_type : sh?.pay_type === 'day' ? 'day' : 'hourly';
   const override = personal ? Number(sh.cr_rate) : Number(sh?.pay_rate_override ?? 0);

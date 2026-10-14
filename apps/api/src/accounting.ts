@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
-import { loadRules, priceShift, eventState, loadStateOt, hoursBetween, type Rules } from './pay';
+import { loadRules, priceShift, eventState, loadStateOt, hoursBetween, type Rules, byRoleKey, roleKeyOf } from './pay';
 
 // ---------- settings (non-secret; QuickBooks keys are stored encrypted elsewhere) ----------
 export const PAYROLL_PROVIDERS = ['adp', 'gusto', 'quickbooks'] as const;
@@ -84,13 +84,14 @@ export async function eventBilling(c: PoolClient, eventId: string, source: BillS
   const st = await loadStateOt(c, eventState(ev, fallback), rules);
   const otOpts = { otAfter: ev.ot_after === null ? null : Number(ev.ot_after), otMult: st.otMult, dtAfter: st.dtAfter, dtMult: st.dtMult };
   const settings = await loadAcct(c);
-  const skills = new Map<string, any>((await c.query('SELECT lower(name) AS k, name, bill_rate, day_bill_rate, qbo_item_id FROM skills')).rows.map((r) => [r.k, r]));
+  // Roles are matched loosely (case, spacing, "Op"/"Operator", plural): see roleKeyOf.
+  const skills = byRoleKey<any>((await c.query('SELECT name, bill_rate, day_bill_rate, qbo_item_id FROM skills')).rows, (r) => r, (r) => Number(r.bill_rate) > 0 || Number(r.day_bill_rate) > 0);
   const warnings: string[] = [];
   const missingRate = new Set<string>();
   const acc = new Map<string, BillLine>();
   const add = (role: string, date: string, kind: BillKind, qty: number, unit: 'hour' | 'day', rate: number) => {
     if (qty <= 0) return;
-    const sk = skills.get(baseRole(role).toLowerCase());
+    const sk = skills.get(roleKeyOf(role));
     const key = `${baseRole(role)}|${date}|${kind}|${rate}`;
     const cur = acc.get(key);
     if (cur) {
@@ -102,7 +103,7 @@ export async function eventBilling(c: PoolClient, eventId: string, source: BillS
     acc.set(key, { role: baseRole(role), date, kind, qty: r2(qty), unit, rate, amount: r2(qty * rate), description: `${baseRole(role)} ${label} · ${fmtDay(date)} · ${ev.name}`, qboItemId: sk?.qbo_item_id ?? settings.qbo.defaultItemId ?? null });
   };
   const rates = (role: string) => {
-    const sk = skills.get(baseRole(role).toLowerCase());
+    const sk = skills.get(roleKeyOf(role));
     return { hourly: Number(sk?.bill_rate ?? 0), day: Number(sk?.day_bill_rate ?? 0) };
   };
 

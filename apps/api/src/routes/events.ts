@@ -267,18 +267,41 @@ export async function eventRoutes(app: FastifyInstance) {
       for (const s of shifts) {
         const pay = rates && rules ? await estimateShift(c, rules, rates, s.role_name, s.starts_at, s.ends_at, null, s.id) : null;
         const mine = assigns.filter((a) => a.shift_id === s.id);
-        let cost = pay?.estimate ? pay.estimate * s.headcount : null;
-        // People with their own rate replace one default-priced seat each.
+        // Priced seat by seat: people with their own rate at that rate, every other seat at the shift's / role's rate.
+        let cost = 0;
+        let priced = 0;
         if (pay && rates && rules) {
           for (const a of mine.filter((x) => x.status !== 'declined' && personal.has(x.user_id))) {
             const own = await estimateShift(c, rules, rates, s.role_name, s.starts_at, s.ends_at, a.user_id, s.id, { noPrior: true });
             a.pay_type = own.payType;
             a.rate = own.rate;
             a.estimated_pay = own.estimate;
-            if (cost !== null && own.estimate !== null) cost += own.estimate - (pay.estimate ?? 0);
+            if (own.estimate !== null && priced < s.headcount) {
+              cost += own.estimate;
+              priced++;
+            }
+          }
+          const rest = Math.max(0, s.headcount - priced);
+          if (pay.estimate !== null) {
+            cost += pay.estimate * rest;
+            priced += rest;
           }
         }
-        out.push({ ...s, ...(pay ? { hours: pay.hours, hourly_rate: pay.rate, pay_type: pay.payType, ot_hours: pay.otHours, dt_hours: pay.dtHours, role_rate: rateFor(rates!, s.role_name) ?? null, estimated_cost: cost !== null ? Math.round(cost * 100) / 100 : null } : {}), assignments: mine, crew_status: await evaluateShift(c, s.id) });
+        const unpriced = pay ? s.headcount - priced : 0;
+        out.push({
+          ...s,
+          ...(pay
+            ? {
+                hours: pay.hours, hourly_rate: pay.rate, pay_type: pay.payType, ot_hours: pay.otHours, dt_hours: pay.dtHours,
+                role_rate: rateFor(rates!, s.role_name) ?? null,
+                estimated_cost: priced > 0 ? Math.round(cost * 100) / 100 : null,
+                // Seats with no rate to price them (the role has no pay rate / day rate and no one there has their own).
+                unpriced_seats: unpriced,
+              }
+            : {}),
+          assignments: mine,
+          crew_status: await evaluateShift(c, s.id),
+        });
       }
       const phases = (await c.query('SELECT id, label, starts_on, ends_on FROM event_phases WHERE event_id = $1 ORDER BY starts_on, ends_on, created_at', [eventId])).rows;
       const rl = await loadRules(c);

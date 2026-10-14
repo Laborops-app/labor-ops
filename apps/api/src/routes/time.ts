@@ -1,4 +1,4 @@
-import { loadRates, rateFor, loadRules, estimateShift } from '../pay';
+import { loadRates, rateFor as roleRateFor, loadRules, estimateShift } from '../pay';
 import { respondToAssignment } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -284,10 +284,10 @@ export async function timeRoutes(app: FastifyInstance) {
     const isAdmin = req.user.role === 'admin';
     const rates = isAdmin
       ? new Map<string, number>(
-          (await withTenant(req.user.tid, (c) => c.query('SELECT lower(name) AS n, pay_rate FROM skills'))).rows.map((r: any) => [r.n as string, Number(r.pay_rate)]),
+          await withTenant(req.user.tid, (c) => loadRates(c)),
         )
       : new Map<string, number>();
-    const roleRate = (role: string) => rates.get(role.replace(/\s*\(.*\)\s*$/, '').trim().toLowerCase());
+    const roleRate = (role: string) => roleRateFor(rates, role);
     // A rate set on the shift itself wins over the role's rate.
     // A person's hourly rate for this event wins, then the shift's rate, then the role's. (Day rates are paid per day, so no hourly figure.)
     const rateFor = (r: { role_name: string; shift_rate?: string | null; crew_rate?: string | null; crew_pay_type?: string | null }) =>

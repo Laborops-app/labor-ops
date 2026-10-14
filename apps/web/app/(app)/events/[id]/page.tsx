@@ -33,6 +33,7 @@ type Shift = {
   role_rate?: number | null;
   pay_rate_override?: string | null;
   estimated_cost?: number | null;
+  unpriced_seats?: number;
   pay_type?: 'hourly' | 'day';
   ot_hours?: number;
   dt_hours?: number;
@@ -319,12 +320,19 @@ function Body({ me }: { me: Me }) {
                       <>
                         {' · '}
                         {money(s.hourly_rate)}{s.pay_type === 'day' ? ' day rate' : '/hr'}
-                        {s.estimated_cost != null && ` · est. cost ${money(s.estimated_cost)} for ${s.headcount}`}
-                        {!!s.ot_hours && ` · ${s.ot_hours} h overtime`}
-                        {!!s.dt_hours && ` · ${s.dt_hours} h double time`}
                       </>
                     )}
+                    {s.estimated_cost != null && ` · est. cost ${money(s.estimated_cost)} for ${s.headcount - (s.unpriced_seats ?? 0)}${s.unpriced_seats ? ` of ${s.headcount}` : ''}`}
+                    {s.hourly_rate != null && !!s.ot_hours && ` · ${s.ot_hours} h overtime`}
+                    {s.hourly_rate != null && !!s.dt_hours && ` · ${s.dt_hours} h double time`}
                   </div>
+                  {s.role_rate !== undefined && s.hourly_rate == null && (
+                    <div className="small" style={{ marginTop: '.3rem', color: 'var(--staff-warn)' }}>
+                      No {s.pay_type === 'day' ? 'day rate' : 'pay rate'} set for {s.role_name}
+                      {s.unpriced_seats ? `, so ${s.unpriced_seats} seat${s.unpriced_seats === 1 ? ' is' : 's are'} not in the cost` : ''}.{' '}
+                      <Link href="/skills">Set it in Roles &amp; rates</Link> or change this shift&apos;s pay rate.
+                    </div>
+                  )}
                   {s.role_rate !== undefined && (
                     <div className="small" style={{ marginTop: '.3rem' }}>
                       {payEdit?.id === s.id ? (
