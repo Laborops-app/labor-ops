@@ -1221,7 +1221,7 @@ test('labor rules: rest and daily limits block (admin can override), weekly over
   assert.equal(ok.status, 201, ok.text);
   assert.ok(ok.json.warnings.length >= 1, 'weekly overtime warning');
   assert.match(ok.json.warnings[0], /overtime/);
-  assert.equal((await call(a, 'POST', `/api/shifts/${s3}/assign`, { userId: c1.id })).status, 201);
+  { const r3 = await call(a, 'POST', `/api/shifts/${s3}/assign`, { userId: c1.id }); assert.equal(r3.status, 201, r3.text); }
 
   // a 13 h day breaks the daily maximum
   const long = await mk(200, 213);
@@ -2222,4 +2222,59 @@ test('pay: role names match loosely, and shifts are costed seat by seat even whe
   assert.deepEqual([by[load].hourly_rate, by[load].estimated_cost], [20, 80]);
   // Rigger: no role rate; the one person with their own rate is still costed, the other two seats are flagged
   assert.deepEqual([by[rig].hourly_rate, by[rig].estimated_cost, by[rig].unpriced_seats], [null, 160, 2]);
+});
+
+test('delete: people delete their own notifications, and a conversation from their own list only', async () => {
+  const a = await register('deleting');
+  const tid = await tenantOf(a);
+  const c1 = await mkCrew(a, 'del1');
+  // notifications: one, read ones, all; never someone else's
+  await withTenant(tid, (c) => c.query("INSERT INTO notifications (tenant_id, user_id, category, title, body) VALUES ($1,$2,'account','One',''),($1,$2,'account','Two',''),($1,$2,'account','Three',''),($1,$3,'account','Theirs','')", [tid, c1.id, a.id]));
+  let mine = (await call(c1.session, 'GET', '/api/notifications')).json.items;
+  assert.equal(mine.length, 3);
+  const theirs = (await call(a, 'GET', '/api/notifications')).json.items.find((n: any) => n.title === 'Theirs');
+  assert.equal((await call(c1.session, 'DELETE', `/api/notifications/${theirs.id}`)).status, 404);
+  assert.equal((await call(c1.session, 'DELETE', `/api/notifications/${mine[0].id}`)).status, 200);
+  await call(c1.session, 'POST', '/api/notifications/read', { ids: [mine[1].id] });
+  assert.equal((await call(c1.session, 'POST', '/api/notifications/delete', { scope: 'read' })).json.deleted, 1);
+  assert.equal((await call(c1.session, 'GET', '/api/notifications')).json.items.length, 1);
+  assert.equal((await call(c1.session, 'POST', '/api/notifications/delete', {})).status, 400);
+  assert.equal((await call(c1.session, 'POST', '/api/notifications/delete', { scope: 'all' })).json.deleted, 1);
+  assert.equal((await call(a, 'GET', '/api/notifications')).json.items.some((n: any) => n.title === 'Theirs'), true);
+
+  // conversation: deleted for the crew member only, back when someone writes again, without the old history
+  const dm = (await call(a, 'POST', '/api/chat/dm', { userId: c1.id })).json.id;
+  // Chat sends are rate limited per address; use our own so the rate-limit test cannot interfere.
+  const say = (body: string) => app.inject({ method: 'POST', url: `/api/chat/channels/${dm}/messages`, payload: { body }, headers: { cookie: a.cookie }, remoteAddress: '10.20.30.40' });
+  const sent = await say('Old news');
+  assert.equal(sent.statusCode, 200, sent.body);
+  assert.equal((await call(c1.session, 'GET', '/api/chat/channels')).json.channels.length, 1);
+  assert.equal((await call(c1.session, 'DELETE', `/api/chat/channels/${dm}`)).status, 200);
+  assert.equal((await call(c1.session, 'GET', '/api/chat/channels')).json.channels.length, 0);
+  assert.equal((await call(a, 'GET', `/api/chat/channels/${dm}/messages`)).json.messages.length, 1);
+  assert.equal((await say('New shift tomorrow')).statusCode, 200);
+  const back = (await call(c1.session, 'GET', '/api/chat/channels')).json.channels;
+  assert.equal(back.length, 1);
+  assert.equal(back[0].last_body, 'New shift tomorrow');
+  const msgs = (await call(c1.session, 'GET', `/api/chat/channels/${dm}/messages`)).json.messages;
+  assert.deepEqual(msgs.map((m: any) => m.body), ['New shift tomorrow']);
+});
+
+test('labor rules: the daily maximum counts the company-time-zone day, not a shifted window', async () => {
+  const a = await register('dailywin');
+  const c1 = await mkCrew(a, 'dw1');
+  await call(a, 'PUT', '/api/labor-rules', { ...(await call(a, 'GET', '/api/labor-rules')).json, maxDailyHours: 12, minRestHours: 0 });
+  const ev = await mkEvent(a);
+  const mk = async (s: string, e: string) => (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Tech', startsAt: s, endsAt: e, headcount: 1 })).json.shift.id as string;
+  // Denver (UTC-6 in June): Sunday 4pm-10pm, Monday 2am-6am, then Monday 10pm-Tuesday 2am. Monday holds 4 h + 2 h, far under 12.
+  const s1 = await mk('2030-06-02T22:00:00Z', '2030-06-03T04:00:00Z');
+  const s2 = await mk('2030-06-03T08:00:00Z', '2030-06-03T12:00:00Z');
+  const s3 = await mk('2030-06-04T04:00:00Z', '2030-06-04T08:00:00Z');
+  for (const s of [s1, s2, s3]) {
+    const r = await call(a, 'POST', `/api/shifts/${s}/assign`, { userId: c1.id });
+    assert.equal(r.status, 201, r.text);
+  }
+  // a real 13 h Monday is still blocked
+  const s4 = await mk('2030-06-10T14:00:00Z', '2030-06-11T03:00:00Z');
+  assert.equal((await call(a, 'POST', `/api/shifts/${s4}/assign`, { userId: c1.id })).status, 409);
 });

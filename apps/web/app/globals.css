@@ -927,3 +927,12 @@ td .btn, .row .btn.small { white-space: nowrap; }
 .mini-bar.staff-good i { background: var(--staff-good); }
 .mini-bar.staff-warn i { background: var(--staff-warn-dot); }
 .mini-bar.staff-bad i { background: var(--staff-bad); }
+
+/* notification delete */
+.bell-acts { display: flex; gap: 2px; flex-wrap: wrap; justify-content: flex-end; }
+.bell-row { position: relative; }
+.bell-row .bell-item { padding-right: 40px; }
+.bell-del { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border-radius: 50%; border: 0; background: transparent; color: var(--muted); display: grid; place-items: center; cursor: pointer; opacity: 0; }
+.bell-row:hover .bell-del, .bell-del:focus-visible { opacity: 1; }
+.bell-del:hover { background: var(--bad-bg); color: var(--bad); }
+@media (hover: none) { .bell-del { opacity: 0.8; } }

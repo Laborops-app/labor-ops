@@ -216,11 +216,13 @@ export async function checkRules(c: PoolClient, rules: Rules, userId: string, sh
   }
   if (rules.maxDaily > 0) {
     const d = (await c.query(
-      `WITH d AS (SELECT (($3::timestamptz AT TIME ZONE $4)::date) AS day)
-       SELECT COALESCE(SUM(EXTRACT(epoch FROM (LEAST(s.ends_at, (d.day + 1) AT TIME ZONE $4) - GREATEST(s.starts_at, d.day AT TIME ZONE $4))) ) / 3600, 0) AS h
+      // The company-time-zone day the shift starts on, as real instants. (A bare date AT TIME ZONE would convert the wrong way.)
+      `WITH d AS (SELECT (($3::timestamptz AT TIME ZONE $4)::date)::timestamp AT TIME ZONE $4 AS ds,
+                         ((($3::timestamptz AT TIME ZONE $4)::date) + 1)::timestamp AT TIME ZONE $4 AS de)
+       SELECT COALESCE(SUM(EXTRACT(epoch FROM (LEAST(s.ends_at, d.de) - GREATEST(s.starts_at, d.ds)))) / 3600, 0) AS h
          FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id, d
         WHERE a.user_id = $1 AND a.status <> 'declined' AND s.id <> $2
-          AND s.starts_at < (d.day + 1) AT TIME ZONE $4 AND s.ends_at > d.day AT TIME ZONE $4`,
+          AND s.starts_at < d.de AND s.ends_at > d.ds`,
       [userId, shiftId, startsAt, rules.tz],
     )).rows[0];
     const total = Number(d.h) + hoursBetween(startsAt, endsAt);

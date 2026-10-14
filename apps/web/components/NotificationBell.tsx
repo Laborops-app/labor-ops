@@ -59,6 +59,16 @@ export default function NotificationBell() {
     await api('/api/notifications/read', { body: {} }).catch(() => undefined);
     load();
   };
+  const remove = async (n: Item) => {
+    setItems((x) => (x ?? []).filter((y) => y.id !== n.id));
+    if (!n.read_at) setUnread((u) => Math.max(0, u - 1));
+    await api(`/api/notifications/${n.id}`, { method: 'DELETE' }).catch(() => load());
+  };
+  const clear = async (scope: 'read' | 'all') => {
+    if (scope === 'all' && !confirm('Delete all your notifications?')) return;
+    await api('/api/notifications/delete', { body: { scope } }).catch(() => undefined);
+    load();
+  };
   const go = async (n: Item) => {
     if (!n.read_at) await api('/api/notifications/read', { body: { ids: [n.id] } }).catch(() => undefined);
     setOpen(false);
@@ -79,11 +89,23 @@ export default function NotificationBell() {
         <div className="bell-panel" role="dialog" aria-label="Notifications">
           <div className="bell-head">
             <strong>Notifications</strong>
-            {unread > 0 && (
-              <button className="btn ghost small" onClick={markAll}>
-                Mark all read
-              </button>
-            )}
+            <span className="bell-acts">
+              {unread > 0 && (
+                <button className="btn ghost small" onClick={markAll}>
+                  Mark all read
+                </button>
+              )}
+              {!!items?.some((n) => n.read_at) && (
+                <button className="btn ghost small" onClick={() => clear('read')} title="Delete the notifications you have already read">
+                  Clear read
+                </button>
+              )}
+              {!!items?.length && (
+                <button className="btn ghost small danger" onClick={() => clear('all')}>
+                  Clear all
+                </button>
+              )}
+            </span>
           </div>
           <div className="bell-list">
             {!items ? (
@@ -92,11 +114,16 @@ export default function NotificationBell() {
               <div className="muted small bell-empty">Nothing yet. Shift updates and approvals will show up here.</div>
             ) : (
               items.map((n) => (
-                <button key={n.id} className={`bell-item ${n.read_at ? '' : 'unread'}`} onClick={() => go(n)}>
-                  <span className="bell-title">{n.title}</span>
-                  <span className="bell-body">{n.body.split('\n').filter(Boolean).slice(0, 2).join(' · ')}</span>
-                  <span className="bell-time">{ago(n.created_at)}</span>
-                </button>
+                <div key={n.id} className="bell-row">
+                  <button className={`bell-item ${n.read_at ? '' : 'unread'}`} onClick={() => go(n)}>
+                    <span className="bell-title">{n.title}</span>
+                    <span className="bell-body">{n.body.split('\n').filter(Boolean).slice(0, 2).join(' · ')}</span>
+                    <span className="bell-time">{ago(n.created_at)}</span>
+                  </button>
+                  <button className="bell-del" onClick={() => remove(n)} aria-label={`Delete notification: ${n.title}`} title="Delete">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                  </button>
+                </div>
               ))
             )}
           </div>

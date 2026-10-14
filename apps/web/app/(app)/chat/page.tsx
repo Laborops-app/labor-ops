@@ -286,6 +286,22 @@ function Thread({ me, id, onBack, onChanged }: { me: Me; id: string; onBack: () 
                 Members
               </button>
             )}
+            <button
+              className="btn ghost small danger"
+              title="Delete this conversation from your list"
+              onClick={async () => {
+                if (!confirm('Delete this conversation? Its messages are removed from your view only; the others still have them. It comes back if someone writes again.')) return;
+                try {
+                  await api(`/api/chat/channels/${id}`, { method: 'DELETE' });
+                  onChanged();
+                  onBack();
+                } catch (e) {
+                  setErr((e as Error).message);
+                }
+              }}
+            >
+              Delete
+            </button>
           </>
         )}
       </header>

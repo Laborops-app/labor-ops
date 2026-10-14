@@ -38,11 +38,11 @@ export async function syncEventChannel(c: PoolClient, tenantId: string, eventId:
 async function myChannel(c: PoolClient, channelId: string, userId: string) {
   return (
     await c.query(
-      `SELECT ch.id, ch.kind, ch.name, ch.event_id, ch.created_by, m.muted FROM chat_channels ch
+      `SELECT ch.id, ch.kind, ch.name, ch.event_id, ch.created_by, m.muted, m.cleared_seq::float AS cleared_seq FROM chat_channels ch
          JOIN chat_members m ON m.channel_id = ch.id AND m.user_id = $2 WHERE ch.id = $1`,
       [channelId, userId],
     )
-  ).rows[0] as { id: string; kind: string; name: string | null; event_id: string | null; created_by: string | null; muted: boolean } | undefined;
+  ).rows[0] as { id: string; kind: string; name: string | null; event_id: string | null; created_by: string | null; muted: boolean; cleared_seq: number } | undefined;
 }
 
 /** Post a message into the direct conversation between two people (creating it if needed), without a bell notification. */
@@ -74,10 +74,12 @@ export async function chatRoutes(app: FastifyInstance) {
                   lm.body AS last_body, lm.user_name AS last_user, lm.created_at AS last_at
              FROM chat_channels ch
              JOIN chat_members m ON m.channel_id = ch.id AND m.user_id = $1
+                  -- a conversation I deleted stays out of my list until someone writes again
+                  AND (m.cleared_seq = 0 OR EXISTS (SELECT 1 FROM chat_messages z WHERE z.channel_id = ch.id AND z.seq > m.cleared_seq AND z.deleted_at IS NULL))
              LEFT JOIN LATERAL (SELECT u.name, u.role FROM chat_members cm JOIN users u ON u.id = cm.user_id
                                  WHERE cm.channel_id = ch.id AND cm.user_id <> $1 AND ch.kind = 'dm' LIMIT 1) o ON true
              LEFT JOIN LATERAL (SELECT x.body, u.name AS user_name, x.created_at FROM chat_messages x LEFT JOIN users u ON u.id = x.user_id
-                                 WHERE x.channel_id = ch.id AND x.deleted_at IS NULL ORDER BY x.seq DESC LIMIT 1) lm ON true
+                                 WHERE x.channel_id = ch.id AND x.deleted_at IS NULL AND x.seq > m.cleared_seq ORDER BY x.seq DESC LIMIT 1) lm ON true
             ORDER BY ch.last_message_at DESC`,
           [req.user.sub],
         )
@@ -215,15 +217,16 @@ export async function chatRoutes(app: FastifyInstance) {
     const { id } = z.object({ id: uuid }).parse(req.params);
     const q = z.object({ before: z.coerce.number().int().optional(), after: z.coerce.number().int().optional(), limit: z.coerce.number().int().min(1).max(100).default(50) }).parse(req.query);
     const out = await withTenant(req.user.tid, async (c) => {
-      if (!(await myChannel(c, id, req.user.sub))) return null;
+      const mine = await myChannel(c, id, req.user.sub);
+      if (!mine) return null;
       const rows = (
         await c.query(
           `SELECT x.id, x.seq::int AS seq, x.user_id, u.name AS user_name, u.role AS user_role, x.created_at, x.deleted_at IS NOT NULL AS deleted,
                   CASE WHEN x.deleted_at IS NULL THEN x.body ELSE '' END AS body
              FROM chat_messages x LEFT JOIN users u ON u.id = x.user_id
-            WHERE x.channel_id = $1 AND ($2::bigint IS NULL OR x.seq < $2) AND ($3::bigint IS NULL OR x.seq > $3)
+            WHERE x.channel_id = $1 AND ($2::bigint IS NULL OR x.seq < $2) AND ($3::bigint IS NULL OR x.seq > $3) AND x.seq > $5
             ORDER BY x.seq ${q.after != null ? 'ASC' : 'DESC'} LIMIT $4`,
-          [id, q.before ?? null, q.after ?? null, q.limit],
+          [id, q.before ?? null, q.after ?? null, q.limit, mine.cleared_seq],
         )
       ).rows;
       if (q.after == null) rows.reverse();
@@ -273,6 +276,23 @@ export async function chatRoutes(app: FastifyInstance) {
         [id, req.user.sub],
       );
       await c.query("UPDATE notifications SET read_at = now() WHERE user_id = $1 AND category = 'chat' AND link = $2 AND read_at IS NULL", [req.user.sub, chatLink(id)]);
+      return true;
+    });
+    return ok ? { ok: true } : reply.code(404).send({ error: 'Conversation not found' });
+  });
+
+  // Delete a conversation for me only: hides its history and takes it off my list until someone writes again.
+  app.delete('/api/chat/channels/:id', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const ok = await withTenant(req.user.tid, async (c) => {
+      if (!(await myChannel(c, id, req.user.sub))) return false;
+      await c.query(
+        `UPDATE chat_members SET cleared_seq = COALESCE((SELECT max(seq) FROM chat_messages WHERE channel_id = $1), 0),
+                last_read_seq = COALESCE((SELECT max(seq) FROM chat_messages WHERE channel_id = $1), 0)
+          WHERE channel_id = $1 AND user_id = $2`,
+        [id, req.user.sub],
+      );
+      await c.query("DELETE FROM notifications WHERE user_id = $1 AND category = 'chat' AND link = $2", [req.user.sub, chatLink(id)]);
       return true;
     });
     return ok ? { ok: true } : reply.code(404).send({ error: 'Conversation not found' });

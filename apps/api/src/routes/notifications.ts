@@ -41,6 +41,29 @@ export async function notificationRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  // Delete one notification from my inbox.
+  app.delete('/api/notifications/:id', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const n = await withTenant(req.user.tid, async (c) => (await c.query('DELETE FROM notifications WHERE id = $1 AND user_id = $2', [id, req.user.sub])).rowCount);
+    return n ? { ok: true } : reply.code(404).send({ error: 'Notification not found' });
+  });
+  // Clear several: picked ones, everything already read, or everything.
+  app.post('/api/notifications/delete', { preHandler: authenticate }, async (req, reply) => {
+    const b = z.object({ ids: z.array(uuid).max(200).optional(), scope: z.enum(['read', 'all']).optional() }).parse(req.body ?? {});
+    if (!b.ids?.length && !b.scope) return reply.code(400).send({ error: 'Say which notifications to delete' });
+    const n = await withTenant(req.user.tid, async (c) =>
+      (
+        await c.query(
+          `DELETE FROM notifications WHERE user_id = $1
+             AND ($2::uuid[] IS NULL OR id = ANY($2::uuid[]))
+             AND ($3::text IS NULL OR $3 = 'all' OR read_at IS NOT NULL)`,
+          [req.user.sub, b.ids?.length ? b.ids : null, b.scope ?? null],
+        )
+      ).rowCount,
+    );
+    return { deleted: n };
+  });
+
   // ---------- my notification settings ----------
   const prefs = (c: import('pg').PoolClient, id: string) =>
     c.query('SELECT phone, notify_email AS email, notify_sms AS sms, sms_consent_at FROM users WHERE id = $1', [id]).then((r) => r.rows[0]);
