@@ -136,6 +136,29 @@ const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; icon: 
     ),
   },
   {
+    href: '/accounting',
+    label: 'Accounting',
+    roles: ['admin'],
+    icon: icon(
+      <>
+        <rect x="4" y="3" width="16" height="18" rx="2" />
+        <path d="M8 7h8M8 11h2M14 11h2M8 15h2M14 15h2" />
+      </>,
+    ),
+  },
+  {
+    href: '/payroll',
+    label: 'Payroll',
+    roles: ['admin'],
+    icon: icon(
+      <>
+        <rect x="3" y="6" width="18" height="12" rx="2" />
+        <circle cx="12" cy="12" r="2.5" />
+        <path d="M6 9v.01M18 15v.01" />
+      </>,
+    ),
+  },
+  {
     href: '/rules',
     label: 'Labor rules',
     roles: ['admin'],

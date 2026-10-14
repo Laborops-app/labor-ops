@@ -8,6 +8,7 @@ import { Banner, Empty, Pill } from '@/components/ui';
 import { roleKey } from '@/components/Stars';
 import FillFromGroup from '@/components/FillFromGroup';
 import CrewPick, { PickOption } from '@/components/CrewPick';
+import InvoicePanel from '@/components/InvoicePanel';
 import CopyEvent from '@/components/CopyEvent';
 import { api, ApiError, Me, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
 import { EventDetails, Phases, Clocking, RentmanCard, EventFull, Phase, RmView } from '@/components/EventInfo';
@@ -114,7 +115,7 @@ function Body({ me }: { me: Me }) {
   const [tplId, setTplId] = useState('');
   const [tplPhase, setTplPhase] = useState('');
   // Event settings panel: clock-in, overtime and shift templates live here to keep the page short.
-  const [settings, setSettings] = useState<null | 'clock' | 'ot' | 'tpl' | 'rentman'>(null);
+  const [settings, setSettings] = useState<null | 'clock' | 'ot' | 'tpl' | 'rentman' | 'invoice'>(null);
   // Rentman lives in the same side panel, opened from its own button next to Event settings.
   const [rm, setRm] = useState<RmView | null>(null);
   useEffect(() => {
@@ -542,6 +543,11 @@ function Body({ me }: { me: Me }) {
             Rentman{rm.linked && rm.project ? ` · ${rm.project.number ? `#${rm.project.number}` : rm.project.name}` : ''}
           </button>
         )}
+        {(me.role === 'admin' || me.canAdjustRates) && (
+          <button className="btn small" onClick={() => setSettings('invoice')} aria-haspopup="dialog">
+            Invoice
+          </button>
+        )}
         <button
           className="btn small"
           onClick={() =>
@@ -719,13 +725,14 @@ function Body({ me }: { me: Me }) {
 
       {settings && typeof document !== 'undefined' && createPortal(
         <div className="drawer-backdrop" onMouseDown={() => setSettings(null)}>
-          <aside className={settings === 'rentman' ? 'drawer wide' : 'drawer'} role="dialog" aria-modal="true" aria-label={settings === 'rentman' ? 'Rentman' : 'Event settings'} onMouseDown={(e) => e.stopPropagation()}>
+          <aside className={settings === 'rentman' || settings === 'invoice' ? 'drawer wide' : 'drawer'} role="dialog" aria-modal="true" aria-label={settings === 'rentman' ? 'Rentman' : settings === 'invoice' ? 'Invoice' : 'Event settings'} onMouseDown={(e) => e.stopPropagation()}>
             <div className="row space">
-              <h2 style={{ margin: 0 }}>{settings === 'rentman' ? 'Rentman' : 'Event settings'}</h2>
+              <h2 style={{ margin: 0 }}>{settings === 'rentman' ? 'Rentman' : settings === 'invoice' ? `Invoice · ${ev.name}` : 'Event settings'}</h2>
               <button className="btn ghost small" aria-label="Close" onClick={() => setSettings(null)}>✕</button>
             </div>
             {settings === 'rentman' && <div style={{ marginTop: 12 }}><RentmanCard eventId={id} isAdmin={me.role === 'admin'} onError={setError} onView={setRm} /></div>}
-            {settings !== 'rentman' && <div className="phase-tabs" role="tablist" aria-label="Settings section" style={{ margin: '12px 0' }}>
+            {settings === 'invoice' && <InvoicePanel eventId={id} isAdmin={me.role === 'admin'} />}
+            {settings !== 'rentman' && settings !== 'invoice' && <div className="phase-tabs" role="tablist" aria-label="Settings section" style={{ margin: '12px 0' }}>
               {([['clock', 'Clock-in'], ['ot', 'Overtime'], ['tpl', 'Shift templates']] as const).map(([k, label]) => (
                 <button key={k} type="button" role="tab" aria-selected={settings === k} className={settings === k ? 'tab on' : 'tab'} onClick={() => setSettings(k)}>
                   {label}

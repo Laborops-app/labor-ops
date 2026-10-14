@@ -4,16 +4,16 @@ import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, Me } from '@/lib/api';
 
-type Skill = { id: string; name: string; payRate: number; dayRate?: number; billRate?: number; active: boolean; groupId: string | null };
+type Skill = { id: string; name: string; payRate: number; dayRate?: number; billRate?: number; dayBillRate?: number; active: boolean; groupId: string | null };
 type Group = { id: string; name: string };
-type Edit = { name: string; payRate: string; dayRate: string; billRate: string };
+type Edit = { name: string; payRate: string; dayRate: string; billRate: string; dayBillRate: string };
 
 const money = (n: number) => n.toLocaleString([], { style: 'currency', currency: 'USD' });
 
 /** A coordinator who may adjust rates sees both rates for every role and can change only those. */
 function RatesOnly() {
   const [list, setList] = useState<Skill[] | null>(null);
-  const [ed, setEd] = useState<Record<string, { pay: string; day: string; bill: string }>>({});
+  const [ed, setEd] = useState<Record<string, { pay: string; day: string; bill: string; dbill: string }>>({});
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
   const load = () => api<{ skills: Skill[] }>('/api/skills').then((r) => setList(r.skills.filter((s) => s.active))).catch((e) => setError(e.message));
@@ -23,7 +23,7 @@ function RatesOnly() {
     if (!e) return;
     setError('');
     try {
-      await api(`/api/skills/${s.id}`, { method: 'PATCH', body: { payRate: Math.round(Number(e.pay) * 100) / 100, dayRate: Math.round(Number(e.day) * 100) / 100, billRate: Math.round(Number(e.bill) * 100) / 100 } });
+      await api(`/api/skills/${s.id}`, { method: 'PATCH', body: { payRate: Math.round(Number(e.pay) * 100) / 100, dayRate: Math.round(Number(e.day) * 100) / 100, dayBillRate: Math.round(Number(e.dbill) * 100) / 100, billRate: Math.round(Number(e.bill) * 100) / 100 } });
       setNote(`Saved rates for ${s.name}.`);
       setEd(({ [s.id]: _, ...rest }) => rest);
       load();
@@ -38,7 +38,7 @@ function RatesOnly() {
       {!list ? <div className="muted">Loading…</div> : (
         <div className="card" style={{ overflowX: 'auto' }}>
           <table className="table">
-            <thead><tr><th>Role</th><th>Pay rate /hr</th><th>Day rate</th><th>Bill rate /hr</th><th>Margin</th><th></th></tr></thead>
+            <thead><tr><th>Role</th><th>Pay rate /hr</th><th>Day rate</th><th>Bill rate /hr</th><th>Day bill rate</th><th>Margin</th><th></th></tr></thead>
             <tbody>
               {list.map((s) => {
                 const e = ed[s.id];
@@ -47,9 +47,10 @@ function RatesOnly() {
                 return (
                   <tr key={s.id}>
                     <td>{s.name}</td>
-                    <td><input type="number" min={0} step="0.01" value={e?.pay ?? s.payRate.toFixed(2)} onChange={(ev) => setEd({ ...ed, [s.id]: { pay: ev.target.value, day: e?.day ?? String(s.dayRate ?? 0), bill: e?.bill ?? String(s.billRate ?? 0) } })} aria-label={`Pay rate for ${s.name}`} style={{ width: '7rem' }} /></td>
-                    <td><input type="number" min={0} step="0.01" value={e?.day ?? (s.dayRate ?? 0).toFixed(2)} onChange={(ev) => setEd({ ...ed, [s.id]: { pay: e?.pay ?? String(s.payRate), day: ev.target.value, bill: e?.bill ?? String(s.billRate ?? 0) } })} aria-label={`Day rate for ${s.name}`} style={{ width: '7rem' }} /></td>
-                    <td><input type="number" min={0} step="0.01" value={e?.bill ?? (s.billRate ?? 0).toFixed(2)} onChange={(ev) => setEd({ ...ed, [s.id]: { pay: e?.pay ?? String(s.payRate), day: e?.day ?? String(s.dayRate ?? 0), bill: ev.target.value } })} aria-label={`Bill rate for ${s.name}`} style={{ width: '7rem' }} /></td>
+                    <td><input type="number" min={0} step="0.01" value={e?.pay ?? s.payRate.toFixed(2)} onChange={(ev) => setEd({ ...ed, [s.id]: { pay: ev.target.value, day: e?.day ?? String(s.dayRate ?? 0), bill: e?.bill ?? String(s.billRate ?? 0), dbill: e?.dbill ?? String(s.dayBillRate ?? 0) } })} aria-label={`Pay rate for ${s.name}`} style={{ width: '7rem' }} /></td>
+                    <td><input type="number" min={0} step="0.01" value={e?.day ?? (s.dayRate ?? 0).toFixed(2)} onChange={(ev) => setEd({ ...ed, [s.id]: { pay: e?.pay ?? String(s.payRate), day: ev.target.value, bill: e?.bill ?? String(s.billRate ?? 0), dbill: e?.dbill ?? String(s.dayBillRate ?? 0) } })} aria-label={`Day rate for ${s.name}`} style={{ width: '7rem' }} /></td>
+                    <td><input type="number" min={0} step="0.01" value={e?.bill ?? (s.billRate ?? 0).toFixed(2)} onChange={(ev) => setEd({ ...ed, [s.id]: { pay: e?.pay ?? String(s.payRate), day: e?.day ?? String(s.dayRate ?? 0), bill: ev.target.value, dbill: e?.dbill ?? String(s.dayBillRate ?? 0) } })} aria-label={`Bill rate for ${s.name}`} style={{ width: '7rem' }} /></td>
+                    <td><input type="number" min={0} step="0.01" value={e?.dbill ?? (s.dayBillRate ?? 0).toFixed(2)} onChange={(ev) => setEd({ ...ed, [s.id]: { pay: e?.pay ?? String(s.payRate), day: e?.day ?? String(s.dayRate ?? 0), bill: e?.bill ?? String(s.billRate ?? 0), dbill: ev.target.value } })} aria-label={`Day bill rate for ${s.name}`} style={{ width: '7rem' }} /></td>
                     <td className="small">{bill > 0 ? `${Math.round(((bill - pay) / bill) * 100)}%` : '—'}</td>
                     <td>{e && <button className="btn small primary" onClick={() => save(s)}>Save</button>}</td>
                   </tr>
@@ -67,7 +68,7 @@ function Body() {
   const [list, setList] = useState<Skill[] | null>(null);
   const [edits, setEdits] = useState<Record<string, Edit>>({});
   const [groups, setGroups] = useState<Group[]>([]);
-  const [f, setF] = useState({ name: '', payRate: '', dayRate: '', billRate: '', groupId: '' });
+  const [f, setF] = useState({ name: '', payRate: '', dayRate: '', billRate: '', dayBillRate: '', groupId: '' });
   const [newGroup, setNewGroup] = useState('');
   const [renaming, setRenaming] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
@@ -108,16 +109,16 @@ function Body() {
     e.preventDefault();
     const n = rateNum(f.payRate || '0');
     if (!Number.isFinite(n) || n < 0) return setError('Enter a pay rate of 0 or more.');
-    if (await act('add', `Added ${f.name}.`, () => api('/api/skills', { body: { name: f.name, payRate: n, dayRate: rateNum(f.dayRate || '0') || 0, billRate: rateNum(f.billRate || '0') || 0, groupId: f.groupId || null } }))) setF({ name: '', payRate: '', dayRate: '', billRate: '', groupId: f.groupId });
+    if (await act('add', `Added ${f.name}.`, () => api('/api/skills', { body: { name: f.name, payRate: n, dayRate: rateNum(f.dayRate || '0') || 0, billRate: rateNum(f.billRate || '0') || 0, dayBillRate: rateNum(f.dayBillRate || '0') || 0, groupId: f.groupId || null } }))) setF({ name: '', payRate: '', dayRate: '', billRate: '', dayBillRate: '', groupId: f.groupId });
   };
   const save = (s: Skill) => {
     const e = edits[s.id];
     if (!e) return;
     const n = rateNum(e.payRate);
     if (!Number.isFinite(n) || n < 0) return setError('Enter a pay rate of 0 or more.');
-    act(s.id, `Saved ${e.name}.`, () => api(`/api/skills/${s.id}`, { method: 'PATCH', body: { name: e.name, payRate: n, dayRate: rateNum(e.dayRate) || 0, billRate: rateNum(e.billRate) || 0 } }));
+    act(s.id, `Saved ${e.name}.`, () => api(`/api/skills/${s.id}`, { method: 'PATCH', body: { name: e.name, payRate: n, dayRate: rateNum(e.dayRate) || 0, billRate: rateNum(e.billRate) || 0, dayBillRate: rateNum(e.dayBillRate) || 0 } }));
   };
-  const set = (s: Skill, patch: Partial<Edit>) => setEdits({ ...edits, [s.id]: { name: edits[s.id]?.name ?? s.name, payRate: edits[s.id]?.payRate ?? String(s.payRate), dayRate: edits[s.id]?.dayRate ?? String(s.dayRate ?? 0), billRate: edits[s.id]?.billRate ?? String(s.billRate ?? 0), ...patch } });
+  const set = (s: Skill, patch: Partial<Edit>) => setEdits({ ...edits, [s.id]: { name: edits[s.id]?.name ?? s.name, payRate: edits[s.id]?.payRate ?? String(s.payRate), dayRate: edits[s.id]?.dayRate ?? String(s.dayRate ?? 0), billRate: edits[s.id]?.billRate ?? String(s.billRate ?? 0), dayBillRate: edits[s.id]?.dayBillRate ?? String(s.dayBillRate ?? 0), ...patch } });
 
   const addGroup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -227,6 +228,10 @@ function Body() {
             Hourly billing rate (USD, for quotes)
             <input type="number" min={0} max={10000} step="0.01" inputMode="decimal" value={f.billRate} onChange={(e) => setF({ ...f, billRate: e.target.value })} placeholder="45.00" />
           </label>
+          <label>
+            Day billing rate (USD, flat per day)
+            <input type="number" min={0} max={10000} step="0.01" inputMode="decimal" value={f.dayBillRate} onChange={(e) => setF({ ...f, dayBillRate: e.target.value })} placeholder="450.00" />
+          </label>
           <div className="form-actions">
             <button className="btn primary" disabled={busy === 'add'}>
               Add
@@ -258,6 +263,7 @@ function Body() {
                   <th>Pay rate</th>
                   <th>Day rate</th>
                   <th>Bill rate</th>
+                  <th>Day bill rate</th>
                   <th>Status</th>
                   <th></th>
                 </tr>
@@ -322,6 +328,13 @@ function Body() {
                           <span aria-hidden="true">$</span>
                           <input type="number" min={0} max={10000} step="0.01" inputMode="decimal" value={e?.billRate ?? (s.billRate ?? 0).toFixed(2)} onChange={(ev) => set(s, { billRate: ev.target.value })} aria-label={`Billing rate for ${s.name}`} />
                           <span className="muted small">/hr</span>
+                        </span>
+                      </td>
+                      <td>
+                        <span className="money-input">
+                          <span aria-hidden="true">$</span>
+                          <input type="number" min={0} max={10000} step="0.01" inputMode="decimal" value={e?.dayBillRate ?? (s.dayBillRate ?? 0).toFixed(2)} onChange={(ev) => set(s, { dayBillRate: ev.target.value })} aria-label={`Day billing rate for ${s.name}`} />
+                          <span className="muted small">/day</span>
                         </span>
                       </td>
                       <td>{s.active ? <span className="chip open">Active</span> : <span className="chip">Hidden</span>}</td>

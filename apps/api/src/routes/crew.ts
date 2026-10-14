@@ -34,7 +34,7 @@ export async function crewRoutes(app: FastifyInstance) {
     return withTenant(req.user.tid, async (c) => ({
       crew: (
         await c.query(
-          `SELECT ${COLS},
+          `SELECT ${COLS},${req.user.role === 'admin' ? ' payroll_ids,' : ''}
              COALESCE((SELECT json_agg(json_build_object('id', k.id, 'name', k.name, 'expires_on', k.expires_on::text, 'verified', k.verified, 'has_file', EXISTS (SELECT 1 FROM cert_files f WHERE f.cert_id = k.id)) ORDER BY k.name)
                        FROM user_certs k WHERE k.user_id = users.id), '[]'::json) AS certs,
              EXISTS (SELECT 1 FROM availability a WHERE a.user_id = users.id) AS has_availability,

@@ -18,13 +18,13 @@ export async function skillRoutes(app: FastifyInstance) {
       const seePay = await canAdjustRates(c, req.user);
       const rows = (
         await c.query(
-          `SELECT s.id, s.name, s.pay_rate, s.day_rate, s.bill_rate, s.active, s.group_id FROM skills s ${isAdmin ? '' : 'WHERE s.active'} ORDER BY lower(s.name)`,
+          `SELECT s.id, s.name, s.pay_rate, s.day_rate, s.bill_rate, s.day_bill_rate, s.active, s.group_id FROM skills s ${isAdmin ? '' : 'WHERE s.active'} ORDER BY lower(s.name)`,
         )
       ).rows;
       const groups = (await c.query('SELECT id, name FROM skill_groups ORDER BY sort, lower(name)')).rows;
       return {
         groups,
-        skills: rows.map((r) => ({ id: r.id, name: r.name, active: r.active, groupId: r.group_id, ...(seePay ? { payRate: Number(r.pay_rate), dayRate: Number(r.day_rate) } : {}), ...(req.user.role !== 'crew' ? { billRate: Number(r.bill_rate) } : {}) })),
+        skills: rows.map((r) => ({ id: r.id, name: r.name, active: r.active, groupId: r.group_id, ...(seePay ? { payRate: Number(r.pay_rate), dayRate: Number(r.day_rate) } : {}), ...(req.user.role !== 'crew' ? { billRate: Number(r.bill_rate), dayBillRate: Number(r.day_bill_rate) } : {}) })),
       };
     });
   });
@@ -90,19 +90,19 @@ export async function skillRoutes(app: FastifyInstance) {
   );
 
   app.post('/api/skills', { preHandler: admin }, async (req, reply) => {
-    const b = z.object({ name, payRate: rate.default(0), dayRate: rate.default(0), billRate: rate.default(0), groupId: z.string().uuid().nullable().optional() }).parse(req.body);
+    const b = z.object({ name, payRate: rate.default(0), dayRate: rate.default(0), billRate: rate.default(0), dayBillRate: rate.default(0), groupId: z.string().uuid().nullable().optional() }).parse(req.body);
     const row = await withTenant(req.user.tid, async (c) => {
-      const r = await c.query('INSERT INTO skills (tenant_id, name, pay_rate, bill_rate, group_id, day_rate) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, name, pay_rate, day_rate, bill_rate, active, group_id', [req.user.tid, b.name, b.payRate, b.billRate, b.groupId ?? null, b.dayRate]);
+      const r = await c.query('INSERT INTO skills (tenant_id, name, pay_rate, bill_rate, group_id, day_rate, day_bill_rate) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, name, pay_rate, day_rate, bill_rate, day_bill_rate, active, group_id', [req.user.tid, b.name, b.payRate, b.billRate, b.groupId ?? null, b.dayRate, b.dayBillRate]);
       await audit(c, req.user.tid, req.user.sub, 'skill.create', 'skill', r.rows[0].id, { name: b.name, payRate: b.payRate });
       return r.rows[0];
     });
-    return reply.code(201).send({ skill: { id: row.id, name: row.name, active: row.active, groupId: row.group_id, payRate: Number(row.pay_rate), dayRate: Number(row.day_rate), billRate: Number(row.bill_rate) } });
+    return reply.code(201).send({ skill: { id: row.id, name: row.name, active: row.active, groupId: row.group_id, payRate: Number(row.pay_rate), dayRate: Number(row.day_rate), billRate: Number(row.bill_rate), dayBillRate: Number(row.day_bill_rate) } });
   });
 
   // Admins edit everything; a coordinator who has been allowed to adjust rates may change only the two rates.
   app.patch('/api/skills/:id', { preHandler: guard('admin', 'manager') }, async (req, reply) => {
     const { id } = idParam.parse(req.params);
-    const b = z.object({ name: name.optional(), payRate: rate.optional(), dayRate: rate.optional(), billRate: rate.optional(), active: z.boolean().optional(), groupId: z.string().uuid().nullable().optional() }).parse(req.body);
+    const b = z.object({ name: name.optional(), payRate: rate.optional(), dayRate: rate.optional(), billRate: rate.optional(), dayBillRate: rate.optional(), active: z.boolean().optional(), groupId: z.string().uuid().nullable().optional() }).parse(req.body);
     const row = await withTenant(req.user.tid, async (c) => {
       if (req.user.role !== 'admin') {
         if (!(await canAdjustRates(c, req.user)) || b.name !== undefined || b.active !== undefined || b.groupId !== undefined) return 'forbidden' as const;
@@ -110,8 +110,8 @@ export async function skillRoutes(app: FastifyInstance) {
       const old = (await c.query('SELECT name FROM skills WHERE id = $1', [id])).rows[0];
       if (!old) return null;
       const r = await c.query(
-        'UPDATE skills SET name = COALESCE($2, name), pay_rate = COALESCE($3, pay_rate), active = COALESCE($4, active), group_id = CASE WHEN $5::boolean THEN $6::uuid ELSE group_id END, bill_rate = COALESCE($7, bill_rate), day_rate = COALESCE($8, day_rate) WHERE id = $1 RETURNING id, name, pay_rate, day_rate, bill_rate, active, group_id',
-        [id, b.name ?? null, b.payRate ?? null, b.active ?? null, b.groupId !== undefined, b.groupId ?? null, b.billRate ?? null, b.dayRate ?? null],
+        'UPDATE skills SET name = COALESCE($2, name), pay_rate = COALESCE($3, pay_rate), active = COALESCE($4, active), group_id = CASE WHEN $5::boolean THEN $6::uuid ELSE group_id END, bill_rate = COALESCE($7, bill_rate), day_rate = COALESCE($8, day_rate), day_bill_rate = COALESCE($9, day_bill_rate) WHERE id = $1 RETURNING id, name, pay_rate, day_rate, bill_rate, day_bill_rate, active, group_id',
+        [id, b.name ?? null, b.payRate ?? null, b.active ?? null, b.groupId !== undefined, b.groupId ?? null, b.billRate ?? null, b.dayRate ?? null, b.dayBillRate ?? null],
       );
       // A rename carries over to the people who have the skill.
       if (b.name && b.name !== old.name) await c.query('UPDATE users SET skills = array_replace(skills, $1, $2)', [old.name, b.name]);
@@ -120,7 +120,7 @@ export async function skillRoutes(app: FastifyInstance) {
     });
     if (row === 'forbidden') return reply.code(403).send({ error: 'You are not allowed to change rates. Ask an admin.' });
     if (!row) return reply.code(404).send({ error: 'Not found' });
-    return { skill: { id: row.id, name: row.name, active: row.active, groupId: row.group_id, payRate: Number(row.pay_rate), dayRate: Number(row.day_rate), billRate: Number(row.bill_rate) } };
+    return { skill: { id: row.id, name: row.name, active: row.active, groupId: row.group_id, payRate: Number(row.pay_rate), dayRate: Number(row.day_rate), billRate: Number(row.bill_rate), dayBillRate: Number(row.day_bill_rate) } };
   });
 
   app.delete('/api/skills/:id', { preHandler: admin }, async (req, reply) => {

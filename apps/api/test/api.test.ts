@@ -1345,6 +1345,178 @@ test('overtime: per-job threshold (8/10/15), state rates and double time, counte
   assert.equal((await call(a, 'GET', '/api/state-ot-rules')).json.states.find((x: any) => x.state === 'CA').custom, false);
 });
 
+test('accounting: event billing (time + schedule, per-job OT, day rates), QuickBooks invoice, Desktop IIF, payroll exports', async () => {
+  const a = await register('acct');
+  const tid = await tenantOf(a);
+  const c1 = await mkCrew(a, 'acct1');
+  const c2 = await mkCrew(a, 'acct2');
+  assert.equal((await call(a, 'POST', '/api/skills', { name: 'Audio', payRate: 30, dayRate: 300, billRate: 50, dayBillRate: 400 })).status, 201);
+  const cust = (await call(a, 'POST', '/api/customers', { name: 'Arena Co' })).json.customer.id;
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Big Show', customerId: cust, address: '1 Arena Way, Denver, CO 80202', startDate: '2030-03-05', endDate: '2030-03-06' })).json.event.id as string;
+  await call(a, 'PUT', `/api/events/${ev}/overtime`, { otAfter: 8 });
+  // 07:00-17:00 Denver (10 h) x 2 people, and a day-rate shift
+  const s1 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Audio', startsAt: '2030-03-05T14:00:00Z', endsAt: '2030-03-06T00:00:00Z', headcount: 2 })).json.shift.id;
+  const s2 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Audio (Lead)', startsAt: '2030-03-06T14:00:00Z', endsAt: '2030-03-06T22:00:00Z', headcount: 1, payType: 'day' })).json.shift.id;
+
+  const sch = (await call(a, 'GET', `/api/events/${ev}/billing?source=schedule`)).json;
+  const find = (b: any, kind: string) => b.lines.find((l: any) => l.kind === kind);
+  assert.equal(find(sch, 'regular').qty, 16);
+  assert.equal(find(sch, 'regular').amount, 800);
+  assert.equal(find(sch, 'overtime').qty, 4);
+  assert.equal(find(sch, 'overtime').rate, 75);
+  assert.equal(find(sch, 'day').amount, 400);
+  assert.equal(sch.total, 1500);
+  assert.ok(sch.customer && sch.customer.name === 'Arena Co');
+
+  // approved time: c1 works 6 h + 5 h on the same job day (3 h overtime), c2 works the day-rate shift; one entry not approved
+  const a1 = (await call(a, 'POST', `/api/shifts/${s1}/assign`, { userId: c1.id, confirmed: true })).json.assignment?.id;
+  await call(a, 'POST', `/api/shifts/${s1}/assign`, { userId: c2.id, confirmed: true });
+  await call(a, 'POST', `/api/shifts/${s2}/assign`, { userId: c2.id, confirmed: true, override: true });
+  await withTenant(tid, async (c) => {
+    const asg = async (shift: string, user: string) => (await c.query('SELECT id FROM shift_assignments WHERE shift_id = $1 AND user_id = $2', [shift, user])).rows[0].id;
+    const add = async (shift: string, user: string, i: string, o: string, status = 'approved') =>
+      c.query('INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in, clock_out, status) VALUES ($1,$2,$3,$4,$5,$6)', [tid, await asg(shift, user), user, i, o, status]);
+    await add(s1, c1.id, '2030-03-05T14:00:00Z', '2030-03-05T20:00:00Z');
+    await add(s1, c1.id, '2030-03-05T21:00:00Z', '2030-03-06T02:00:00Z');
+    await add(s2, c2.id, '2030-03-06T14:00:00Z', '2030-03-06T23:00:00Z');
+    await add(s1, c2.id, '2030-03-05T14:00:00Z', '2030-03-05T18:00:00Z', 'submitted');
+  });
+  void a1;
+  const tm = (await call(a, 'GET', `/api/events/${ev}/billing?source=time`)).json;
+  assert.equal(find(tm, 'regular').qty, 8);
+  assert.equal(find(tm, 'overtime').qty, 3);
+  assert.equal(find(tm, 'day').qty, 1);
+  assert.equal(tm.total, 8 * 50 + 3 * 75 + 400);
+  assert.ok(tm.warnings.some((w: string) => /not approved/.test(w)));
+  assert.equal(tm.quickbooks.connected, false);
+
+  // Desktop IIF
+  const iif = await call(a, 'GET', `/api/events/${ev}/billing/iif?source=time&docNumber=INV-7`);
+  assert.equal(iif.status, 200, iif.text);
+  const rows = iif.text.trim().split('\r\n').map((r: string) => r.split('\t'));
+  assert.equal(rows[0][0], '!TRNS');
+  assert.equal(rows[3][0], 'TRNS');
+  assert.equal(rows[3][4], 'Accounts Receivable');
+  assert.equal(rows[3][5], 'Arena Co');
+  assert.equal(rows[3][6], (8 * 50 + 3 * 75 + 400).toFixed(2));
+  assert.equal(rows[4][0], 'SPL');
+  assert.equal(rows[4][6], '-400.00');
+  assert.equal(rows[4][9], '-8');
+  assert.equal(rows[4][11], 'Audio');
+  assert.equal(rows[rows.length - 1][0], 'ENDTRNS');
+
+  // QuickBooks Online: settings, connect, invoice (Intuit mocked)
+  assert.equal((await call(c1.session, 'GET', '/api/accounting')).status, 403);
+  assert.equal((await call(a, 'POST', `/api/events/${ev}/billing/quickbooks`, { source: 'time' })).status, 400);
+  assert.equal((await call(a, 'PUT', '/api/accounting/quickbooks', { clientId: 'qb-client-id', clientSecret: 'qb-secret-123', environment: 'sandbox' })).status, 200);
+  const acct = (await call(a, 'GET', '/api/accounting')).json;
+  assert.equal(acct.quickbooks.clientSecretSet, true);
+  assert.equal(JSON.stringify(acct).includes('qb-secret-123'), false, 'secret never sent back');
+  const conn = new URL((await call(a, 'GET', '/api/quickbooks/connect')).json.url);
+  assert.equal(conn.origin + conn.pathname, 'https://appcenter.intuit.com/connect/oauth2');
+  assert.equal(conn.searchParams.get('scope'), 'com.intuit.quickbooks.accounting');
+  const state = conn.searchParams.get('state')!;
+  assert.equal((await call(a, 'GET', `/api/quickbooks/callback?code=abcdef&realmId=123145&state=bogusbogus.signature`)).res.headers.location, '/accounting?qbo=invalid');
+
+  const real = globalThis.fetch;
+  const seen: { url: string; init: any }[] = [];
+  globalThis.fetch = (async (u: any, init: any) => {
+    const url = String(u);
+    seen.push({ url, init });
+    const ok = (j: unknown) => new Response(JSON.stringify(j), { status: 200, headers: { 'content-type': 'application/json' } });
+    if (url.startsWith('https://oauth.platform.intuit.com/')) return ok({ access_token: 'acc-1', refresh_token: 'ref-1', expires_in: 3600, x_refresh_token_expires_in: 8640000 });
+    if (url.includes('/companyinfo/')) return ok({ CompanyInfo: { CompanyName: 'Sandbox Co' } });
+    if (url.includes('/query?')) {
+      const qy = decodeURIComponent(url.split('query=')[1]);
+      if (/from Customer/.test(qy)) return ok({ QueryResponse: {} });
+      if (/from Item/.test(qy)) return ok({ QueryResponse: { Item: [{ Id: '9', Name: 'Labor', Type: 'Service', Active: true }] } });
+      if (/from Account/.test(qy)) return ok({ QueryResponse: { Account: [{ Id: '79', Name: 'Services' }] } });
+      if (/from Employee/.test(qy)) return ok({ QueryResponse: { Employee: [{ Id: '55', DisplayName: 'Crew acct1', PrimaryEmailAddr: { Address: `acct1-${run}@test.example` } }] } });
+    }
+    if (url.includes('/customer?')) return ok({ Customer: { Id: '58' } });
+    if (url.includes('/invoice?')) return ok({ Invoice: { Id: '130', DocNumber: '1037', TotalAmt: 1025 } });
+    if (url.includes('/timeactivity?')) return ok({ TimeActivity: { Id: String(seen.length) } });
+    return new Response('{}', { status: 404 });
+  }) as typeof fetch;
+  try {
+    const cb = await call(a, 'GET', `/api/quickbooks/callback?code=auth-code-1&realmId=123145&state=${encodeURIComponent(state)}`);
+    assert.equal(cb.res.headers.location, '/accounting?qbo=connected');
+    const tok = seen.find((x) => x.url.startsWith('https://oauth.platform.intuit.com/'))!;
+    assert.equal(tok.init.headers.authorization, 'Basic ' + Buffer.from('qb-client-id:qb-secret-123').toString('base64'));
+    assert.match(tok.init.body, /grant_type=authorization_code/);
+    const st2 = (await call(a, 'GET', '/api/accounting')).json.quickbooks;
+    assert.equal(st2.connected, true);
+    assert.equal(st2.companyName, 'Sandbox Co');
+    const look = (await call(a, 'GET', '/api/quickbooks/lookups')).json;
+    assert.equal(look.items[0].name, 'Labor');
+
+    // an item must be chosen before invoicing
+    assert.match((await call(a, 'POST', `/api/events/${ev}/billing/quickbooks`, { source: 'time' })).json.error, /Choose a QuickBooks item/);
+    const s0 = (await call(a, 'GET', '/api/accounting')).json.settings;
+    assert.equal((await call(a, 'PUT', '/api/accounting/settings', { ...s0, qbo: { defaultItemId: '9' } })).status, 200);
+    const inv = await call(a, 'POST', `/api/events/${ev}/billing/quickbooks`, { source: 'time' });
+    assert.equal(inv.status, 201, inv.text);
+    assert.equal(inv.json.invoice.id, '130');
+    assert.match(inv.json.invoice.url, /^https:\/\/app\.sandbox\.qbo\.intuit\.com\/app\/invoice\?txnId=130$/);
+    const posted = JSON.parse(seen.find((x) => x.url.includes('/invoice?'))!.init.body);
+    assert.equal(posted.CustomerRef.value, '58');
+    assert.equal(posted.Line.length, 3);
+    assert.deepEqual(posted.Line[0].SalesItemLineDetail.ItemRef, { value: '9' });
+    assert.ok(seen.find((x) => x.url.includes('/invoice?'))!.url.startsWith('https://sandbox-quickbooks.api.intuit.com/v3/company/123145/invoice?minorversion='));
+    // customer is linked now, and a second invoice needs confirming
+    const again = await call(a, 'POST', `/api/events/${ev}/billing/quickbooks`, { source: 'time' });
+    assert.equal(again.status, 409);
+    assert.equal(again.json.reason, 'duplicate');
+    const hist = (await call(a, 'GET', `/api/events/${ev}/billing?source=time`)).json.invoices;
+    assert.equal(hist.length, 2); // the IIF download and the QuickBooks invoice
+    assert.ok(hist.some((h: any) => h.provider === 'qbo' && h.doc_number === '1037'));
+
+    // payroll: ADP on by default; Gusto and QuickBooks can be turned on
+    const pr = (await call(a, 'GET', '/api/payroll?from=2030-03-04&to=2030-03-10')).json;
+    assert.deepEqual(pr.payroll.enabled, ['adp']);
+    const p1 = pr.people.find((x: any) => x.name === 'Crew acct1');
+    assert.equal(p1.regular, 8);
+    assert.equal(p1.overtime, 3);
+    assert.equal(p1.gross, 8 * 30 + 3 * 45);
+    const p2 = pr.people.find((x: any) => x.name === 'Crew acct2');
+    assert.equal(p2.days, 1);
+    assert.equal(p2.dayPay, 300);
+    assert.ok(pr.warnings.some((w: string) => /not approved/.test(w)));
+    assert.deepEqual(pr.missingIds.adp.sort(), ['Crew acct1', 'Crew acct2']);
+    assert.equal((await call(a, 'PUT', `/api/crew/${c1.id}/payroll-ids`, { adp: '001234' })).status, 200);
+    assert.equal((await call(a, 'PUT', `/api/crew/${c1.id}/payroll-ids`, { adp: '=cmd' })).status, 400);
+    const s1set = (await call(a, 'GET', '/api/accounting')).json.settings;
+    await call(a, 'PUT', '/api/accounting/settings', { ...s1set, payroll: { ...s1set.payroll, adp: { ...s1set.payroll.adp, companyCode: 'XYZ' } } });
+    assert.equal((await call(a, 'GET', '/api/payroll/export?provider=gusto&from=2030-03-04&to=2030-03-10')).status, 400, 'Gusto is off');
+    const adp = await call(a, 'GET', '/api/payroll/export?provider=adp&from=2030-03-04&to=2030-03-10');
+    assert.equal(adp.status, 200);
+    const adpRows = adp.text.trim().split('\r\n');
+    assert.equal(adpRows[0], 'Co Code,Batch ID,File #,Reg Hours,O/T Hours,Hours 3 Code,Hours 3 Amount,Earnings 3 Code,Earnings 3 Amount');
+    assert.equal(adpRows[1], 'XYZ,LABOROPS,001234,8.00,3.00,,,,');
+    assert.equal(adpRows[2], 'XYZ,LABOROPS,,,,,,DAY,300.00');
+    const after = (await call(a, 'GET', '/api/payroll?from=2030-03-04&to=2030-03-10')).json;
+    assert.ok(after.warnings.some((w: string) => /already exported/.test(w)));
+    assert.equal(after.history[0].provider, 'adp');
+
+    // QuickBooks payroll: turn it on and send hours as time activities
+    const s2set = (await call(a, 'GET', '/api/accounting')).json.settings;
+    assert.equal((await call(a, 'PUT', '/api/accounting/settings', { ...s2set, payroll: { ...s2set.payroll, enabled: ['adp', 'gusto', 'quickbooks'] } })).status, 200);
+    const gusto = await call(a, 'GET', '/api/payroll/export?provider=gusto&from=2030-03-04&to=2030-03-10&mark=0');
+    assert.match(gusto.text.split('\r\n')[1], /^acct1,Crew,,acct1-.*@test\.example,8\.00,3\.00,,$/);
+    await withTenant(tid, (c) => c.query('UPDATE time_entries SET payroll_exported_at = NULL'));
+    const qp = await call(a, 'POST', '/api/payroll/quickbooks', { from: '2030-03-04', to: '2030-03-10' });
+    assert.equal(qp.status, 200, qp.text);
+    assert.equal(qp.json.activities, 2); // c1 matched by email; c2 has no QuickBooks employee
+    assert.deepEqual(qp.json.skipped, ['Crew acct2']);
+    const ta = JSON.parse(seen.filter((x) => x.url.includes('/timeactivity?'))[1].init.body);
+    assert.equal(ta.EmployeeRef.value, '55');
+    assert.equal(ta.Hours, 5);
+    assert.equal(ta.Minutes, 0);
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
 test('ratings: coordinators rate crew per position, crew cannot, base role name is used', async () => {
   const a = await register('rate');
   const c1 = await mkCrew(a, 'rt1');
