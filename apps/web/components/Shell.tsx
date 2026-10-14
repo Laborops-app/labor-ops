@@ -7,6 +7,7 @@ import { api, Me, Role, roleLabel } from '@/lib/api';
 import ThemeToggle from '@/components/ThemeToggle';
 import InstallApp, { InstallPopup } from '@/components/InstallApp';
 import NotificationBell from '@/components/NotificationBell';
+import Sidebar from '@/components/Sidebar';
 
 const icon = (d: React.ReactNode) => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -305,23 +306,7 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
 
   return (
     <div className="app">
-      <aside className="rail" aria-label="Main">
-        <Link href="/" className="logo" aria-label="LaborOps home">
-          <Image src="/brand/icon.png" alt="" width={38} height={38} priority />
-        </Link>
-        <nav>
-          {items.map((n) => (
-            <Link key={n.href} href={n.href} aria-label={n.label} className={path.startsWith(n.href) ? 'active' : ''} aria-current={path.startsWith(n.href) ? 'page' : undefined}>
-              {n.icon}
-              {n.href === '/chat' && chatUnread > 0 && <span className="nav-badge" aria-label={`${chatUnread} unread conversations`}>{chatUnread > 9 ? '9+' : chatUnread}</span>}
-              <span className="tip">{n.label}</span>
-            </Link>
-          ))}
-        </nav>
-        <div className="rail-foot">
-          <ThemeToggle />
-        </div>
-      </aside>
+      <Sidebar items={items} me={me} path={path} chatUnread={chatUnread} />
 
       <div className="main">
         <header className="topbar">
@@ -348,9 +333,7 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
               </span>
             </span>
           </Link>
-          <span className="mobile-only-toggle">
-            <ThemeToggle />
-          </span>
+          <ThemeToggle />
           <button className="btn ghost small" onClick={signOut}>
             Sign out
           </button>

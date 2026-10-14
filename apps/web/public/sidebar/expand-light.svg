@@ -1,0 +1,10 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+<foreignObject x="-180" y="-180" width="384" height="384"><div xmlns="http://www.w3.org/1999/xhtml" style="backdrop-filter:blur(90px);clip-path:url(#bgblur_0_0_95_clip_path);height:100%;width:100%"></div></foreignObject><g id="Arrow" data-figma-bg-blur-radius="180">
+<rect width="24" height="24" rx="12" fill="#FFEDE0" fill-opacity="0.56"/>
+<rect x="0.25" y="0.25" width="23.5" height="23.5" rx="11.75" stroke="#F5EFEB" stroke-opacity="0.32" style="mix-blend-mode:luminosity" stroke-width="0.5"/>
+<path id="arrow" opacity="0.8" fill-rule="evenodd" clip-rule="evenodd" d="M11.9991 13.9476L16.5347 9.44978C16.8709 9.11688 17.413 9.11688 17.7491 9.44978C17.9097 9.60841 18 9.82478 18 10.0504C18 10.2761 17.9097 10.4925 17.7491 10.6511L12.6072 15.7496C12.2714 16.0835 11.7286 16.0835 11.3928 15.7496L6.25089 10.6513C6.09032 10.4925 6 10.2761 6 10.0504C6 9.82478 6.09032 9.60841 6.25089 9.44957C6.58707 9.11688 7.1292 9.11688 7.46527 9.45L11.9991 13.9476Z" fill="#242220" fill-opacity="0.48"/>
+</g>
+<defs>
+<clipPath id="bgblur_0_0_95_clip_path" transform="translate(180 180)"><rect width="24" height="24" rx="12"/>
+</clipPath></defs>
+</svg>
