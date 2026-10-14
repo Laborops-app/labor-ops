@@ -1,166 +1,199 @@
 'use client';
+import './schedule.css';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Shell from '@/components/Shell';
-import { Banner } from '@/components/ui';
-import { api, fmtTime } from '@/lib/api';
-
-type S = { id: string; role_name: string; starts_at: string; ends_at: string; headcount: number; event_id: string; event_name: string; venue: string | null; filled: number };
-type Group = { event_id: string; name: string; venue: string | null; start: string; end: string; filled: number; total: number; shifts: number };
-
-const key = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-const addDays = (d: Date, n: number) => {
-  const x = new Date(d);
-  x.setDate(x.getDate() + n);
-  return x;
-};
-const weekStart = (d: Date) => {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
-  return x;
-};
-
-const Chevron = ({ dir }: { dir: 'l' | 'r' }) => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d={dir === 'l' ? 'm15 18-6-6 6-6' : 'm9 18 6-6-6-6'} />
-  </svg>
-);
+import Ic from '@/components/schedule/Ic';
+import ShiftView from '@/components/schedule/ShiftView';
+import StaffView from '@/components/schedule/StaffView';
+import MonthView from '@/components/schedule/MonthView';
+import FilterPanel from '@/components/schedule/FilterPanel';
+import { api } from '@/lib/api';
+import { CalResp, Filters, NO_FILTERS, STATUS_LABEL, HOUR_PX, addDays, applyFilters, filtersActive, isoWeek, weekStart } from '@/lib/schedule';
 
 function Body() {
-  const [view, setView] = useState<'month' | 'week'>('month');
+  const [mode, setMode] = useState<'shift' | 'staff'>('shift');
+  const [range, setRange] = useState<'week' | 'month'>('week');
   const [anchor, setAnchor] = useState(() => new Date());
-  const [shifts, setShifts] = useState<S[]>([]);
+  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const [panel, setPanel] = useState(false);
+  const [data, setData] = useState<CalResp>({ shifts: [], time_off: [], can_see_pay: false });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [now, setNow] = useState(() => new Date());
+  const scroller = useRef<HTMLDivElement>(null);
 
-  const { start, days, title } = useMemo(() => {
-    if (view === 'week') {
-      const s = weekStart(anchor);
-      const e = addDays(s, 6);
-      const t =
-        s.getMonth() === e.getMonth()
-          ? `${s.toLocaleDateString([], { month: 'long' })} ${s.getDate()} – ${e.getDate()}, ${e.getFullYear()}`
-          : `${s.toLocaleDateString([], { month: 'short', day: 'numeric' })} – ${e.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}`;
-      return { start: s, days: 7, title: t };
-    }
+  useEffect(() => {
+    setPanel(window.matchMedia('(min-width: 900px)').matches);
+    const t = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  const { start, count } = useMemo(() => {
+    if (range === 'week') return { start: weekStart(anchor), count: 7 };
     const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
     const last = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0);
     const s = weekStart(first);
-    const n = Math.ceil((((last.getTime() - s.getTime()) / 86400000) + 1) / 7) * 7;
-    return { start: s, days: n, title: anchor.toLocaleDateString([], { month: 'long', year: 'numeric' }) };
-  }, [view, anchor]);
+    return { start: s, count: Math.ceil((Math.round((+last - +s) / 86400000) + 1) / 7) * 7 };
+  }, [range, anchor]);
+  const days = useMemo(() => Array.from({ length: Math.min(count, 7) }, (_, i) => addDays(start, i)), [start, count]);
 
   useEffect(() => {
     let live = true;
     setLoading(true);
-    const from = new Date(start);
-    const to = addDays(start, days);
-    api<{ shifts: S[] }>(`/api/calendar?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`)
-      .then((r) => live && (setShifts(r.shifts), setError('')))
+    api<CalResp>(`/api/calendar?from=${encodeURIComponent(start.toISOString())}&to=${encodeURIComponent(addDays(start, count).toISOString())}`)
+      .then((r) => live && (setData(r), setError('')))
       .catch((e) => live && setError(e.message))
       .finally(() => live && setLoading(false));
     return () => {
       live = false;
     };
-  }, [start, days]);
+  }, [start, count]);
 
-  const byDay = useMemo(() => {
-    const m = new Map<string, Map<string, Group>>();
-    for (const s of shifts) {
-      const k = key(new Date(s.starts_at));
-      const day = m.get(k) ?? new Map<string, Group>();
-      const g = day.get(s.event_id) ?? { event_id: s.event_id, name: s.event_name, venue: s.venue, start: s.starts_at, end: s.ends_at, filled: 0, total: 0, shifts: 0 };
-      if (s.starts_at < g.start) g.start = s.starts_at;
-      if (s.ends_at > g.end) g.end = s.ends_at;
-      g.filled += Math.min(s.filled, s.headcount);
-      g.total += s.headcount;
-      g.shifts += 1;
-      day.set(s.event_id, g);
-      m.set(k, day);
-    }
-    return m;
-  }, [shifts]);
+  // Open the time grid around the working day (or the current hour) instead of midnight.
+  useEffect(() => {
+    if (range === 'week' && mode === 'shift' && scroller.current) scroller.current.scrollTop = Math.max(0, (new Date().getHours() - 1) * HOUR_PX);
+  }, [range, mode, start]);
 
-  const todayKey = key(new Date());
+  const shifts = useMemo(() => applyFilters(data.shifts, filters), [data.shifts, filters]);
+  const teams = useMemo(() => [...new Set([...data.shifts.map((s) => s.role_name), ...filters.teams])].sort(), [data.shifts, filters.teams]);
+  const events = useMemo(() => [...new Map(data.shifts.map((s) => [s.event_id, s.event_name])).entries()].map(([id, name]) => ({ id, name })), [data.shifts]);
+
   const step = (dir: number) => {
     const a = new Date(anchor);
-    if (view === 'week') a.setDate(a.getDate() + 7 * dir);
+    if (range === 'week') a.setDate(a.getDate() + 7 * dir);
     else a.setMonth(a.getMonth() + dir, 1);
     setAnchor(a);
   };
-  const cells = Array.from({ length: days }, (_, i) => addDays(start, i));
+  const isCurrent = range === 'week' ? +weekStart(new Date()) === +start : anchor.getMonth() === new Date().getMonth() && anchor.getFullYear() === new Date().getFullYear();
+  const label =
+    range === 'week'
+      ? isCurrent
+        ? 'Current Week'
+        : `Week ${isoWeek(start)}`
+      : anchor.toLocaleDateString([], { month: 'long', year: 'numeric' });
+  const jump = (v: string) => (v === 'now' ? setAnchor(new Date()) : step(v === 'prev' ? -1 : 1));
+  const closePanel = () => setPanel(false);
 
   return (
-    <>
-      <div className="cal-bar">
-        <h1>{title}</h1>
-        <div className="seg" role="tablist" aria-label="View">
-          <button role="tab" aria-selected={view === 'week'} className={view === 'week' ? 'active' : ''} onClick={() => setView('week')}>
-            7-Day
-          </button>
-          <button role="tab" aria-selected={view === 'month'} className={view === 'month' ? 'active' : ''} onClick={() => setView('month')}>
-            Monthly
-          </button>
-        </div>
-        <div className="seg">
-          <button onClick={() => step(-1)} aria-label="Previous">
-            <Chevron dir="l" />
-          </button>
-          <button onClick={() => setAnchor(new Date())}>Go to Today</button>
-          <button onClick={() => step(1)} aria-label="Next">
-            <Chevron dir="r" />
-          </button>
-        </div>
-        <span className="legend">
-          <i className="d good" /> Full <i className="d warn" /> Partly staffed <i className="d bad" /> Unstaffed
-        </span>
-      </div>
-      {error && <Banner onClose={() => setError('')}>{error}</Banner>}
-      <div className="cal-head" aria-hidden="true">
-        {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => (
-          <span key={d}>{d}</span>
-        ))}
-      </div>
-      <div className={`cal-grid ${view} ${loading ? 'loading' : ''}`}>
-        {cells.map((d) => {
-          const k = key(d);
-          const groups = [...(byDay.get(k)?.values() ?? [])];
-          const total = groups.reduce((n, g) => n + g.total, 0);
-          const filled = groups.reduce((n, g) => n + g.filled, 0);
-          const out = view === 'month' && d.getMonth() !== anchor.getMonth();
-          return (
-            <div key={k} className={`cal-cell ${k === todayKey ? 'today' : ''} ${out ? 'out' : ''} ${groups.length === 0 ? 'no-ev' : ''}`}>
-              <div className="cal-cell-h">
-                <b>
-                  {d.toLocaleDateString([], { weekday: 'short' }).toUpperCase()} {d.toLocaleDateString([], { month: 'short' })} {String(d.getDate()).padStart(2, '0')}
-                </b>
-                <small>
-                  {groups.length} event{groups.length === 1 ? '' : 's'} | {filled}/{total} filled
-                </small>
+    <div className="sx">
+      <div className="sx-card">
+        {panel && (
+          <>
+            <div className="sx-backdrop" onClick={closePanel} />
+            <FilterPanel
+              filters={filters}
+              teams={teams}
+              events={events}
+              selected={anchor}
+              now={now}
+              onApply={(f) => {
+                setFilters(f);
+                if (window.matchMedia('(max-width: 899px)').matches) closePanel();
+              }}
+              onPick={(d) => setAnchor(d)}
+              onClose={closePanel}
+            />
+          </>
+        )}
+        <div className="sx-main">
+          <div className="sx-toolbar">
+            <div className="sx-ctas">
+              <div className="sx-seg" role="tablist" aria-label="Layout">
+                <button role="tab" aria-selected={mode === 'shift'} disabled={range === 'month'} onClick={() => setMode('shift')}>
+                  <Ic n="shift-view" /> Shift view
+                </button>
+                <button role="tab" aria-selected={mode === 'staff'} disabled={range === 'month'} onClick={() => setMode('staff')}>
+                  <Ic n="staff-view" /> Staff view
+                </button>
               </div>
-              {groups.map((g) => {
-                const tone = g.filled >= g.total ? 'good' : g.filled === 0 ? 'bad' : 'warn';
-                return (
-                  <Link key={g.event_id} href={`/events/${g.event_id}`} className={`ev-card ${tone}`}>
-                    <b>{g.name}</b>
-                    <span>
-                      {fmtTime(g.start)} – {fmtTime(g.end)}
-                    </span>
-                    {g.venue && <span className="v">{g.venue}</span>}
-                    <span className="dots" aria-label={`${g.filled} of ${g.total} filled`}>
-                      {Array.from({ length: Math.min(g.total, 16) }, (_, i) => (
-                        <i key={i} className={i < g.filled ? 'on' : ''} />
-                      ))}
-                    </span>
-                  </Link>
-                );
-              })}
+              <div className={`sx-pill ${filters.status !== 'all' ? 'on' : ''}`}>
+                <span>Status</span>
+                <b>{STATUS_LABEL[filters.status]}</b>
+                <Ic n="caret-down-sm" />
+                <select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value as Filters['status'] })} aria-label="Filter by status">
+                  {(Object.keys(STATUS_LABEL) as Filters['status'][]).map((k) => (
+                    <option key={k} value={k}>
+                      {STATUS_LABEL[k]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button className={`sx-pill ${filters.teams.length ? 'on' : ''}`} onClick={() => setPanel(true)} aria-label="Filter by team">
+                <span>Team</span>
+                <b>{filters.teams.length ? `${filters.teams.length} selected` : 'All'}</b>
+                <Ic n="caret-down-sm" />
+              </button>
+              <button className="sx-link" onClick={() => setPanel((p) => !p)}>
+                + Advanced filter
+                {filtersActive(filters) && ' •'}
+              </button>
             </div>
-          );
-        })}
+            <div className="sx-ctas">
+              <div className="sx-seg" role="tablist" aria-label="Range">
+                <button role="tab" aria-selected={range === 'week'} onClick={() => setRange('week')}>
+                  Week
+                </button>
+                <button role="tab" aria-selected={range === 'month'} onClick={() => setRange('month')}>
+                  Month
+                </button>
+              </div>
+              <div className="sx-nav">
+                <button className="sx-btn sq" onClick={() => step(-1)} aria-label="Previous">
+                  <Ic n="caret-down-sm" className="flip" />
+                </button>
+                <span className="sx-btn" style={{ position: 'relative' }}>
+                  {label}
+                  <Ic n="caret-down-sm" />
+                  <select className="sx-over" value="" onChange={(e) => jump(e.target.value)} aria-label="Jump to period">
+                    <option value="" disabled>
+                      {label}
+                    </option>
+                    <option value="prev">Previous {range}</option>
+                    <option value="now">Current {range}</option>
+                    <option value="next">Next {range}</option>
+                  </select>
+                </span>
+                <button className="sx-btn sq" onClick={() => step(1)} aria-label="Next">
+                  <Ic n="caret-down-sm" className="flip-r" />
+                </button>
+              </div>
+            </div>
+          </div>
+          {error && (
+            <div className="sx-error banner error" role="alert">
+              {error}
+            </div>
+          )}
+          <div className="sx-scroll" ref={scroller} style={{ opacity: loading ? 0.6 : 1 }}>
+            {range === 'month' ? (
+              <MonthView
+                start={start}
+                count={count}
+                month={anchor.getMonth()}
+                shifts={shifts}
+                now={now}
+                onOpenDay={(d) => {
+                  setAnchor(d);
+                  setRange('week');
+                }}
+              />
+            ) : (
+              <div className={`sx-inner ${mode === 'staff' ? 'staff' : ''}`}>
+                {mode === 'shift' ? (
+                  <ShiftView days={days} shifts={shifts} seePay={data.can_see_pay} now={now} />
+                ) : (
+                  <StaffView days={days} shifts={shifts} timeOff={data.time_off} seePay={data.can_see_pay} now={now} teamFilter={filters.teams} />
+                )}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
-    </>
+      <Link href="/events" className="sx-fab" aria-label="New event">
+        <Ic n="plus" />
+      </Link>
+    </div>
   );
 }
 

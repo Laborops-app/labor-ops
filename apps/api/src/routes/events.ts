@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg';
 import { notify, describeShift } from '../notify';
 import { syncEventChannel, sendDirectMessage } from './chat';
-import { loadRates, loadRules, estimateShift, checkRules, rateFor, eventState, loadStateOt, US_STATES } from '../pay';
+import { loadRates, loadRules, estimateShift, priceShift, checkRules, rateFor, eventState, loadStateOt, US_STATES } from '../pay';
 import { canAdjustRates } from '../rates';
 import { respondLinks } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
@@ -138,18 +138,43 @@ export async function eventRoutes(app: FastifyInstance) {
     if (!q.success) return reply.code(400).send({ error: 'from and to are required (ISO date-times)' });
     const { from, to } = q.data;
     if (new Date(to).getTime() - new Date(from).getTime() > 62 * 86400000) return reply.code(400).send({ error: 'Range too large' });
-    const rows = await withTenant(req.user.tid, async (c) =>
-      (
+    const out = await withTenant(req.user.tid, async (c) => {
+      const rows = (
         await c.query(
           `SELECT s.id, s.role_name, s.starts_at, s.ends_at, s.headcount, e.id AS event_id, e.name AS event_name, e.venue,
-              (SELECT count(*)::int FROM shift_assignments a WHERE a.shift_id = s.id AND a.status <> 'declined') AS filled
+              (SELECT count(*)::int FROM shift_assignments a WHERE a.shift_id = s.id AND a.status <> 'declined') AS filled,
+              (SELECT count(*)::int FROM shift_assignments a WHERE a.shift_id = s.id AND a.status = 'accepted') AS confirmed,
+              COALESCE((SELECT json_agg(json_build_object('user_id', u.id, 'name', u.name, 'status', a.status) ORDER BY a.created_at)
+                 FROM shift_assignments a JOIN users u ON u.id = a.user_id
+                 WHERE a.shift_id = s.id AND a.status <> 'declined'), '[]'::json) AS assignees
            FROM shifts s JOIN events e ON e.id = s.event_id
            WHERE s.starts_at >= $1 AND s.starts_at < $2 ORDER BY s.starts_at, e.name`,
           [from, to],
         )
-      ).rows,
-    );
-    return { shifts: rows };
+      ).rows;
+      // Approved time off overlapping the range, shown as "Approved leave" in the staff view.
+      const timeOff = (
+        await c.query(
+          `SELECT t.user_id, u.name, t.starts_on, t.ends_on, t.note
+           FROM time_off t JOIN users u ON u.id = t.user_id
+           WHERE t.ends_on >= $1::timestamptz::date AND t.starts_on <= $2::timestamptz::date ORDER BY t.starts_on`,
+          [from, to],
+        )
+      ).rows;
+      // Pay is shown to admins and to coordinators allowed to adjust rates; other coordinators get no cost figures.
+      const seePay = await canAdjustRates(c, req.user);
+      if (seePay) {
+        const rates = await loadRates(c);
+        const rules = await loadRules(c);
+        for (const s of rows) {
+          const p = priceShift(rules, rateFor(rates, s.role_name), s.starts_at, s.ends_at);
+          s.hours = p.hours;
+          s.unit_cost = p.estimate != null ? Math.round(p.estimate * 100) / 100 : null;
+        }
+      }
+      return { shifts: rows, time_off: timeOff, can_see_pay: seePay };
+    });
+    return out;
   });
 
   app.post('/api/events', { preHandler: mgr }, async (req, reply) => {
