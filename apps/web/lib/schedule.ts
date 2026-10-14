@@ -22,18 +22,13 @@ export type S = {
 };
 export type Leave = { user_id: string; name: string; starts_on: string; ends_on: string; note: string | null };
 /** A dated stretch of an event (load in, show days, load out ...). Dates are YYYY-MM-DD, inclusive. */
-export type Phase = { id: string; event_id: string; event_name: string; label: string; starts_on: string; ends_on: string };
+export type Phase = { id: string; event_id: string; event_name: string; label: string; starts_on: string; ends_on: string; slots?: number; filled?: number };
+/** Staffing colour: green when every seat has someone, yellow when some do, red when none do, grey when there are no shifts. */
+export type Staff = 'good' | 'warn' | 'bad' | 'none';
+export const staffTone = (filled: number, slots: number): Staff => (slots <= 0 ? 'none' : filled >= slots ? 'good' : filled > 0 ? 'warn' : 'bad');
+export const STAFF_LABEL: Record<Staff, string> = { good: 'Fully staffed', warn: 'Partly staffed', bad: 'No crew yet', none: 'No shifts' };
 export type CalResp = { shifts: S[]; phases?: Phase[]; time_off: Leave[]; can_see_pay: boolean };
 
-/** Colour family for a phase, from its name. */
-export type PhaseTone = 'in' | 'show' | 'out' | 'other';
-export function phaseTone(label: string | null | undefined): PhaseTone {
-  const l = (label ?? '').toLowerCase();
-  if (/load.?out|strike|tear.?down|teardown|de-?rig|wrap|out$/.test(l)) return 'out';
-  if (/load.?in|set.?up|setup|install|build|rig|prep|in$/.test(l)) return 'in';
-  if (/show|event|game|perform|concert|day|live|rehears/.test(l)) return 'show';
-  return 'other';
-}
 /** "Load In · U of U Game Day" */
 export const phaseTitle = (phase: string | null | undefined, event: string) => (phase ? `${phase} · ${event}` : event);
 

@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { useMemo } from 'react';
 import Ic from './Ic';
 import PhaseRow from './PhaseRow';
-import { Group, Phase, phaseTone, HOUR_PX, fmtH, fmtMoney, groupByEventDay, hhmm, initials, isoWeek, key, lanes, minutesOfDay, S, segments } from '@/lib/schedule';
+import { Group, Phase, HOUR_PX, fmtH, fmtMoney, groupByEventDay, hhmm, initials, isoWeek, key, lanes, minutesOfDay, S, segments } from '@/lib/schedule';
 
 const fmtMin = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 
@@ -16,7 +16,7 @@ function Card({ g, seePay, style }: { g: Group; seePay: boolean; style: React.CS
   return (
     <Link href={`/events/${g.event_id}`} className={`sx-sg ${tone} ${size}`} style={{ ...style, height: Math.max(h - 2, 36) }} title={`${g.phase ? g.phase + ' · ' : ''}${g.name}${g.venue ? ' · ' + g.venue : ''}`}>
       <span className="nm">
-        {g.phase && <b className={`ph ${phaseTone(g.phase)}`}>{g.phase}</b>}
+        {g.phase && <b className="ph">{g.phase}</b>}
         {g.phase ? ' · ' : ''}
         {g.name}
       </span>

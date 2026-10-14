@@ -32,10 +32,13 @@ export async function payrollSummary(c: PoolClient, from: string, to: string) {
   const rows = (
     await c.query(
       `SELECT t.id, t.user_id, t.assignment_id, t.clock_in, t.clock_out, t.payroll_exported_at,
-              u.name, u.email, u.payroll_ids, s.role_name, s.pay_type, s.pay_rate_override, s.event_id,
+              u.name, u.email, u.payroll_ids, s.role_name, COALESCE(cr.pay_type, s.pay_type) AS pay_type,
+              COALESCE(cr.rate, s.pay_rate_override) AS pay_rate_override, s.event_id,
               e.name AS event_name, e.ot_after, e.state, e.address
          FROM time_entries t JOIN users u ON u.id = t.user_id
          JOIN shift_assignments a ON a.id = t.assignment_id JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
+         -- A rate set for this person on this event replaces the shift's and the role's rate.
+         LEFT JOIN event_crew_rates cr ON cr.event_id = s.event_id AND cr.user_id = t.user_id
         WHERE t.status = 'approved' AND t.clock_out IS NOT NULL
           AND t.clock_in >= ($1::date - 7)::timestamp AT TIME ZONE $3 AND t.clock_in < ($2::date + 1)::timestamp AT TIME ZONE $3
         ORDER BY t.user_id, t.clock_in`,

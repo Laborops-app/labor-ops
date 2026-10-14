@@ -117,26 +117,32 @@ export async function priorJobDayHours(c: PoolClient, rules: Rules, userId: stri
 
 /** Estimate for a specific person (counts the hours they already work that week and on this job that day) or, without a user, for the shift on its own.
  *  Hourly shifts use the job's overtime threshold and the state's multipliers; day-rate shifts pay one flat amount. */
-export async function estimateShift(c: PoolClient, rules: Rules, rates: Map<string, number>, role: string, startsAt: Date | string, endsAt: Date | string, userId?: string | null, shiftId: string | null = null): Promise<Priced> {
+export async function estimateShift(c: PoolClient, rules: Rules, rates: Map<string, number>, role: string, startsAt: Date | string, endsAt: Date | string, userId?: string | null, shiftId: string | null = null, opts: { noPrior?: boolean } = {}): Promise<Priced> {
+  // A rate set for this person on this event wins over the shift's rate and the role's rate.
   const sh = shiftId
     ? (await c.query(
-        `SELECT s.event_id, s.pay_type, s.pay_rate_override, e.ot_after, e.state, e.address, k.day_rate
+        `SELECT s.event_id, s.pay_type, s.pay_rate_override, e.ot_after, e.state, e.address, k.day_rate, cr.pay_type AS cr_type, cr.rate AS cr_rate
            FROM shifts s JOIN events e ON e.id = s.event_id
            LEFT JOIN skills k ON lower(k.name) = lower(trim(regexp_replace($2, '\\s*\\(.*\\)\\s*$', ''))) AND k.tenant_id = s.tenant_id
-          WHERE s.id = $1`, [shiftId, role])).rows[0]
+           LEFT JOIN event_crew_rates cr ON cr.event_id = s.event_id AND cr.user_id = $3::uuid
+          WHERE s.id = $1`, [shiftId, role, userId ?? null])).rows[0]
     : null;
-  const override = Number(sh?.pay_rate_override ?? 0);
-  if (sh?.pay_type === 'day') {
-    const rate = override > 0 ? override : Number(sh.day_rate ?? 0) > 0 ? Number(sh.day_rate) : null;
-    return { hours: hoursBetween(startsAt, endsAt), rate, estimate: rate, otHours: 0, dtHours: 0, premiumHours: 0, notes: ['day rate'], payType: 'day' };
+  const personal = Number(sh?.cr_rate ?? 0) > 0;
+  const payType: 'hourly' | 'day' = personal ? sh.cr_type : sh?.pay_type === 'day' ? 'day' : 'hourly';
+  const override = personal ? Number(sh.cr_rate) : Number(sh?.pay_rate_override ?? 0);
+  if (payType === 'day') {
+    const rate = override > 0 ? override : Number(sh?.day_rate ?? 0) > 0 ? Number(sh!.day_rate) : null;
+    return { hours: hoursBetween(startsAt, endsAt), rate, estimate: rate, otHours: 0, dtHours: 0, premiumHours: 0, notes: personal ? ['day rate', 'personal rate for this event'] : ['day rate'], payType: 'day' };
   }
-  const prior = userId ? await priorWeekHours(c, rules, userId, shiftId, startsAt) : 0;
-  const priorDay = userId && sh ? await priorJobDayHours(c, rules, userId, sh.event_id, shiftId, startsAt) : 0;
+  const prior = userId && !opts.noPrior ? await priorWeekHours(c, rules, userId, shiftId, startsAt) : 0;
+  const priorDay = userId && sh && !opts.noPrior ? await priorJobDayHours(c, rules, userId, sh.event_id, shiftId, startsAt) : 0;
   const st = sh ? await loadStateOt(c, eventState(sh, (await c.query('SELECT default_state FROM labor_rules LIMIT 1')).rows[0]?.default_state), rules) : null;
-  return priceShift(rules, override > 0 ? override : rateFor(rates, role), startsAt, endsAt, prior, {
+  const priced = priceShift(rules, override > 0 ? override : rateFor(rates, role), startsAt, endsAt, prior, {
     otAfter: sh?.ot_after === null || sh?.ot_after === undefined ? null : Number(sh.ot_after),
     otMult: st?.otMult, dtAfter: st?.dtAfter, dtMult: st?.dtMult, priorDay,
   });
+  if (personal) priced.notes.push('personal rate for this event');
+  return priced;
 }
 
 // ---------- state overtime ----------

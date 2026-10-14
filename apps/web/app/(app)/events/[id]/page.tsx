@@ -15,7 +15,8 @@ import { api, ApiError, Me, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/a
 import { EventDetails, Phases, Clocking, RentmanCard, EventFull, Phase, RmView } from '@/components/EventInfo';
 import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 
-type Assignment = { id: string; user_id: string; user_name: string; status: string; clocked_in_at?: string | null; last_clock_out?: string | null };
+type Assignment = { id: string; user_id: string; user_name: string; status: string; clocked_in_at?: string | null; last_clock_out?: string | null; pay_type?: 'hourly' | 'day'; rate?: number | null; estimated_pay?: number | null };
+type CrewRate = { user_id: string; user_name: string; pay_type: 'hourly' | 'day'; rate: number; note: string | null };
 type Elig = { user_id: string; missing_certs: string[]; time_off: boolean; outside_availability: boolean };
 type Shift = {
   id: string;
@@ -37,7 +38,7 @@ type Shift = {
   dt_hours?: number;
 };
 type Overtime = { otAfter: number | null; state: string | null; effectiveState: string | null; stateFromAddress: boolean; companyDailyOt: number; otMult: number; dtAfter: number | null; dtMult: number };
-type Detail = { event: EventFull; shifts: Shift[]; phases: Phase[]; overtime?: Overtime };
+type Detail = { event: EventFull; shifts: Shift[]; phases: Phase[]; overtime?: Overtime; crewRates?: CrewRate[] };
 type Member = { id: string; name: string; role: string; skills: string[]; active: boolean; ratings?: Record<string, number> };
 type TplItem = { role: string; section?: string; dayOffset: number; start: string; end: string; headcount: number; isOpen: boolean; requiredCerts: string[] };
 type Template = { id: string; name: string; items: TplItem[]; customer_id?: string | null };
@@ -116,7 +117,7 @@ function Body({ me }: { me: Me }) {
   const [tplId, setTplId] = useState('');
   const [tplPhase, setTplPhase] = useState('');
   // Event settings panel: clock-in, overtime and shift templates live here to keep the page short.
-  const [settings, setSettings] = useState<null | 'clock' | 'ot' | 'tpl' | 'rentman' | 'invoice'>(null);
+  const [settings, setSettings] = useState<null | 'clock' | 'ot' | 'tpl' | 'pay' | 'rentman' | 'invoice'>(null);
   // Rentman lives in the same side panel, opened from its own button next to Event settings.
   const [rm, setRm] = useState<RmView | null>(null);
   // The customer's main contact, shown in the strip at the top (like the design's Deal Details).
@@ -392,6 +393,11 @@ function Body({ me }: { me: Me }) {
                     <li key={a.id} className="row space">
                       <span>
                         {a.user_name} <Pill status={a.status} />
+                        {a.rate != null && a.status !== 'declined' && (
+                          <button type="button" className="chip" style={{ border: 0, cursor: 'pointer', marginLeft: 4 }} title="This person's own rate on this event" onClick={() => setSettings('pay')}>
+                            {money(a.rate)}{a.pay_type === 'day' ? '/day' : '/hr'}
+                          </button>
+                        )}
                       </span>
                       <span className="row">
                         {(a.status === 'offered' || a.status === 'pending') && (
@@ -556,6 +562,13 @@ function Body({ me }: { me: Me }) {
             {ev.end_date.slice(0, 10) !== ev.start_date.slice(0, 10) && <> – {fmtDate(ev.end_date.slice(0, 10))}</>}
           </div>
           <div className="row small" style={{ gap: '.35rem', marginTop: '.35rem', flexWrap: 'wrap' }}>
+            {(() => {
+              const slots = d.shifts.reduce((n, s) => n + s.headcount, 0);
+              const filled = d.shifts.reduce((n, s) => n + Math.min(s.headcount, s.assignments.filter((a) => a.status !== 'declined').length), 0);
+              if (!slots) return <span className="pill">No shifts yet</span>;
+              const cls = filled >= slots ? 'staff-good' : filled > 0 ? 'staff-warn' : 'staff-bad';
+              return <span className={`pill ${cls}`} title="Seats with crew on them (offered, pending or accepted)">{filled >= slots ? 'Fully staffed' : filled > 0 ? 'Partly staffed' : 'No crew yet'} · {filled}/{slots}</span>;
+            })()}
             <button type="button" className="chip" style={{ border: 0, cursor: 'pointer' }} onClick={() => setSettings('clock')}>
               {ev.clock_mode === 'coordinator' ? 'Coordinator clocks crew in' : 'Crew clock themselves in'}
               {ev.geofence_m ? ` · within ${ev.geofence_m} m` : ''}
@@ -576,7 +589,10 @@ function Body({ me }: { me: Me }) {
               </button>
             )}
             {(me.role === 'admin' || me.canAdjustRates) && (
-              <button className="btn small" onClick={() => setSettings('invoice')} aria-haspopup="dialog">Invoice</button>
+              <>
+                <button className="btn small" onClick={() => setSettings('pay')} aria-haspopup="dialog">Crew pay</button>
+                <button className="btn small" onClick={() => setSettings('invoice')} aria-haspopup="dialog">Invoice</button>
+              </>
             )}
             <CopyEvent eventId={id} name={ev.name} customerId={ev.customer_id ?? null} onError={setError} label="Copy" />
             <button className="btn-round" title="Event chat" aria-label="Event chat" onClick={() => api<{ id: string }>('/api/chat/channels', { body: { eventId: id } }).then((r) => router.push(`/chat?c=${r.id}`)).catch((e) => setError(e.message))}>
@@ -749,7 +765,7 @@ function Body({ me }: { me: Me }) {
             {settings === 'rentman' && <div style={{ marginTop: 12 }}><RentmanCard eventId={id} isAdmin={me.role === 'admin'} onError={setError} onView={setRm} /></div>}
             {settings === 'invoice' && <InvoicePanel eventId={id} isAdmin={me.role === 'admin'} />}
             {settings !== 'rentman' && settings !== 'invoice' && <div className="phase-tabs" role="tablist" aria-label="Settings section" style={{ margin: '12px 0' }}>
-              {([['clock', 'Clock-in'], ['ot', 'Overtime'], ['tpl', 'Shift templates']] as const).map(([k, label]) => (
+              {([['clock', 'Clock-in'], ['ot', 'Overtime'], ['tpl', 'Shift templates'], ...((me.role === 'admin' || me.canAdjustRates) ? [['pay', 'Crew pay']] as const : [])] as const).map(([k, label]) => (
                 <button key={k} type="button" role="tab" aria-selected={settings === k} className={settings === k ? 'tab on' : 'tab'} onClick={() => setSettings(k)}>
                   {label}
                 </button>
@@ -757,6 +773,7 @@ function Body({ me }: { me: Me }) {
             </div>}
             {settings === 'clock' && <Clocking ev={ev} onSaved={load} onError={setError} />}
             {settings === 'ot' && d.overtime && <OvertimeCard eventId={id} ot={d.overtime} onSaved={load} onError={setError} />}
+            {settings === 'pay' && <CrewPay eventId={id} shifts={d.shifts} rates={d.crewRates ?? []} onSaved={load} />}
             {settings === 'tpl' && (
               <section className="card">
                 <h2>Shift templates</h2>
@@ -877,5 +894,104 @@ function OvertimeCard({ eventId, ot, onSaved, onError }: { eventId: string; ot: 
         State rates are set under Labor rules. Day-rate shifts never earn overtime.
       </p>
     </section>
+  );
+}
+
+/** Pay for each crew member on this event: their role's rate by default, or their own hourly or day rate. */
+function CrewPay({ eventId, shifts, rates, onSaved }: { eventId: string; shifts: Shift[]; rates: CrewRate[]; onSaved: () => void }) {
+  type Row = { id: string; name: string; roles: string[]; defaults: string[] };
+  const people = new Map<string, Row>();
+  for (const s of shifts)
+    for (const a of s.assignments.filter((x) => x.status !== 'declined')) {
+      const p = people.get(a.user_id) ?? { id: a.user_id, name: a.user_name, roles: [], defaults: [] };
+      if (!p.roles.includes(s.role_name)) {
+        p.roles.push(s.role_name);
+        p.defaults.push(s.pay_type === 'day' ? (s.hourly_rate ? `${money(s.hourly_rate)}/day` : 'day rate not set') : s.hourly_rate ? `${money(s.hourly_rate)}/hr` : 'no rate set');
+      }
+      people.set(a.user_id, p);
+    }
+  // People who have a rate but are no longer on a shift still show, so the rate can be removed.
+  for (const r of rates) if (!people.has(r.user_id)) people.set(r.user_id, { id: r.user_id, name: r.user_name, roles: [], defaults: [] });
+  const list = [...people.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const byUser = new Map(rates.map((r) => [r.user_id, r]));
+  const [edit, setEdit] = useState<Record<string, { type: 'default' | 'hourly' | 'day'; rate: string }>>({});
+  const [busy, setBusy] = useState('');
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+  const cur = (id: string) => edit[id] ?? (byUser.get(id) ? { type: byUser.get(id)!.pay_type, rate: String(byUser.get(id)!.rate) } : { type: 'default' as const, rate: '' });
+  const save = async (p: Row) => {
+    const e = cur(p.id);
+    setErr(''); setMsg(''); setBusy(p.id);
+    try {
+      if (e.type === 'default') {
+        if (byUser.has(p.id)) await api(`/api/events/${eventId}/crew-rates/${p.id}`, { method: 'DELETE' });
+        setMsg(`${p.name} is back on the role's rate.`);
+      } else {
+        const n = Math.round(Number(e.rate) * 100) / 100;
+        if (!(n > 0)) throw new Error('Enter a rate above 0.');
+        await api(`/api/events/${eventId}/crew-rates/${p.id}`, { method: 'PUT', body: { payType: e.type, rate: n } });
+        setMsg(`${p.name}: ${money(n)}${e.type === 'day' ? ' per day' : '/hr'} on this event.`);
+      }
+      setEdit((x) => { const { [p.id]: _, ...rest } = x; return rest; });
+      onSaved();
+    } catch (x) {
+      setErr((x as Error).message);
+    } finally {
+      setBusy('');
+    }
+  };
+  return (
+    <div>
+      <p className="muted small">
+        Set a different pay for one person on this event: an hourly rate (overtime still applies) or a flat day rate. It replaces the role&apos;s rate and any rate on the shift, for this event only. They are told when their pay changes, and payroll uses it.
+      </p>
+      {err && <Banner onClose={() => setErr('')}>{err}</Banner>}
+      {msg && <Banner kind="ok" onClose={() => setMsg('')}>{msg}</Banner>}
+      {list.length === 0 ? (
+        <Empty>No one is on this event yet. Add crew to a shift first.</Empty>
+      ) : (
+        <div className="table-wrap">
+          <table className="table">
+            <thead><tr><th>Crew member</th><th>Default</th><th>Pay on this event</th><th></th></tr></thead>
+            <tbody>
+              {list.map((p) => {
+                const e = cur(p.id);
+                const saved = byUser.get(p.id);
+                const dirty = !!edit[p.id];
+                return (
+                  <tr key={p.id}>
+                    <td>{p.name}<div className="muted small">{p.roles.join(', ') || 'Not on a shift now'}</div></td>
+                    <td className="small">{p.defaults.join(', ') || <span className="muted">—</span>}</td>
+                    <td>
+                      <div className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
+                        <select value={e.type} aria-label={`Pay type for ${p.name}`} onChange={(x) => setEdit({ ...edit, [p.id]: { type: x.target.value as 'default' | 'hourly' | 'day', rate: e.rate } })} style={{ width: 'auto' }}>
+                          <option value="default">Role&apos;s rate</option>
+                          <option value="hourly">Hourly</option>
+                          <option value="day">Day rate</option>
+                        </select>
+                        {e.type !== 'default' && (
+                          <span className="money-input">
+                            <span aria-hidden="true">$</span>
+                            <input type="number" min={0.01} max={100000} step="0.01" inputMode="decimal" value={e.rate} aria-label={`Rate for ${p.name}`} placeholder={e.type === 'day' ? '300.00' : '35.00'}
+                              onChange={(x) => setEdit({ ...edit, [p.id]: { type: e.type, rate: x.target.value } })} style={{ width: '6.5rem' }} />
+                            <span className="muted small">{e.type === 'day' ? '/day' : '/hr'}</span>
+                          </span>
+                        )}
+                      </div>
+                      {saved && !dirty && <div className="small" style={{ marginTop: 4 }}><span className="chip open">Own rate · {money(saved.rate)}{saved.pay_type === 'day' ? '/day' : '/hr'}</span></div>}
+                    </td>
+                    <td>
+                      {dirty && (
+                        <button className="btn small primary" disabled={busy === p.id} onClick={() => save(p)}>{busy === p.id ? 'Saving…' : 'Save'}</button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }

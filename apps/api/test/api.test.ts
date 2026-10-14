@@ -2146,3 +2146,60 @@ test('pay override: one shift can have its own pay rate, only for those allowed 
   assert.equal(s1.hourly_rate, 40);
   assert.equal(s1.pay_rate_override, null);
 });
+
+test('crew pay: a personal hourly or day rate per crew member per event drives estimates and payroll', async () => {
+  const a = await register('crewpay');
+  const tid = await tenantOf(a);
+  await call(a, 'POST', '/api/skills', { name: 'Hand', payRate: 20 });
+  const c1 = await mkCrew(a, 'cp1');
+  const c2 = await mkCrew(a, 'cp2');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Arena', startDate: '2030-05-06', endDate: '2030-05-06' })).json.event.id;
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Hand', startsAt: '2030-05-06T15:00:00Z', endsAt: '2030-05-06T21:00:00Z', headcount: 3 })).json.shift.id;
+  await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, confirmed: true });
+  await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c2.id, confirmed: true });
+
+  // 3 seats x 6 h x $20 before any personal rate
+  let d = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  assert.equal(d.shifts[0].estimated_cost, 360);
+  assert.deepEqual(d.crewRates, []);
+
+  // c1 on a $300 day rate, c2 at $30/hr; validation and permissions
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/crew-rates/${c1.id}`, { payType: 'day', rate: 0 })).status, 400);
+  assert.equal((await call(c1.session, 'PUT', `/api/events/${ev}/crew-rates/${c1.id}`, { payType: 'day', rate: 999 })).status, 403);
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/crew-rates/${c1.id}`, { payType: 'day', rate: 300 })).status, 200);
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/crew-rates/${c2.id}`, { payType: 'hourly', rate: 30 })).status, 200);
+  d = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  assert.equal(d.crewRates.length, 2);
+  const byUser = Object.fromEntries(d.shifts[0].assignments.map((x: any) => [x.user_id, x]));
+  assert.deepEqual([byUser[c1.id].pay_type, byUser[c1.id].estimated_pay], ['day', 300]);
+  assert.deepEqual([byUser[c2.id].pay_type, byUser[c2.id].rate, byUser[c2.id].estimated_pay], ['hourly', 30, 180]);
+  assert.equal(d.shifts[0].estimated_cost, 300 + 180 + 120); // the open seat stays at the role's rate
+
+  // they were told, and their own view of the shift shows it
+  const told = await withTenant(tid, (c) => c.query("SELECT title FROM notifications WHERE user_id = $1 AND title LIKE 'Pay updated%'", [c1.id]));
+  assert.equal(told.rowCount, 1);
+  const mine = (await call(c1.session, 'GET', '/api/my/shifts')).json.shifts;
+  const s1 = mine.find((x: any) => x.shift_id === sh);
+  assert.ok(s1, JSON.stringify(mine[0] ?? null));
+  assert.deepEqual([s1.pay_type, s1.estimated_pay], ['day', 300]);
+
+  // payroll from approved time uses the personal rates
+  await withTenant(tid, async (c) => {
+    const asg = async (user: string) => (await c.query('SELECT id FROM shift_assignments WHERE shift_id = $1 AND user_id = $2', [sh, user])).rows[0].id;
+    for (const u of [c1.id, c2.id])
+      await c.query("INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in, clock_out, status) VALUES ($1,$2,$3,'2030-05-06T15:00:00Z','2030-05-06T21:00:00Z','approved')", [tid, await asg(u), u]);
+  });
+  const pr = (await call(a, 'GET', '/api/payroll?from=2030-05-06&to=2030-05-06')).json;
+  const p1 = pr.people.find((p: any) => p.userId === c1.id);
+  const p2 = pr.people.find((p: any) => p.userId === c2.id);
+  assert.deepEqual([p1.days, p1.dayPay, p1.gross], [1, 300, 300]);
+  assert.deepEqual([p2.regular, p2.gross], [6, 180]);
+
+  // removing the rate puts them back on the role's rate
+  assert.equal((await call(a, 'DELETE', `/api/events/${ev}/crew-rates/${c2.id}`)).status, 200);
+  assert.equal((await call(a, 'GET', '/api/payroll?from=2030-05-06&to=2030-05-06')).json.people.find((p: any) => p.userId === c2.id).gross, 120);
+
+  // staffing on the events list: 2 of 3 seats have crew
+  const row = (await call(a, 'GET', '/api/events')).json.events.find((e: any) => e.id === ev);
+  assert.deepEqual([row.slots, row.filled], [3, 2]);
+});

@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useMemo } from 'react';
-import { Phase, S, addDays, groupByEventDay, key, phaseTone, phasesOn, segments } from '@/lib/schedule';
+import { Phase, S, addDays, groupByEventDay, key, phasesOn, segments, staffTone } from '@/lib/schedule';
 
 const fmtMin = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 
@@ -38,7 +38,7 @@ export default function MonthView({ start, count, month, shifts, phases, now, on
               {phasesOn(phases, k).map((p) => {
                 const isStart = p.starts_on.slice(0, 10) === k || d.getDay() === 1;
                 return (
-                  <Link key={p.id} href={`/events/${p.event_id}`} className={`sx-mph ${phaseTone(p.label)}`} title={`${p.label} · ${p.event_name}`}>
+                  <Link key={p.id} href={`/events/${p.event_id}`} className={`sx-mph ${staffTone(p.filled ?? 0, p.slots ?? 0)}`} title={`${p.label} · ${p.event_name}`}>
                     {isStart ? (
                       <>
                         <b>{p.label}</b> · {p.event_name}

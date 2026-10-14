@@ -125,7 +125,10 @@ export async function eventRoutes(app: FastifyInstance) {
             (SELECT count(*)::int FROM shifts s WHERE s.event_id = e.id) AS shift_count,
             (SELECT COALESCE(sum(s.headcount),0)::int FROM shifts s WHERE s.event_id = e.id) AS slots,
             (SELECT count(*)::int FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id
-               WHERE s.event_id = e.id AND a.status = 'accepted') AS accepted
+               WHERE s.event_id = e.id AND a.status = 'accepted') AS accepted,
+            -- Seats with someone on them (offered, pending or accepted), counted per shift up to its headcount.
+            (SELECT COALESCE(sum(LEAST(s.headcount, (SELECT count(*) FROM shift_assignments a WHERE a.shift_id = s.id AND a.status <> 'declined'))), 0)::int
+               FROM shifts s WHERE s.event_id = e.id) AS filled
           FROM events e ORDER BY e.start_date DESC, e.name`)
       ).rows,
     })),
@@ -163,8 +166,16 @@ export async function eventRoutes(app: FastifyInstance) {
       // Event phases (load in, show days, load out ...) that overlap the range, drawn as all-day bars.
       const phases = (
         await c.query(
-          `SELECT p.id, p.event_id, e.name AS event_name, p.label, to_char(p.starts_on, 'YYYY-MM-DD') AS starts_on, to_char(p.ends_on, 'YYYY-MM-DD') AS ends_on
+          `SELECT p.id, p.event_id, e.name AS event_name, p.label, to_char(p.starts_on, 'YYYY-MM-DD') AS starts_on, to_char(p.ends_on, 'YYYY-MM-DD') AS ends_on,
+              st.slots, st.filled
            FROM event_phases p JOIN events e ON e.id = p.event_id
+           -- Staffing of the phase: its own shifts, plus shifts with no phase that start on one of its days.
+           CROSS JOIN LATERAL (
+             SELECT COALESCE(sum(s.headcount), 0)::int AS slots,
+                    COALESCE(sum(LEAST(s.headcount, (SELECT count(*) FROM shift_assignments a WHERE a.shift_id = s.id AND a.status <> 'declined'))), 0)::int AS filled
+             FROM shifts s
+             WHERE s.event_id = p.event_id AND (s.phase_id = p.id OR (s.phase_id IS NULL AND (s.starts_at AT TIME ZONE $3)::date BETWEEN p.starts_on AND p.ends_on))
+           ) st
            WHERE p.ends_on >= ($1::timestamptz AT TIME ZONE $3)::date AND p.starts_on <= ($2::timestamptz AT TIME ZONE $3)::date
            ORDER BY p.starts_on, e.name, p.created_at`,
           [from, to, tz],
@@ -248,9 +259,26 @@ export async function eventRoutes(app: FastifyInstance) {
       const seePay = await canAdjustRates(c, req.user);
       const rates = seePay ? await loadRates(c) : null;
       const rules = rates ? await loadRules(c) : null;
+      // Personal rates for this event (admins and rate-allowed coordinators only).
+      const crewRates = seePay
+        ? (await c.query('SELECT r.user_id, u.name AS user_name, r.pay_type, r.rate::float AS rate, r.note, r.updated_at FROM event_crew_rates r JOIN users u ON u.id = r.user_id WHERE r.event_id = $1 ORDER BY u.name', [eventId])).rows
+        : [];
+      const personal = new Set(crewRates.map((r) => r.user_id));
       for (const s of shifts) {
         const pay = rates && rules ? await estimateShift(c, rules, rates, s.role_name, s.starts_at, s.ends_at, null, s.id) : null;
-        out.push({ ...s, ...(pay ? { hours: pay.hours, hourly_rate: pay.rate, pay_type: pay.payType, ot_hours: pay.otHours, dt_hours: pay.dtHours, role_rate: rateFor(rates!, s.role_name) ?? null, estimated_cost: pay.estimate ? Math.round(pay.estimate * s.headcount * 100) / 100 : null } : {}), assignments: assigns.filter((a) => a.shift_id === s.id), crew_status: await evaluateShift(c, s.id) });
+        const mine = assigns.filter((a) => a.shift_id === s.id);
+        let cost = pay?.estimate ? pay.estimate * s.headcount : null;
+        // People with their own rate replace one default-priced seat each.
+        if (pay && rates && rules) {
+          for (const a of mine.filter((x) => x.status !== 'declined' && personal.has(x.user_id))) {
+            const own = await estimateShift(c, rules, rates, s.role_name, s.starts_at, s.ends_at, a.user_id, s.id, { noPrior: true });
+            a.pay_type = own.payType;
+            a.rate = own.rate;
+            a.estimated_pay = own.estimate;
+            if (cost !== null && own.estimate !== null) cost += own.estimate - (pay.estimate ?? 0);
+          }
+        }
+        out.push({ ...s, ...(pay ? { hours: pay.hours, hourly_rate: pay.rate, pay_type: pay.payType, ot_hours: pay.otHours, dt_hours: pay.dtHours, role_rate: rateFor(rates!, s.role_name) ?? null, estimated_cost: cost !== null ? Math.round(cost * 100) / 100 : null } : {}), assignments: mine, crew_status: await evaluateShift(c, s.id) });
       }
       const phases = (await c.query('SELECT id, label, starts_on, ends_on FROM event_phases WHERE event_id = $1 ORDER BY starts_on, ends_on, created_at', [eventId])).rows;
       const rl = await loadRules(c);
@@ -258,7 +286,7 @@ export async function eventRoutes(app: FastifyInstance) {
       const st = eventState(ev, fallback);
       const so = await loadStateOt(c, st, rl);
       const overtime = { otAfter: ev.ot_after === null ? null : Number(ev.ot_after), state: ev.state ?? null, effectiveState: st, stateFromAddress: !ev.state && !!st && st !== fallback, companyDailyOt: rl.dailyOt, otMult: so.otMult, dtAfter: so.dtAfter, dtMult: so.dtMult };
-      return { event: ev, shifts: out, phases, overtime };
+      return { event: ev, shifts: out, phases, overtime, ...(seePay ? { crewRates } : {}) };
     });
     if (!out) return reply.code(404).send({ error: 'Event not found' });
     return out;
@@ -300,6 +328,48 @@ export async function eventRoutes(app: FastifyInstance) {
     if (!row) return reply.code(404).send({ error: 'Event not found' });
     if ((row as any).error) return reply.code(400).send(row);
     return { event: row };
+  });
+
+  // ---------- personal pay per crew member per event ----------
+  // Hourly at a set rate, or a flat day rate, for one person's shifts on this event. Admins, and coordinators allowed to adjust rates.
+  app.put('/api/events/:id/crew-rates/:userId', { preHandler: mgr }, async (req, reply) => {
+    const { id: eventId, userId } = z.object({ id: z.string().uuid(), userId: z.string().uuid() }).parse(req.params);
+    const b = z.object({ payType: z.enum(['hourly', 'day']), rate: z.number().positive().max(100000), note: z.string().trim().max(200).optional().nullable() }).parse(req.body);
+    const r = await withTenant(req.user.tid, async (c) => {
+      if (!(await canAdjustRates(c, req.user))) return { code: 403, error: 'Only admins, and coordinators allowed to adjust rates, can set pay.' };
+      const ev = (await c.query('SELECT id, name FROM events WHERE id = $1', [eventId])).rows[0];
+      if (!ev) return { code: 404, error: 'Event not found' };
+      const u = (await c.query('SELECT id, name FROM users WHERE id = $1 AND active', [userId])).rows[0];
+      if (!u) return { code: 404, error: 'Crew member not found' };
+      const rate = Math.round(b.rate * 100) / 100;
+      const prev = (await c.query('SELECT pay_type, rate::float AS rate FROM event_crew_rates WHERE event_id = $1 AND user_id = $2', [eventId, userId])).rows[0];
+      await c.query(
+        `INSERT INTO event_crew_rates (tenant_id, event_id, user_id, pay_type, rate, note, updated_by) VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (event_id, user_id) DO UPDATE SET pay_type = EXCLUDED.pay_type, rate = EXCLUDED.rate, note = EXCLUDED.note, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+        [req.user.tid, eventId, userId, b.payType, rate, b.note || null, req.user.sub],
+      );
+      await audit(c, req.user.tid, req.user.sub, 'event.crew_rate', 'event', eventId, { userId, payType: b.payType, rate, before: prev ?? null });
+      // Tell the person when their pay for a job they are on changes.
+      const onIt = (await c.query("SELECT 1 FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE s.event_id = $1 AND a.user_id = $2 AND a.status <> 'declined' LIMIT 1", [eventId, userId])).rowCount;
+      if (onIt && (!prev || prev.pay_type !== b.payType || prev.rate !== rate))
+        await notify(c, req.user.tid, { userId, category: 'shift_change', title: `Pay updated: ${ev.name}`, body: b.payType === 'day' ? `You'll be paid a day rate of $${rate.toFixed(2)} per shift day on this event.` : `Your rate on this event is $${rate.toFixed(2)}/hr (overtime rules still apply).`, link: '/my-shifts' });
+      return { code: 200, rate: { user_id: userId, user_name: u.name, pay_type: b.payType, rate, note: b.note || null } };
+    });
+    const { code, ...rest } = r as { code: number; [k: string]: unknown };
+    return reply.code(code).send(rest);
+  });
+
+  app.delete('/api/events/:id/crew-rates/:userId', { preHandler: mgr }, async (req, reply) => {
+    const { id: eventId, userId } = z.object({ id: z.string().uuid(), userId: z.string().uuid() }).parse(req.params);
+    const r = await withTenant(req.user.tid, async (c) => {
+      if (!(await canAdjustRates(c, req.user))) return { code: 403, error: 'Only admins, and coordinators allowed to adjust rates, can set pay.' };
+      const d = await c.query('DELETE FROM event_crew_rates WHERE event_id = $1 AND user_id = $2 RETURNING pay_type, rate::float AS rate', [eventId, userId]);
+      if (!d.rowCount) return { code: 404, error: 'No personal rate to remove' };
+      await audit(c, req.user.tid, req.user.sub, 'event.crew_rate_removed', 'event', eventId, { userId, before: d.rows[0] });
+      return { code: 200, ok: true };
+    });
+    const { code, ...rest } = r as { code: number; [k: string]: unknown };
+    return reply.code(code).send(rest);
   });
 
   // ---------- phases: several dated stretches per event (load-in, show days, strike ...) ----------

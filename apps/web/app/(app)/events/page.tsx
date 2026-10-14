@@ -11,7 +11,7 @@ import RentmanPicker from '@/components/RentmanPicker';
 import CustomerSelect from '@/components/CustomerSelect';
 import LocationPick from '@/components/LocationPick';
 
-type Ev = { id: string; name: string; client: string | null; venue: string | null; start_date: string; end_date: string; shift_count: number; slots: number; accepted: number };
+type Ev = { id: string; name: string; client: string | null; venue: string | null; start_date: string; end_date: string; shift_count: number; slots: number; accepted: number; filled?: number };
 type View = 'upcoming' | 'past' | 'all';
 const today = () => new Date().toISOString().slice(0, 10);
 const PAGE = 25;
@@ -26,13 +26,16 @@ function DateBadge({ date }: { date: string }) {
   );
 }
 
-/** Where the event stands: date-wise first, then staffing. */
+/** Where the event stands: green when every seat has crew, yellow when some do, red when none do. */
 function status(ev: Ev) {
   const t = today(), s = ev.start_date.slice(0, 10), e = ev.end_date.slice(0, 10);
   if (e < t) return { label: 'Done', cls: 'done' };
   if (!ev.slots) return { label: 'No shifts', cls: 'past' };
-  if (ev.accepted >= ev.slots) return { label: s <= t ? 'In progress · Full' : 'Fully staffed', cls: 'accepted' };
-  return { label: s <= t ? 'In progress' : 'Needs crew', cls: 'offered' };
+  const filled = ev.filled ?? ev.accepted;
+  const live = s <= t ? 'In progress · ' : '';
+  if (filled >= ev.slots) return { label: `${live}Fully staffed`, cls: 'staff-good' };
+  if (filled > 0) return { label: `${live}Partly staffed`, cls: 'staff-warn' };
+  return { label: `${live}No crew yet`, cls: 'staff-bad' };
 }
 
 function Body() {
@@ -125,7 +128,8 @@ function Body() {
               {rows.slice(0, shown).map((ev) => {
                 const s0 = ev.start_date.slice(0, 10), e0 = ev.end_date.slice(0, 10);
                 const st = status(ev);
-                const pct = ev.slots ? Math.min(100, Math.round((ev.accepted / ev.slots) * 100)) : 0;
+                const filled = ev.filled ?? ev.accepted;
+                const pct = ev.slots ? Math.min(100, Math.round((filled / ev.slots) * 100)) : 0;
                 return (
                   <tr key={ev.id} onClick={() => router.push(`/events/${ev.id}`)}>
                     <td className="av-col"><DateBadge date={s0} /></td>
@@ -139,8 +143,8 @@ function Body() {
                       {e0 !== s0 && <span className="sub">to {fmtDate(e0)}</span>}
                     </td>
                     <td>
-                      {ev.accepted} / {ev.slots}
-                      <span className="mini-bar" aria-hidden="true"><i style={{ width: `${pct}%` }} /></span>
+                      {filled} / {ev.slots}
+                      <span className={`mini-bar ${st.cls}`} aria-hidden="true"><i style={{ width: `${pct}%` }} /></span>
                     </td>
                     <td><span className={`pill ${st.cls}`}>{st.label}</span></td>
                     <td className="edit-col">

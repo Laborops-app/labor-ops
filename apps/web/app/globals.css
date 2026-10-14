@@ -914,3 +914,16 @@ td .btn, .row .btn.small { white-space: nowrap; }
 .course-list li.done a { color: var(--muted); }
 .course-list li.done::marker { content: '✓  '; color: var(--good); font-weight: 700; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* Staffing status: green = fully staffed, yellow = partly, red = no crew yet. */
+:root { --staff-good: #16a34a; --staff-good-bg: rgba(22, 163, 74, 0.14); --staff-warn: #a16207; --staff-warn-dot: #eab308; --staff-warn-bg: rgba(234, 179, 8, 0.2); --staff-bad: #dc2626; --staff-bad-bg: rgba(220, 38, 38, 0.12); }
+:root[data-theme='dark'] { --staff-good: #4ade80; --staff-warn: #facc15; --staff-bad: #f87171; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) { --staff-good: #4ade80; --staff-warn: #facc15; --staff-bad: #f87171; } }
+.pill.staff-good { background: var(--staff-good-bg); color: var(--staff-good); }
+.pill.staff-warn { background: var(--staff-warn-bg); color: var(--staff-warn); }
+.pill.staff-bad { background: var(--staff-bad-bg); color: var(--staff-bad); }
+.pill.staff-good::before, .pill.staff-warn::before, .pill.staff-bad::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor; margin-right: 6px; vertical-align: 1px; }
+.pill.staff-warn::before { background: var(--staff-warn-dot); }
+.mini-bar.staff-good i { background: var(--staff-good); }
+.mini-bar.staff-warn i { background: var(--staff-warn-dot); }
+.mini-bar.staff-bad i { background: var(--staff-bad); }

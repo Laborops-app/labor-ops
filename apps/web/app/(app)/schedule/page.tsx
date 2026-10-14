@@ -128,6 +128,11 @@ function Body() {
                 <b>{filters.teams.length ? `${filters.teams.length} selected` : 'All'}</b>
                 <Ic n="caret-down-sm" />
               </button>
+              <span className="sx-legend" aria-label="Staffing colours">
+                <span><i style={{ background: 'var(--st-good)' }} />Fully staffed</span>
+                <span><i style={{ background: 'var(--st-warn)' }} />Partly</span>
+                <span><i style={{ background: 'var(--st-bad)' }} />No crew</span>
+              </span>
               <button className="sx-link" onClick={() => setPanel((p) => !p)}>
                 + Advanced filter
                 {filtersActive(filters) && ' •'}

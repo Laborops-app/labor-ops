@@ -20,12 +20,13 @@ const ENTRY_SQL = `
   SELECT t.id, t.status, t.clock_in, t.clock_out, t.approved_at,
     ROUND(EXTRACT(EPOCH FROM (COALESCE(t.clock_out, now()) - t.clock_in)) / 3600.0, 2)::float AS hours,
     u.id AS user_id, u.name AS user_name, u.email AS user_email,
-    s.role_name, s.pay_rate_override AS shift_rate, e.name AS event_name, ap.name AS approved_by_name
+    s.role_name, s.pay_rate_override AS shift_rate, cr.rate AS crew_rate, cr.pay_type AS crew_pay_type, e.name AS event_name, ap.name AS approved_by_name
   FROM time_entries t
   JOIN users u ON u.id = t.user_id
   JOIN shift_assignments a ON a.id = t.assignment_id
   JOIN shifts s ON s.id = a.shift_id
   JOIN events e ON e.id = s.event_id
+  LEFT JOIN event_crew_rates cr ON cr.event_id = e.id AND cr.user_id = u.id
   LEFT JOIN users ap ON ap.id = t.approved_by`;
 
 /** Great-circle distance in metres. */
@@ -288,7 +289,9 @@ export async function timeRoutes(app: FastifyInstance) {
       : new Map<string, number>();
     const roleRate = (role: string) => rates.get(role.replace(/\s*\(.*\)\s*$/, '').trim().toLowerCase());
     // A rate set on the shift itself wins over the role's rate.
-    const rateFor = (r: { role_name: string; shift_rate?: string | null }) => (r.shift_rate && Number(r.shift_rate) > 0 ? Number(r.shift_rate) : roleRate(r.role_name));
+    // A person's hourly rate for this event wins, then the shift's rate, then the role's. (Day rates are paid per day, so no hourly figure.)
+    const rateFor = (r: { role_name: string; shift_rate?: string | null; crew_rate?: string | null; crew_pay_type?: string | null }) =>
+      r.crew_pay_type === 'day' ? undefined : r.crew_rate && Number(r.crew_rate) > 0 ? Number(r.crew_rate) : r.shift_rate && Number(r.shift_rate) > 0 ? Number(r.shift_rate) : roleRate(r.role_name);
     const head = ['Employee', 'Email', 'Event', 'Role', 'Clock in (UTC)', 'Clock out (UTC)', 'Hours', 'Approved by', ...(isAdmin ? ['Hourly rate', 'Pay'] : [])];
     const lines = [head.join(',')].concat(
       rows.map((r) =>
@@ -301,7 +304,7 @@ export async function timeRoutes(app: FastifyInstance) {
           r.clock_out?.toISOString(),
           r.hours,
           r.approved_by_name,
-          ...(isAdmin ? [rateFor(r) ?? '', rateFor(r) === undefined ? '' : (Math.round(Number(r.hours) * rateFor(r)! * 100) / 100).toFixed(2)] : []),
+          ...(isAdmin ? (r.crew_pay_type === 'day' ? [`day rate ${Number(r.crew_rate).toFixed(2)}`, ''] : [rateFor(r) ?? '', rateFor(r) === undefined ? '' : (Math.round(Number(r.hours) * rateFor(r)! * 100) / 100).toFixed(2)]) : []),
         ]
           .map(csvCell)
           .join(','),
