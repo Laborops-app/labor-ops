@@ -3,8 +3,10 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
-import { Banner, Empty, Pill } from '@/components/ui';
+import Modal from '@/components/Modal';
+import { Banner, Pill } from '@/components/ui';
 import CopyEvent from '@/components/CopyEvent';
+import TopbarAction, { PlusIcon, TrashIcon, avClass, initialsOf } from '@/components/TopbarAction';
 import { api, fmtDate, money } from '@/lib/api';
 
 type Cust = { id: string; name: string; notes: string | null; rentman_contact_id: number | null };
@@ -12,168 +14,291 @@ type Contact = { id: string; name: string; title: string | null; email: string |
 type Loc = { id: string; label: string; venue: string | null; address: string | null; notes: string | null; is_default: boolean };
 type Ev = { id: string; name: string; venue: string | null; start_date: string; end_date: string; shift_count: number; slots: number };
 type Qt = { id: string; number: number; title: string; status: string; total: number; created_at: string };
+type Data = { customer: Cust; contacts: Contact[]; locations: Loc[]; events: Ev[]; quotes: Qt[] };
+
+const day = (s: string) => new Date(`${s.slice(0, 10)}T12:00:00`);
+function DateBadge({ date }: { date: string }) {
+  const d = day(date);
+  return (
+    <span className="av c1" aria-hidden="true" style={{ display: 'grid', lineHeight: 1.05, fontSize: 11, textTransform: 'uppercase' }}>
+      <span>{d.toLocaleDateString('en-US', { month: 'short' })}</span>
+      <b style={{ fontSize: 15 }}>{d.getDate()}</b>
+    </span>
+  );
+}
 
 function Body() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const [d, setD] = useState<{ customer: Cust; contacts: Contact[]; locations: Loc[]; events: Ev[]; quotes: Qt[] } | null>(null);
+  const [d, setD] = useState<Data | null>(null);
   const [f, setF] = useState({ name: '', notes: '' });
   const [cf, setCf] = useState<{ id: string | null; name: string; title: string; email: string; phone: string } | null>(null);
   const [lf, setLf] = useState<{ id: string | null; label: string; venue: string; address: string } | null>(null);
-  const [editing, setEditing] = useState(false);
+  const [tab, setTab] = useState<'upcoming' | 'past'>('upcoming');
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
-  const load = () => api<{ customer: Cust; contacts: Contact[]; locations: Loc[]; events: Ev[]; quotes: Qt[] }>(`/api/customers/${id}`).then((r) => {
-    setD(r);
-    const c = r.customer;
-    setF({ name: c.name, notes: c.notes ?? '' });
-  }).catch((e) => setError(e.message));
-  useEffect(() => { load(); }, [id]);
-  const save = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    try { await api(`/api/customers/${id}`, { method: 'PATCH', body: f }); setEditing(false); setNote('Saved.'); load(); } catch (x) { setError((x as Error).message); }
-  };
+  const load = () =>
+    api<Data>(`/api/customers/${id}`)
+      .then((r) => {
+        setD(r);
+        setF({ name: r.customer.name, notes: r.customer.notes ?? '' });
+      })
+      .catch((e) => setError(e.message));
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+  const run = (p: Promise<unknown>, ok = '') => p.then(() => { if (ok) setNote(ok); return load(); }).catch((x) => setError((x as Error).message));
+
   if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
   const c = d.customer;
+  const dirty = f.name !== c.name || f.notes !== (c.notes ?? '');
   const today = new Date().toISOString().slice(0, 10);
-  const past = d.events.filter((e) => e.end_date.slice(0, 10) < today);
   const upcoming = d.events.filter((e) => e.end_date.slice(0, 10) >= today);
-  const evRow = (e: Ev) => (
-    <li key={e.id} className="row space" style={{ padding: '.5rem 0', borderTop: '1px solid var(--line, #ddd)', flexWrap: 'wrap' }}>
-      <div>
-        <Link href={`/events/${e.id}`}><b>{e.name}</b></Link>
-        <div className="muted small">{fmtDate(e.start_date.slice(0, 10))}{e.end_date.slice(0, 10) !== e.start_date.slice(0, 10) && <> – {fmtDate(e.end_date.slice(0, 10))}</>}{e.venue ? ` · ${e.venue}` : ''} · {e.shift_count} shift{e.shift_count === 1 ? '' : 's'}</div>
-      </div>
-      <span className="row"><button className="btn small" onClick={() => api<{ quote: { id: string } }>('/api/quotes', { body: { eventId: e.id } }).then((r) => router.push(`/quotes/${r.quote.id}`)).catch((x) => setError(x.message))}>Quote</button><CopyEvent eventId={e.id} name={e.name} customerId={c.id} onError={setError} /></span>
-    </li>
-  );
+  const past = d.events.filter((e) => e.end_date.slice(0, 10) < today).reverse();
+  const evs = tab === 'upcoming' ? upcoming : past;
+  const newQuote = (body: object) => api<{ quote: { id: string } }>('/api/quotes', { body }).then((r) => router.push(`/quotes/${r.quote.id}`)).catch((x) => setError(x.message));
+
   return (
-    <>
-      <p className="small"><Link href="/customers">← Customers</Link></p>
-      <div className="row space">
-        <h1>{c.name}</h1>
-        <span className="row">
-          <button className="btn small" onClick={() => api<{ quote: { id: string } }>('/api/quotes', { body: { customerId: c.id, title: `Labor quote for ${c.name}` } }).then((r) => router.push(`/quotes/${r.quote.id}`)).catch((x) => setError(x.message))}>New quote</button>
-          <button className="btn ghost small danger" onClick={() => confirm(`Delete ${c.name}? Their events and quotes are kept, just no longer linked.`) && api(`/api/customers/${id}`, { method: 'DELETE' }).then(() => router.replace('/customers')).catch((x) => setError(x.message))}>Delete</button>
-        </span>
-      </div>
-      {error && <Banner onClose={() => setError('')}>{error}</Banner>}
-      {note && <Banner kind="ok" onClose={() => setNote('')}>{note}</Banner>}
-      {editing ? (
-        <form className="card" onSubmit={save}>
-          <h2>Edit customer</h2>
-          <div className="grid-form">
-            <label>Name<input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required maxLength={150} /></label>
+    <div className="split">
+      <div className="split-main">
+        <TopbarAction>
+          <button className="btn primary" onClick={() => newQuote({ customerId: c.id, title: `Labor quote for ${c.name}` })}>
+            New Quote
+            <PlusIcon />
+          </button>
+        </TopbarAction>
+        <p className="small" style={{ margin: '0 0 16px' }}>
+          <Link href="/customers">← All customers</Link>
+        </p>
+        {error && <Banner onClose={() => setError('')}>{error}</Banner>}
+        {note && <Banner kind="ok" onClose={() => setNote('')}>{note}</Banner>}
+
+        <div className="hero">
+          <span className={`${avClass(c.name)} lg`} aria-hidden="true">{initialsOf(c.name)}</span>
+          <div className="hero-actions">
+            <button
+              className="btn-round danger"
+              aria-label={`Delete ${c.name}`}
+              title="Delete customer"
+              onClick={() => confirm(`Delete ${c.name}? Their events and quotes are kept, just no longer linked.`) && api(`/api/customers/${id}`, { method: 'DELETE' }).then(() => router.replace('/customers')).catch((x) => setError(x.message))}
+            >
+              <TrashIcon />
+            </button>
           </div>
-          <label>Notes<textarea rows={4} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} maxLength={5000} placeholder="Billing preferences, who approves quotes, things to remember" /></label>
-          <div className="row"><button className="btn primary">Save</button><button type="button" className="btn ghost" onClick={() => setEditing(false)}>Cancel</button></div>
+        </div>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            run(api(`/api/customers/${id}`, { method: 'PATCH', body: f }), 'Customer saved.');
+          }}
+        >
+          <label>
+            Customer name
+            <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required maxLength={150} />
+          </label>
+          <label>
+            Notes
+            <textarea rows={3} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} maxLength={5000} placeholder="Billing preferences, who approves quotes, things to remember" />
+          </label>
+          {dirty && (
+            <div className="row">
+              <button className="btn primary">Save changes</button>
+              <button type="button" className="btn" onClick={() => setF({ name: c.name, notes: c.notes ?? '' })}>Discard</button>
+            </div>
+          )}
         </form>
-      ) : (
-        <section className="card">
-          <div className="row space"><h2>Details</h2><button className="btn ghost small" onClick={() => setEditing(true)}>Edit</button></div>
-          {c.notes ? <p style={{ whiteSpace: 'pre-wrap' }}>{c.notes}</p> : <p className="muted">No notes.</p>}
-          <p className="small muted">
-            {c.rentman_contact_id ? <>Linked to Rentman contact #{c.rentman_contact_id}. </> : <>Not in Rentman. </>}
-            <button className="btn ghost small" onClick={() => api(`/api/customers/${id}/rentman`, { body: {} }).then(() => { setNote(c.rentman_contact_id ? 'Updated in Rentman.' : 'Sent to Rentman.'); load(); }).catch((x) => setError(x.message))}>{c.rentman_contact_id ? 'Update name, email and phone in Rentman' : 'Add to Rentman'}</button>
-          </p>
+
+        <section style={{ marginTop: 32 }}>
+          <div className="row space" style={{ marginBottom: 8 }}>
+            <h2 style={{ margin: 0 }}>Contacts</h2>
+            <button className="btn-round sm primary" aria-label="Add a contact" title="Add a contact" onClick={() => setCf({ id: null, name: '', title: '', email: '', phone: '' })}>
+              <PlusIcon />
+            </button>
+          </div>
+          {d.contacts.length === 0 ? (
+            <p className="muted">No contacts yet.</p>
+          ) : (
+            <table className="dlist">
+              <tbody>
+                {d.contacts.map((p) => (
+                  <tr key={p.id} onClick={() => setCf({ id: p.id, name: p.name, title: p.title ?? '', email: p.email ?? '', phone: p.phone ?? '' })}>
+                    <td className="av-col"><span className={avClass(p.name)} aria-hidden="true">{initialsOf(p.name)}</span></td>
+                    <td>
+                      <b>{p.name}</b> {p.is_primary && <span className="chip">Main</span>}
+                      {p.title && <span className="sub">{p.title}</span>}
+                    </td>
+                    <td className="hide-sm">{p.email ?? <span className="muted">—</span>}</td>
+                    <td className="hide-sm">{p.phone ?? <span className="muted">—</span>}</td>
+                    <td className="edit-col" onClick={(e) => e.stopPropagation()}>
+                      {!p.is_primary && (
+                        <button className="btn ghost small" onClick={() => run(api(`/api/customer-contacts/${p.id}`, { method: 'PATCH', body: { primary: true } }))}>Make main</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </section>
-      )}
-      <section className="card">
-        <div className="row space"><h2>Contacts</h2><button className="btn small" onClick={() => setCf({ id: null, name: '', title: '', email: '', phone: '' })}>Add a contact</button></div>
-        {cf && (
-          <form className="grid-form" onSubmit={async (e) => {
-            e.preventDefault();
-            setError('');
-            try {
+
+        <section style={{ marginTop: 32 }}>
+          <div className="row space" style={{ marginBottom: 8 }}>
+            <h2 style={{ margin: 0 }}>Locations</h2>
+            <button className="btn-round sm primary" aria-label="Add a location" title="Add a location" onClick={() => setLf({ id: null, label: '', venue: '', address: '' })}>
+              <PlusIcon />
+            </button>
+          </div>
+          <p className="muted small">Offices, warehouses or venues this customer uses. New events for them can fill the venue and address from these.</p>
+          {d.locations.length === 0 ? (
+            <p className="muted">No locations yet.</p>
+          ) : (
+            <table className="dlist">
+              <tbody>
+                {d.locations.map((l) => (
+                  <tr key={l.id} onClick={() => setLf({ id: l.id, label: l.label, venue: l.venue ?? '', address: l.address ?? '' })}>
+                    <td className="av-col"><span className="av c5" aria-hidden="true">📍</span></td>
+                    <td>
+                      <b>{l.label}</b> {l.is_default && <span className="chip">Main</span>}
+                      {l.venue && <span className="sub">{l.venue}</span>}
+                    </td>
+                    <td className="wrap">{l.address ?? <span className="muted">No address</span>}</td>
+                    <td className="edit-col" onClick={(e) => e.stopPropagation()}>
+                      {!l.is_default && (
+                        <button className="btn ghost small" onClick={() => run(api(`/api/customer-locations/${l.id}`, { method: 'PATCH', body: { isDefault: true } }))}>Make main</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+
+        <p className="small muted" style={{ marginTop: 32 }}>
+          {c.rentman_contact_id ? <>Linked to Rentman contact #{c.rentman_contact_id}. </> : <>Not in Rentman yet. </>}
+          <button className="btn ghost small" onClick={() => run(api(`/api/customers/${id}/rentman`, { body: {} }), c.rentman_contact_id ? 'Updated in Rentman.' : 'Sent to Rentman.')}>
+            {c.rentman_contact_id ? 'Update in Rentman' : 'Add to Rentman'}
+          </button>
+        </p>
+      </div>
+
+      <aside className="split-aside">
+        <div className="aside-head">
+          <h2>Events</h2>
+          <Link href="/events" className="btn-round sm primary" aria-label="New event" title="New event">
+            <PlusIcon />
+          </Link>
+        </div>
+        <div className="phase-tabs" role="tablist" aria-label="Which events">
+          <button type="button" role="tab" aria-selected={tab === 'upcoming'} className={tab === 'upcoming' ? 'tab on' : 'tab'} onClick={() => setTab('upcoming')}>Upcoming ({upcoming.length})</button>
+          <button type="button" role="tab" aria-selected={tab === 'past'} className={tab === 'past' ? 'tab on' : 'tab'} onClick={() => setTab('past')}>Past ({past.length})</button>
+        </div>
+        {evs.length === 0 ? (
+          <p className="muted small">{tab === 'upcoming' ? 'No upcoming events. Pick this customer when you create one.' : 'No past events.'}</p>
+        ) : (
+          <div className="mini-list">
+            {evs.map((e) => (
+              <div key={e.id} className="mini">
+                <DateBadge date={e.start_date} />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <Link href={`/events/${e.id}`} style={{ color: 'inherit', textDecoration: 'none' }}><b>{e.name}</b></Link>
+                  <div className="meta">
+                    {fmtDate(e.start_date.slice(0, 10))}
+                    {e.end_date.slice(0, 10) !== e.start_date.slice(0, 10) && <> – {fmtDate(e.end_date.slice(0, 10))}</>}
+                    {e.venue ? ` · ${e.venue}` : ''} · {e.shift_count} shift{e.shift_count === 1 ? '' : 's'}
+                  </div>
+                  <div className="row" style={{ gap: 6, marginTop: 4 }}>
+                    <button className="btn ghost small" onClick={() => newQuote({ eventId: e.id })}>Quote</button>
+                    <CopyEvent eventId={e.id} name={e.name} customerId={c.id} onError={setError} />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="aside-head" style={{ marginTop: 28 }}>
+          <h2>Quotes</h2>
+          <button className="btn-round sm primary" aria-label="New quote" title="New quote" onClick={() => newQuote({ customerId: c.id, title: `Labor quote for ${c.name}` })}>
+            <PlusIcon />
+          </button>
+        </div>
+        {d.quotes.length === 0 ? (
+          <p className="muted small">No quotes yet.</p>
+        ) : (
+          <div className="mini-list">
+            {d.quotes.map((q) => (
+              <Link key={q.id} href={`/quotes/${q.id}`} className="mini">
+                <span className="av c2" aria-hidden="true" style={{ fontSize: 12 }}>#{q.number}</span>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <b>{q.title}</b>
+                  <div className="meta">{money(q.total)} · {fmtDate(String(q.created_at).slice(0, 10))}</div>
+                </div>
+                <Pill status={q.status} />
+              </Link>
+            ))}
+          </div>
+        )}
+      </aside>
+
+      {cf && (
+        <Modal title={cf.id ? 'Edit contact' : 'Add a contact'} onClose={() => setCf(null)}>
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
               const body = { name: cf.name, title: cf.title || null, email: cf.email || null, phone: cf.phone || null };
-              await (cf.id ? api(`/api/customer-contacts/${cf.id}`, { method: 'PATCH', body }) : api(`/api/customers/${id}/contacts`, { body }));
+              await run(cf.id ? api(`/api/customer-contacts/${cf.id}`, { method: 'PATCH', body }) : api(`/api/customers/${id}/contacts`, { body }));
               setCf(null);
-              load();
-            } catch (x) { setError((x as Error).message); }
-          }}>
-            <label>Name<input value={cf.name} onChange={(e) => setCf({ ...cf, name: e.target.value })} required maxLength={150} /></label>
-            <label>Role / title<input value={cf.title} onChange={(e) => setCf({ ...cf, title: e.target.value })} maxLength={100} placeholder="Producer, accounts payable…" /></label>
-            <label>Email<input type="email" value={cf.email} onChange={(e) => setCf({ ...cf, email: e.target.value })} /></label>
-            <label>Phone<input value={cf.phone} onChange={(e) => setCf({ ...cf, phone: e.target.value })} /></label>
-            <div className="row"><button className="btn primary">{cf.id ? 'Save contact' : 'Add contact'}</button><button type="button" className="btn ghost" onClick={() => setCf(null)}>Cancel</button></div>
+            }}
+          >
+            <div className="two">
+              <label>Name<input value={cf.name} onChange={(e) => setCf({ ...cf, name: e.target.value })} required maxLength={150} autoFocus /></label>
+              <label>Role / title<input value={cf.title} onChange={(e) => setCf({ ...cf, title: e.target.value })} maxLength={100} placeholder="Producer, accounts payable…" /></label>
+              <label>Email<input type="email" value={cf.email} onChange={(e) => setCf({ ...cf, email: e.target.value })} /></label>
+              <label>Phone<input value={cf.phone} onChange={(e) => setCf({ ...cf, phone: e.target.value })} /></label>
+            </div>
+            <div className="acts">
+              {cf.id && (
+                <button type="button" className="btn ghost danger" style={{ marginRight: 'auto' }} onClick={() => confirm(`Remove ${cf.name}?`) && run(api(`/api/customer-contacts/${cf.id}`, { method: 'DELETE' })).then(() => setCf(null))}>
+                  Remove
+                </button>
+              )}
+              <button type="button" className="btn" onClick={() => setCf(null)}>Cancel</button>
+              <button className="btn primary">{cf.id ? 'Save contact' : 'Add contact'}</button>
+            </div>
           </form>
-        )}
-        {d.contacts.length === 0 ? <Empty>No contacts yet.</Empty> : (
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-            {d.contacts.map((p) => (
-              <li key={p.id} className="row space" style={{ padding: '.5rem 0', borderTop: '1px solid var(--border)', flexWrap: 'wrap' }}>
-                <div>
-                  <b>{p.name}</b> {p.is_primary && <span className="chip open">Main contact</span>}
-                  <div className="muted small">{[p.title, p.email, p.phone].filter(Boolean).join(' · ') || 'No details'}</div>
-                </div>
-                <span className="row">
-                  {!p.is_primary && <button className="btn ghost small" onClick={() => api(`/api/customer-contacts/${p.id}`, { method: 'PATCH', body: { primary: true } }).then(load).catch((x) => setError(x.message))}>Make main</button>}
-                  <button className="btn ghost small" onClick={() => setCf({ id: p.id, name: p.name, title: p.title ?? '', email: p.email ?? '', phone: p.phone ?? '' })}>Edit</button>
-                  <button className="btn ghost small danger" onClick={() => confirm(`Remove ${p.name}?`) && api(`/api/customer-contacts/${p.id}`, { method: 'DELETE' }).then(load).catch((x) => setError(x.message))}>Remove</button>
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-      <section className="card">
-        <div className="row space"><h2>Locations</h2><button className="btn small" onClick={() => setLf({ id: null, label: '', venue: '', address: '' })}>Add a location</button></div>
-        <p className="muted small">Offices, warehouses, or venues this customer uses. When you create an event for them you can fill the venue and address from one of these.</p>
-        {lf && (
-          <form className="grid-form" onSubmit={async (e) => {
-            e.preventDefault();
-            setError('');
-            try {
+        </Modal>
+      )}
+      {lf && (
+        <Modal title={lf.id ? 'Edit location' : 'Add a location'} onClose={() => setLf(null)}>
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
               const body = { label: lf.label, venue: lf.venue || null, address: lf.address || null };
-              await (lf.id ? api(`/api/customer-locations/${lf.id}`, { method: 'PATCH', body }) : api(`/api/customers/${id}/locations`, { body }));
+              await run(lf.id ? api(`/api/customer-locations/${lf.id}`, { method: 'PATCH', body }) : api(`/api/customers/${id}/locations`, { body }));
               setLf(null);
-              load();
-            } catch (x) { setError((x as Error).message); }
-          }}>
-            <label>Name<input value={lf.label} onChange={(e) => setLf({ ...lf, label: e.target.value })} required maxLength={100} placeholder="Head office, Warehouse, Arena…" /></label>
-            <label>Venue name<input value={lf.venue} onChange={(e) => setLf({ ...lf, venue: e.target.value })} maxLength={200} /></label>
+            }}
+          >
+            <div className="two">
+              <label>Name<input value={lf.label} onChange={(e) => setLf({ ...lf, label: e.target.value })} required maxLength={100} placeholder="Head office, Warehouse, Arena…" autoFocus /></label>
+              <label>Venue name<input value={lf.venue} onChange={(e) => setLf({ ...lf, venue: e.target.value })} maxLength={200} /></label>
+            </div>
             <label>Street address<input value={lf.address} onChange={(e) => setLf({ ...lf, address: e.target.value })} maxLength={300} /></label>
-            <div className="row"><button className="btn primary">{lf.id ? 'Save location' : 'Add location'}</button><button type="button" className="btn ghost" onClick={() => setLf(null)}>Cancel</button></div>
+            <div className="acts">
+              {lf.id && (
+                <button type="button" className="btn ghost danger" style={{ marginRight: 'auto' }} onClick={() => confirm(`Remove ${lf.label}?`) && run(api(`/api/customer-locations/${lf.id}`, { method: 'DELETE' })).then(() => setLf(null))}>
+                  Remove
+                </button>
+              )}
+              <button type="button" className="btn" onClick={() => setLf(null)}>Cancel</button>
+              <button className="btn primary">{lf.id ? 'Save location' : 'Add location'}</button>
+            </div>
           </form>
-        )}
-        {d.locations.length === 0 ? <Empty>No locations yet.</Empty> : (
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-            {d.locations.map((l) => (
-              <li key={l.id} className="row space" style={{ padding: '.5rem 0', borderTop: '1px solid var(--border)', flexWrap: 'wrap' }}>
-                <div>
-                  <b>{l.label}</b> {l.is_default && <span className="chip open">Main location</span>}
-                  <div className="muted small">{[l.venue, l.address].filter(Boolean).join(' · ') || 'No address'}</div>
-                </div>
-                <span className="row">
-                  {!l.is_default && <button className="btn ghost small" onClick={() => api(`/api/customer-locations/${l.id}`, { method: 'PATCH', body: { isDefault: true } }).then(load).catch((x) => setError(x.message))}>Make main</button>}
-                  <button className="btn ghost small" onClick={() => setLf({ id: l.id, label: l.label, venue: l.venue ?? '', address: l.address ?? '' })}>Edit</button>
-                  <button className="btn ghost small danger" onClick={() => confirm(`Remove ${l.label}?`) && api(`/api/customer-locations/${l.id}`, { method: 'DELETE' }).then(load).catch((x) => setError(x.message))}>Remove</button>
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-      <section className="card">
-        <h2>Events</h2>
-        {d.events.length === 0 ? <Empty>No events yet. Pick this customer when you create an event, or use "Import from event client names" on the Customers page.</Empty> : (
-          <>
-            {upcoming.length > 0 && <><h3 className="small muted">Upcoming</h3><ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>{upcoming.map(evRow)}</ul></>}
-            {past.length > 0 && <><h3 className="small muted" style={{ marginTop: '1rem' }}>Past events: copy one to start a new event the same way</h3><ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>{past.map(evRow)}</ul></>}
-          </>
-        )}
-      </section>
-      <section className="card">
-        <h2>Quotes</h2>
-        {d.quotes.length === 0 ? <Empty>No quotes yet.</Empty> : (
-          <table className="table">
-            <thead><tr><th>#</th><th>Title</th><th>Total</th><th>Status</th></tr></thead>
-            <tbody>{d.quotes.map((q) => <tr key={q.id}><td>{q.number}</td><td><Link href={`/quotes/${q.id}`}>{q.title}</Link></td><td>{money(q.total)}</td><td><Pill status={q.status} /></td></tr>)}</tbody>
-          </table>
-        )}
-      </section>
-    </>
+        </Modal>
+      )}
+    </div>
   );
 }
 

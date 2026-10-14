@@ -9,6 +9,7 @@ import { roleKey } from '@/components/Stars';
 import FillFromGroup from '@/components/FillFromGroup';
 import CrewPick, { PickOption } from '@/components/CrewPick';
 import InvoicePanel from '@/components/InvoicePanel';
+import TopbarAction, { PlusIcon, TrashIcon, avClass, initialsOf } from '@/components/TopbarAction';
 import CopyEvent from '@/components/CopyEvent';
 import { api, ApiError, Me, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
 import { EventDetails, Phases, Clocking, RentmanCard, EventFull, Phase, RmView } from '@/components/EventInfo';
@@ -118,6 +119,18 @@ function Body({ me }: { me: Me }) {
   const [settings, setSettings] = useState<null | 'clock' | 'ot' | 'tpl' | 'rentman' | 'invoice'>(null);
   // Rentman lives in the same side panel, opened from its own button next to Event settings.
   const [rm, setRm] = useState<RmView | null>(null);
+  // The customer's main contact, shown in the strip at the top (like the design's Deal Details).
+  const [custInfo, setCustInfo] = useState<{ id: string; name: string; contact: string | null; email: string | null; phone: string | null } | null>(null);
+  const custId = d?.event.customer_id ?? null;
+  useEffect(() => {
+    if (!custId) return setCustInfo(null);
+    api<{ customer: { id: string; name: string }; contacts: { name: string; email: string | null; phone: string | null; is_primary: boolean }[] }>(`/api/customers/${custId}`)
+      .then((r) => {
+        const m = r.contacts.find((x) => x.is_primary) ?? r.contacts[0];
+        setCustInfo({ id: r.customer.id, name: r.customer.name, contact: m?.name ?? null, email: m?.email ?? null, phone: m?.phone ?? null });
+      })
+      .catch(() => setCustInfo(null));
+  }, [custId]);
   useEffect(() => {
     api<RmView>(`/api/events/${id}/rentman`).then(setRm).catch(() => setRm(null));
   }, [id]);
@@ -508,14 +521,35 @@ function Body({ me }: { me: Me }) {
   );
 
   return (
-    <>
-      <p className="small">
-        <Link href="/events">← Events</Link>
+    <div className="split">
+      <div className="split-main">
+      <TopbarAction>
+        <button className="btn primary" onClick={() => { shiftForm.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); setTimeout(() => (shiftForm.current?.querySelector('select, input') as HTMLElement | null)?.focus(), 350); }}>
+          Add Shift
+          <PlusIcon />
+        </button>
+      </TopbarAction>
+      <p className="small" style={{ margin: '0 0 16px' }}>
+        <Link href="/events">← All events</Link>
       </p>
-      <div className="row space">
-        <div>
+      {custInfo && (
+        <dl className="strip">
+          <div className="who">
+            <span className={avClass(custInfo.name)} aria-hidden="true">{initialsOf(custInfo.name)}</span>
+            <div>
+              <dt>Customer</dt>
+              <dd><Link href={`/customers/${custInfo.id}`} style={{ color: 'inherit', textDecoration: 'none' }}>{custInfo.name}</Link></dd>
+            </div>
+          </div>
+          {custInfo.contact && <div><dt>Contact</dt><dd>{custInfo.contact}</dd></div>}
+          {custInfo.email && <div><dt>Email</dt><dd><a href={`mailto:${custInfo.email}`} style={{ color: 'inherit', textDecoration: 'none' }}>{custInfo.email}</a></dd></div>}
+          {custInfo.phone && <div><dt>Phone</dt><dd><a href={`tel:${custInfo.phone}`} style={{ color: 'inherit', textDecoration: 'none' }}>{custInfo.phone}</a></dd></div>}
+        </dl>
+      )}
+      <div className="title-row">
+        <div style={{ minWidth: 0 }}>
           <h1>{ev.name}</h1>
-          <div className="muted">
+          <div className="sub">
             {[ev.client, ev.venue].filter(Boolean).join(' · ')}
             {(ev.client || ev.venue) && ' · '}
             {fmtDate(ev.start_date.slice(0, 10))}
@@ -533,47 +567,28 @@ function Body({ me }: { me: Me }) {
               </button>
             )}
           </div>
-        </div>
-        <div className="row" style={{ gap: '0.4rem' }}>
-        <button className="btn small" onClick={() => setSettings('clock')} aria-haspopup="dialog">
-          ⚙ Event settings
-        </button>
-        {rm && (rm.connected || rm.linked) && (
-          <button className="btn small" onClick={() => setSettings('rentman')} aria-haspopup="dialog" title={rm.project ? rm.project.name : 'Link a Rentman project'}>
-            Rentman{rm.linked && rm.project ? ` · ${rm.project.number ? `#${rm.project.number}` : rm.project.name}` : ''}
-          </button>
-        )}
-        {(me.role === 'admin' || me.canAdjustRates) && (
-          <button className="btn small" onClick={() => setSettings('invoice')} aria-haspopup="dialog">
-            Invoice
-          </button>
-        )}
-        <button
-          className="btn small"
-          onClick={() =>
-            api<{ id: string }>('/api/chat/channels', { body: { eventId: id } })
-              .then((r) => router.push(`/chat?c=${r.id}`))
-              .catch((e) => setError(e.message))
-          }
-        >
-          Event chat
-        </button>
-        <button
-          className="btn small"
-          onClick={() => api<{ quote: { id: string } }>('/api/quotes', { body: { eventId: id } }).then((r) => router.push(`/quotes/${r.quote.id}`)).catch((e) => setError(e.message))}
-        >
-          Create quote
-        </button>
-        <CopyEvent eventId={id} name={ev.name} customerId={ev.customer_id ?? null} onError={setError} label="Copy event" />
-        <button
-          className="btn ghost small danger"
-          onClick={() => {
-            if (confirm(`Delete "${ev.name}" and all its shifts?`)) api(`/api/events/${id}`, { method: 'DELETE' }).then(() => router.replace('/events'));
-          }}
-        >
-          Delete event
-        </button>
-        </div>
+                </div>
+          <div className="acts">
+            <button className="btn small" onClick={() => setSettings('clock')} aria-haspopup="dialog">⚙ Settings</button>
+            {rm && (rm.connected || rm.linked) && (
+              <button className="btn small" onClick={() => setSettings('rentman')} aria-haspopup="dialog" title={rm.project ? rm.project.name : 'Link a Rentman project'}>
+                Rentman{rm.linked && rm.project ? ` · ${rm.project.number ? `#${rm.project.number}` : rm.project.name}` : ''}
+              </button>
+            )}
+            {(me.role === 'admin' || me.canAdjustRates) && (
+              <button className="btn small" onClick={() => setSettings('invoice')} aria-haspopup="dialog">Invoice</button>
+            )}
+            <CopyEvent eventId={id} name={ev.name} customerId={ev.customer_id ?? null} onError={setError} label="Copy" />
+            <button className="btn-round" title="Event chat" aria-label="Event chat" onClick={() => api<{ id: string }>('/api/chat/channels', { body: { eventId: id } }).then((r) => router.push(`/chat?c=${r.id}`)).catch((e) => setError(e.message))}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z" /></svg>
+            </button>
+            <button className="btn-round" title="Create a quote" aria-label="Create a quote" onClick={() => api<{ quote: { id: string } }>('/api/quotes', { body: { eventId: id } }).then((r) => router.push(`/quotes/${r.quote.id}`)).catch((e) => setError(e.message))}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4" /></svg>
+            </button>
+            <button className="btn-round danger" title="Delete event" aria-label="Delete event" onClick={() => { if (confirm(`Delete "${ev.name}" and all its shifts?`)) api(`/api/events/${id}`, { method: 'DELETE' }).then(() => router.replace('/events')); }}>
+              <TrashIcon />
+            </button>
+          </div>
       </div>
       {error && <Banner onClose={() => setError('')}>{error}</Banner>}
       {note && (
@@ -583,9 +598,11 @@ function Body({ me }: { me: Me }) {
       )}
 
       <EventDetails ev={ev} hasPhases={d.phases.length > 0} onSaved={load} onError={setError} />
-      <Phases eventId={id} phases={d.phases} onChanged={load} onError={setError} />
-
-      <section className="card" ref={shiftForm}>
+      {(
+        <>{groups.map((g) => groupSection(g))}</>      )}
+      </div>
+      <aside className="split-aside">
+      <section className="card aside-form" ref={shiftForm}>
         <h2>Add a shift</h2>
         {d.phases.length > 0 && (
           <div className="phase-tabs" role="tablist" aria-label="Phase for the new shift">
@@ -718,10 +735,9 @@ function Body({ me }: { me: Me }) {
           </div>
         </form>
       </section>
+      <Phases eventId={id} phases={d.phases} onChanged={load} onError={setError} />
+      </aside>
 
-
-      {(
-        <>{groups.map((g) => groupSection(g))}</>      )}
 
       {settings && typeof document !== 'undefined' && createPortal(
         <div className="drawer-backdrop" onMouseDown={() => setSettings(null)}>
@@ -802,7 +818,7 @@ function Body({ me }: { me: Me }) {
         </div>,
         document.body,
       )}
-    </>
+    </div>
   );
 }
 

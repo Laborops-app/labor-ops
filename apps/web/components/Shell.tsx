@@ -318,24 +318,18 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
           </Link>
           <span className="page-title">{current?.label ?? ''}</span>
           <span className="spacer" />
+          <div id="topbar-actions" className="topbar-actions" />
           <InstallApp className="btn small install-btn" />
           <InstallPopup />
-          <NotificationBell />
-          <Link href="/profile" className="who" aria-label="My profile">
-            <span className="avatar solid" aria-hidden="true">
-              {initials(me.name)}
-            </span>
-            <span className="txt">
-              <span className="name">{me.name}</span>
-              <span className="role">
-                {me.company ? `${me.company} · ` : ''}
-                {roleLabel(me.role)}
-              </span>
-            </span>
-          </Link>
           <ThemeToggle />
-          <button className="btn ghost small" onClick={signOut}>
-            Sign out
+          <NotificationBell />
+          <Link href="/profile" className="me" aria-label={`My profile (${me.name}, ${roleLabel(me.role)})`} title={`${me.name} · ${me.company ? `${me.company} · ` : ''}${roleLabel(me.role)}`}>
+            {initials(me.name)}
+          </Link>
+          <button className="icon-btn" onClick={signOut} aria-label="Sign out" title="Sign out">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l5-5-5-5M15 12H4" />
+            </svg>
           </button>
         </header>
         <main className="page">{children(me)}</main>
