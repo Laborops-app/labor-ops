@@ -8,9 +8,10 @@ import { Banner, Pill } from '@/components/ui';
 import CopyEvent from '@/components/CopyEvent';
 import TopbarAction, { PlusIcon, TrashIcon, avClass, initialsOf } from '@/components/TopbarAction';
 import { api, fmtDate, money } from '@/lib/api';
+import { ContactDetails, ContactGrid, type Contact } from '@/components/crm/ContactCards';
+import { STAGES, type Stage } from '@/lib/crm';
 
-type Cust = { id: string; name: string; notes: string | null; rentman_contact_id: number | null; parent_id?: string | null; parent_name?: string | null };
-type Contact = { id: string; name: string; title: string | null; email: string | null; phone: string | null; notes: string | null; is_primary: boolean };
+type Cust = { id: string; name: string; stage: Stage; notes: string | null; rentman_contact_id: number | null; parent_id?: string | null; parent_name?: string | null };
 type Loc = { id: string; label: string; venue: string | null; address: string | null; notes: string | null; is_default: boolean };
 type Ev = { id: string; name: string; venue: string | null; start_date: string; end_date: string; shift_count: number; slots: number };
 type Qt = { id: string; number: number; title: string; status: string; total: number; created_at: string };
@@ -32,7 +33,8 @@ function Body() {
   const router = useRouter();
   const [d, setD] = useState<Data | null>(null);
   const [f, setF] = useState({ name: '', notes: '' });
-  const [cf, setCf] = useState<{ id: string | null; name: string; title: string; email: string; phone: string } | null>(null);
+  const [cf, setCf] = useState<{ id: string | null; name: string; title: string; email: string; phone: string; notes: string } | null>(null);
+  const [open, setOpen] = useState<Contact | null>(null);
   const [lf, setLf] = useState<{ id: string | null; label: string; venue: string; address: string } | null>(null);
   const [tab, setTab] = useState<'upcoming' | 'past'>('upcoming');
   const [error, setError] = useState('');
@@ -57,6 +59,8 @@ function Body() {
   const upcoming = d.events.filter((e) => e.end_date.slice(0, 10) >= today);
   const past = d.events.filter((e) => e.end_date.slice(0, 10) < today).reverse();
   const evs = tab === 'upcoming' ? upcoming : past;
+  const editContact = (p: Contact) => setCf({ id: p.id, name: p.name, title: p.title ?? '', email: p.email ?? '', phone: p.phone ?? '', notes: p.notes ?? '' });
+  const mainAddress = d.locations.find((l) => l.is_default)?.address ?? d.locations[0]?.address ?? null;
   const newQuote = (body: object) => api<{ quote: { id: string } }>('/api/quotes', { body }).then((r) => router.push(`/quotes/${r.quote.id}`)).catch((x) => setError(x.message));
 
   return (
@@ -99,6 +103,12 @@ function Body() {
             <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required maxLength={150} />
           </label>
           <label>
+            Stage
+            <select value={c.stage} onChange={(e) => run(api(`/api/customers/${id}`, { method: 'PATCH', body: { stage: e.target.value } }), `Moved to ${STAGES.find((x) => x.key === e.target.value)?.label}.`)}>
+              {STAGES.map((st) => <option key={st.key} value={st.key}>{st.label} · {st.hint}</option>)}
+            </select>
+          </label>
+          <label>
             Notes
             <textarea rows={3} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} maxLength={5000} placeholder="Billing preferences, who approves quotes, things to remember" />
           </label>
@@ -135,33 +145,20 @@ function Body() {
         <section style={{ marginTop: 32 }}>
           <div className="row space" style={{ marginBottom: 8 }}>
             <h2 style={{ margin: 0 }}>Contacts</h2>
-            <button className="btn-round sm primary" aria-label="Add a contact" title="Add a contact" onClick={() => setCf({ id: null, name: '', title: '', email: '', phone: '' })}>
+            <button className="btn-round sm primary" aria-label="Add a contact" title="Add a contact" onClick={() => setCf({ id: null, name: '', title: '', email: '', phone: '', notes: '' })}>
               <PlusIcon />
             </button>
           </div>
           {d.contacts.length === 0 ? (
             <p className="muted">No contacts yet.</p>
           ) : (
-            <table className="dlist">
-              <tbody>
-                {d.contacts.map((p) => (
-                  <tr key={p.id} onClick={() => setCf({ id: p.id, name: p.name, title: p.title ?? '', email: p.email ?? '', phone: p.phone ?? '' })}>
-                    <td className="av-col"><span className={avClass(p.name)} aria-hidden="true">{initialsOf(p.name)}</span></td>
-                    <td>
-                      <b>{p.name}</b> {p.is_primary && <span className="chip">Main</span>}
-                      {p.title && <span className="sub">{p.title}</span>}
-                    </td>
-                    <td className="hide-sm">{p.email ?? <span className="muted">—</span>}</td>
-                    <td className="hide-sm">{p.phone ?? <span className="muted">—</span>}</td>
-                    <td className="edit-col" onClick={(e) => e.stopPropagation()}>
-                      {!p.is_primary && (
-                        <button className="btn ghost small" onClick={() => run(api(`/api/customer-contacts/${p.id}`, { method: 'PATCH', body: { primary: true } }))}>Make main</button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <ContactGrid
+              contacts={d.contacts}
+              onOpen={setOpen}
+              onEdit={editContact}
+              onMain={(p) => run(api(`/api/customer-contacts/${p.id}`, { method: 'PATCH', body: { primary: true } }), `${p.name} is now the main contact.`)}
+              onRemove={(p) => confirm(`Remove ${p.name}?`) && run(api(`/api/customer-contacts/${p.id}`, { method: 'DELETE' }))}
+            />
           )}
         </section>
 
@@ -265,12 +262,21 @@ function Body() {
         )}
       </aside>
 
+      {open && (
+        <ContactDetails
+          c={d.contacts.find((x) => x.id === open.id) ?? open}
+          company={c.name}
+          address={mainAddress}
+          onClose={() => setOpen(null)}
+          onEdit={() => { const p = d.contacts.find((x) => x.id === open.id) ?? open; setOpen(null); editContact(p); }}
+        />
+      )}
       {cf && (
         <Modal title={cf.id ? 'Edit contact' : 'Add a contact'} onClose={() => setCf(null)}>
           <form
             onSubmit={async (e) => {
               e.preventDefault();
-              const body = { name: cf.name, title: cf.title || null, email: cf.email || null, phone: cf.phone || null };
+              const body = { name: cf.name, title: cf.title || null, email: cf.email || null, phone: cf.phone || null, notes: cf.notes || null };
               await run(cf.id ? api(`/api/customer-contacts/${cf.id}`, { method: 'PATCH', body }) : api(`/api/customers/${id}/contacts`, { body }));
               setCf(null);
             }}
@@ -281,6 +287,7 @@ function Body() {
               <label>Email<input type="email" value={cf.email} onChange={(e) => setCf({ ...cf, email: e.target.value })} /></label>
               <label>Phone<input value={cf.phone} onChange={(e) => setCf({ ...cf, phone: e.target.value })} /></label>
             </div>
+            <label>Notes<textarea rows={3} value={cf.notes} onChange={(e) => setCf({ ...cf, notes: e.target.value })} maxLength={2000} placeholder="Best time to call, who they report to…" /></label>
             <div className="acts">
               {cf.id && (
                 <button type="button" className="btn ghost danger" style={{ marginRight: 'auto' }} onClick={() => confirm(`Remove ${cf.name}?`) && run(api(`/api/customer-contacts/${cf.id}`, { method: 'DELETE' })).then(() => setCf(null))}>

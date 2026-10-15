@@ -55,7 +55,21 @@ export async function setMainAddress(c: PoolClient, tid: string, customerId: str
 
 export type NewCustomer = {
   name: string; parentId?: string | null; contactName?: string | null; email?: string | null; phone?: string | null; address?: string | null; notes?: string | null;
+  stage?: CustomerStage;
 };
+export const STAGES = ['lead', 'pending', 'active', 'inactive'] as const;
+export type CustomerStage = (typeof STAGES)[number];
+
+/** A customer with new work moves forward on the board on its own (never backwards). */
+export async function advanceStage(c: PoolClient, customerId: string | null | undefined, to: 'pending' | 'active') {
+  if (!customerId) return;
+  const from = to === 'active' ? ['lead', 'pending', 'inactive'] : ['lead'];
+  await c.query(
+    `UPDATE customers SET stage = $2, board_position = (SELECT COALESCE(min(board_position), 1) - 1 FROM customers WHERE stage = $2)
+      WHERE id = $1 AND stage = ANY($3::text[])`,
+    [customerId, to, from],
+  );
+}
 export class CustomerError extends Error {
   constructor(message: string, public status = 400) {
     super(message);
@@ -74,7 +88,12 @@ export async function createCustomer(c: PoolClient, tid: string, by: string | nu
     if (!norm(name).startsWith(norm(parent.name))) name = `${parent.name} – ${name}`;
   }
   if ((await c.query('SELECT 1 FROM customers WHERE lower(name) = lower($1)', [name])).rowCount) throw new CustomerError(`A customer named "${name}" already exists`, 409);
-  const row = (await c.query('INSERT INTO customers (tenant_id, name, notes, parent_id) VALUES ($1,$2,$3,$4) RETURNING id', [tid, name, x.notes || null, parent?.id ?? null])).rows[0];
+  const stage = x.stage ?? 'lead';
+  const row = (await c.query(
+    `INSERT INTO customers (tenant_id, name, notes, parent_id, stage, board_position)
+     VALUES ($1,$2,$3,$4,$5, (SELECT COALESCE(min(board_position), 1) - 1 FROM customers WHERE stage = $5)) RETURNING id`,
+    [tid, name, x.notes || null, parent?.id ?? null, stage],
+  )).rows[0];
   let contact = { contactName: x.contactName, email: x.email, phone: x.phone };
   let address = x.address;
   if (parent) {

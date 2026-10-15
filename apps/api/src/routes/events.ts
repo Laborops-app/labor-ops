@@ -7,7 +7,7 @@ import { respondLinks } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
-import { CustomerError, createCustomer } from '../crm';
+import { CustomerError, advanceStage, createCustomer } from '../crm';
 import { getToken, pushEventRequest, RentmanError } from '../rentman';
 import { STATUSES } from '../pipeline';
 import { flagText, reviewFlags } from '../reviews';
@@ -266,6 +266,7 @@ export async function eventRoutes(app: FastifyInstance) {
         const token = await getToken(c);
         if (token) await syncEquipment(c, req.user.tid, token, rentmanId).catch(() => {});
       }
+      await advanceStage(c, custId, 'active');
       await audit(c, req.user.tid, req.user.sub, 'event.create', 'event', r.rows[0].id);
       return { ...r.rows[0], new_customer: made };
     });

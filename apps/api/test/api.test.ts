@@ -2155,6 +2155,31 @@ test('copy event: dates shift, phases and shifts come along, crew do not', async
   assert.equal((await call(a, 'POST', `/api/events/${src}/copy`, { name: 'Bare', startDate: '2032-01-01', includeShifts: false, includePhases: false })).json.shifts, 0);
 });
 
+test('customers board: stages, moving cards, new work moves a customer forward', async () => {
+  const a = await register('crmstage');
+  const lead = (await call(a, 'POST', '/api/customers', { name: 'Board Lead Co' })).json.customer;
+  assert.equal(lead.stage, 'lead');
+  const act = (await call(a, 'POST', '/api/customers', { name: 'Board Active Co', stage: 'active' })).json.customer;
+  assert.equal(act.stage, 'active');
+  assert.equal((await call(a, 'POST', '/api/customers', { name: 'Bad Stage', stage: 'gold' })).status, 400);
+  // drag a card to another column and to a spot in it; name and contact stay untouched
+  const mv = await call(a, 'PATCH', `/api/customers/${act.id}`, { stage: 'inactive', position: 5 });
+  assert.equal(mv.status, 200, mv.text);
+  assert.equal(mv.json.customer.stage, 'inactive');
+  assert.equal(mv.json.customer.board_position, 5);
+  assert.equal(mv.json.customer.name, 'Board Active Co');
+  // a quote moves a lead to "quoted", an event makes it active
+  await call(a, 'POST', '/api/quotes', { customerId: lead.id, title: 'First quote' });
+  const list = async () => (await call(a, 'GET', '/api/customers')).json.customers as any[];
+  assert.equal((await list()).find((c) => c.id === lead.id).stage, 'pending');
+  await call(a, 'POST', '/api/events', { name: 'Board Show', customerId: lead.id, startDate: '2030-03-01', endDate: '2030-03-01' });
+  assert.equal((await list()).find((c) => c.id === lead.id).stage, 'active');
+  await call(a, 'POST', '/api/events', { name: 'Board Show 2', customerId: act.id, startDate: '2030-03-01', endDate: '2030-03-01' });
+  assert.equal((await list()).find((c) => c.id === act.id).stage, 'active', 'inactive comes back when there is new work');
+  const audits = await adminQuery("SELECT action FROM audit_logs WHERE entity_id = $1 AND action = 'customer.stage'", [act.id]);
+  assert.equal(audits.rowCount, 1);
+});
+
 test('quotes: lines from an event, totals, send, customer accepts without signing in', async () => {
   const a = await register('qte');
   const b = await register('qte2');

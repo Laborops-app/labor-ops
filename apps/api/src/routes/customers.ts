@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
 import { guard } from '../auth';
-import { CUSTOMER_SQL, CustomerError, addContact, addLocation, createCustomer, setMainContact, setMainAddress } from '../crm';
+import { CUSTOMER_SQL, CustomerError, STAGES, addContact, addLocation, createCustomer, setMainContact, setMainAddress } from '../crm';
 
 const uuid = z.string().uuid();
 const mgr = guard('admin', 'manager');
@@ -11,6 +11,7 @@ const email = z.string().trim().email().max(200).optional().nullable().or(z.lite
 const body = z.object({
   name: z.string().trim().min(1).max(150),
   contactName: opt(150), email, phone: opt(50), address: opt(300), notes: z.string().trim().max(5000).optional().nullable(),
+  stage: z.enum(STAGES).optional(),
 });
 const contactBody = z.object({ name: z.string().trim().min(1).max(150), title: opt(100), email, phone: opt(50), notes: opt(2000), primary: z.boolean().optional() });
 const locationBody = z.object({ label: z.string().trim().min(1).max(100), venue: opt(200), address: opt(300), notes: opt(2000), isDefault: z.boolean().optional() });
@@ -23,7 +24,7 @@ export async function customerRoutes(app: FastifyInstance) {
           `SELECT u.*, (SELECT count(*)::int FROM events e WHERE e.customer_id = u.id) AS event_count,
                   (SELECT count(*)::int FROM quotes q WHERE q.customer_id = u.id) AS quote_count,
                   (SELECT max(e.start_date) FROM events e WHERE e.customer_id = u.id) AS last_event
-             FROM (${CUSTOMER_SQL}) u ORDER BY lower(u.name)`,
+             FROM (${CUSTOMER_SQL}) u ORDER BY u.board_position, lower(u.name)`,
         )
       ).rows,
     })),
@@ -83,10 +84,17 @@ export async function customerRoutes(app: FastifyInstance) {
 
   app.patch('/api/customers/:id', { preHandler: mgr }, async (req, reply) => {
     const { id } = z.object({ id: uuid }).parse(req.params);
-    const b = body.partial().extend({ parentId: uuid.nullable().optional() }).parse(req.body);
+    const b = body.partial().extend({ parentId: uuid.nullable().optional(), position: z.number().finite().optional() }).parse(req.body);
     const r = await withTenant(req.user.tid, async (c) => {
       const cur = (await c.query('SELECT * FROM customers WHERE id = $1', [id])).rows[0];
       if (!cur) return { code: 404, error: 'Customer not found' };
+      // Moving a card on the Customers board: a new stage and/or a spot in the column.
+      if (b.stage !== undefined || b.position !== undefined) {
+        const stage = b.stage ?? cur.stage;
+        const pos = b.position ?? (stage === cur.stage ? cur.board_position : (await c.query('SELECT COALESCE(min(board_position), 1) - 1 AS p FROM customers WHERE stage = $1', [stage])).rows[0].p);
+        await c.query('UPDATE customers SET stage = $2, board_position = $3 WHERE id = $1', [id, stage, pos]);
+        if (stage !== cur.stage) await audit(c, req.user.tid, req.user.sub, 'customer.stage', 'customer', id, { from: cur.stage, to: stage });
+      }
       if (b.parentId !== undefined) {
         // A customer cannot sit under itself or under one of its own divisions.
         const loop = b.parentId && (await c.query(
@@ -98,11 +106,14 @@ export async function customerRoutes(app: FastifyInstance) {
       }
       if (b.name && (await c.query('SELECT 1 FROM customers WHERE lower(name) = lower($1) AND id <> $2', [b.name, id])).rowCount) return { code: 409, error: 'A customer with that name already exists' };
       const name = b.name ?? cur.name;
-      await c.query('UPDATE customers SET name = $2, notes = $3 WHERE id = $1', [id, name, b.notes === undefined ? cur.notes : b.notes || null]);
-      await setMainContact(c, req.user.tid, id, b, name);
-      await setMainAddress(c, req.user.tid, id, b.address);
-      if (b.name && b.name !== cur.name) await c.query('UPDATE events SET client = $2 WHERE customer_id = $1', [id, b.name]);
-      await audit(c, req.user.tid, req.user.sub, 'customer.update', 'customer', id, b);
+      const onlyBoard = Object.keys(b).every((k) => k === 'stage' || k === 'position');
+      if (!onlyBoard) {
+        await c.query('UPDATE customers SET name = $2, notes = $3 WHERE id = $1', [id, name, b.notes === undefined ? cur.notes : b.notes || null]);
+        await setMainContact(c, req.user.tid, id, b, name);
+        await setMainAddress(c, req.user.tid, id, b.address);
+        if (b.name && b.name !== cur.name) await c.query('UPDATE events SET client = $2 WHERE customer_id = $1', [id, b.name]);
+        await audit(c, req.user.tid, req.user.sub, 'customer.update', 'customer', id, b);
+      }
       return { code: 200, customer: (await c.query(`SELECT * FROM (${CUSTOMER_SQL}) u WHERE u.id = $1`, [id])).rows[0] };
     });
     const { code, ...rest } = r as { code: number; [k: string]: unknown };

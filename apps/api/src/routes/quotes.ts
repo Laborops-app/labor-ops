@@ -7,7 +7,7 @@ import { onQuote } from '../pipeline';
 import { guard } from '../auth';
 import { config } from '../config';
 import { canAdjustRates } from '../rates';
-import { CUSTOMER_SQL } from '../crm';
+import { CUSTOMER_SQL, advanceStage } from '../crm';
 import { hoursBetween } from '../pay';
 import { notifyStaff } from '../notify';
 import { DEFAULT_LAYOUT, layoutSchema, renderQuotePdf, type Layout, type QuoteData } from '../quotePdf';
@@ -196,6 +196,7 @@ export async function quoteRoutes(app: FastifyInstance) {
         [req.user.tid, num, customerId, b.eventId ?? null, title, b.validUntil ?? null, b.intro ?? null, b.terms ?? null, b.taxPct ?? 0, allowed ? b.discount ?? 0 : 0, req.user.sub])).rows[0];
       await writeLines(c, req.user.tid, q.id, lines);
       await audit(c, req.user.tid, req.user.sub, 'quote.create', 'quote', q.id, { number: num });
+      await advanceStage(c, customerId, 'pending');
       await onQuote(c, req.user.tid, b.eventId ?? null, 'draft', req.user.sub);
       return { code: 201, ...(await load(c, q.id)) };
     });
