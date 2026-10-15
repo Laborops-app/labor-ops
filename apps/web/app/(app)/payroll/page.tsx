@@ -13,7 +13,7 @@ type Data = {
   history: { id: string; provider: string; period_start: string; period_end: string; people: number; entries: number; gross: string | null; created_at: string; created_by: string | null }[];
 };
 const LABEL: Record<string, string> = { adp: 'ADP', gusto: 'Gusto', quickbooks: 'QuickBooks', csv: 'Detail CSV' };
-const ID_LABEL: Record<Provider, string> = { adp: 'ADP File #', gusto: 'Gusto employee ID', quickbooks: 'QuickBooks employee ID' };
+const ID_LABEL: Record<Provider, string> = { adp: 'ADP employee ID', gusto: 'Gusto employee ID', quickbooks: 'QuickBooks employee ID' };
 
 /** The last full Monday–Sunday week. */
 function lastWeek() {

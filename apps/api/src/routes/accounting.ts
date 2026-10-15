@@ -291,7 +291,7 @@ export async function accountingRoutes(app: FastifyInstance) {
       const s = await loadAcct(c);
       if (q.provider !== 'csv' && !s.payroll.enabled.includes(q.provider)) return null;
       const sum = await payrollSummary(c, q.from, q.to);
-      const f = payrollFile(q.provider, s, sum.people);
+      const f = payrollFile(q.provider, s, sum.people, q.from, q.to);
       if (q.mark === '1' && q.provider !== 'csv') await markExported(c, req.user.tid, req.user.sub, q.provider, q, sum.people);
       return f;
     });

@@ -22,10 +22,23 @@ export const acctSchema = z.object({
       primary: z.enum(PAYROLL_PROVIDERS).default('adp'),
       adp: z
         .object({
+          /** Which ADP import: RUN Powered by ADP (time sheet import) or ADP Workforce Now (pay data import). */
+          product: z.enum(['run', 'wfn']).default('run'),
           companyCode: z.string().trim().max(10).default(''),
           batchId: z.string().trim().max(20).default('LABOROPS'),
           dtCode: z.string().trim().max(10).default('D'),
           dayCode: z.string().trim().max(10).default('DAY'),
+          run: z
+            .object({
+              frequency: z.enum(['W', 'B', 'S', 'M', 'Q']).default('W'),
+              regCode: z.string().trim().max(10).regex(/^[A-Za-z0-9_ -]*$/, 'Use letters, numbers, _ or -').default('REG'),
+              otCode: z.string().trim().max(10).regex(/^[A-Za-z0-9_ -]*$/, 'Use letters, numbers, _ or -').default('OT'),
+              dtCode: z.string().trim().max(10).regex(/^[A-Za-z0-9_ -]*$/, 'Use letters, numbers, _ or -').default('DT'),
+              dayCode: z.string().trim().max(10).regex(/^[A-Za-z0-9_ -]*$/, 'Use letters, numbers, _ or -').default('DAY'),
+              rateCode: z.enum(['BASE', 'RATE_2', 'RATE_3']).default('BASE'),
+              dept: z.string().trim().regex(/^\d{0,6}$/, 'Department is a number (up to 6 digits)').default(''),
+            })
+            .prefault({}),
         })
         .prefault({}),
     })

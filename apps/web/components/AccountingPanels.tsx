@@ -6,10 +6,11 @@ import { Banner } from '@/components/ui';
 import { api, money } from '@/lib/api';
 
 type Provider = 'adp' | 'gusto' | 'quickbooks';
+type AdpRun = { frequency: 'W' | 'B' | 'S' | 'M' | 'Q'; regCode: string; otCode: string; dtCode: string; dayCode: string; rateCode: 'BASE' | 'RATE_2' | 'RATE_3'; dept: string };
 type Settings = {
   qbo: { defaultItemId: string | null };
   desktop: { arAccount: string; incomeAccount: string; itemMode: 'single' | 'role'; itemName: string };
-  payroll: { enabled: Provider[]; primary: Provider; adp: { companyCode: string; batchId: string; dtCode: string; dayCode: string } };
+  payroll: { enabled: Provider[]; primary: Provider; adp: { product: 'run' | 'wfn'; companyCode: string; batchId: string; dtCode: string; dayCode: string; run: AdpRun } };
 };
 type Data = {
   settings: Settings;
@@ -75,6 +76,8 @@ export default function AccountingPanels({ qbo }: { qbo: string | null }) {
     if (!enabled.length) return setError('Keep at least one payroll provider turned on.');
     setS({ ...s, payroll: { ...s.payroll, enabled, primary: enabled.includes(s.payroll.primary) ? s.payroll.primary : enabled[0] } });
   };
+  const setAdp = (patch: Partial<Settings['payroll']['adp']>) => setS({ ...s, payroll: { ...s.payroll, adp: { ...s.payroll.adp, ...patch } } });
+  const setRun = (patch: Partial<AdpRun>) => setAdp({ run: { ...s.payroll.adp.run, ...patch } });
 
   return (
     <>
@@ -222,7 +225,7 @@ export default function AccountingPanels({ qbo }: { qbo: string | null }) {
         summary="ADP, Gusto and QuickBooks Payroll exports"
         status={<span className="chip">{PROVIDERS.filter(([k]) => s.payroll.enabled.includes(k)).map(([, l]) => l).join(', ')}</span>}
       >
-        <p className="muted small">Turn on the payroll systems you use. Each one gets its own export on the Payroll page; enter each person&apos;s ID there (ADP File #, Gusto employee ID, QuickBooks employee).</p>
+        <p className="muted small">Turn on the payroll systems you use. Each one gets its own export on the Payroll page; enter each person&apos;s ID there (ADP employee ID or File #, Gusto employee ID, QuickBooks employee).</p>
         <div className="row" style={{ gap: '1.2rem', flexWrap: 'wrap' }}>
           {PROVIDERS.map(([k, label]) => (
             <label key={k} className="check">
@@ -239,26 +242,89 @@ export default function AccountingPanels({ qbo }: { qbo: string | null }) {
         </label>
         {s.payroll.enabled.includes('adp') && (
           <>
-            <h3 style={{ marginTop: 14 }}>ADP pay data import</h3>
-            <p className="muted small">Match these to the pay data import set up in your ADP Workforce Now account.</p>
-            <div className="settings-grid">
-              <label>
-                Company code
-                <input value={s.payroll.adp.companyCode} maxLength={10} onChange={(e) => setS({ ...s, payroll: { ...s.payroll, adp: { ...s.payroll.adp, companyCode: e.target.value } } })} />
-              </label>
-              <label>
-                Batch ID
-                <input value={s.payroll.adp.batchId} maxLength={20} onChange={(e) => setS({ ...s, payroll: { ...s.payroll, adp: { ...s.payroll.adp, batchId: e.target.value } } })} />
-              </label>
-              <label>
-                Double-time hours code
-                <input value={s.payroll.adp.dtCode} maxLength={10} onChange={(e) => setS({ ...s, payroll: { ...s.payroll, adp: { ...s.payroll.adp, dtCode: e.target.value } } })} />
-              </label>
-              <label>
-                Day-rate earnings code
-                <input value={s.payroll.adp.dayCode} maxLength={10} onChange={(e) => setS({ ...s, payroll: { ...s.payroll, adp: { ...s.payroll.adp, dayCode: e.target.value } } })} />
-              </label>
+            <h3 style={{ marginTop: 14 }}>ADP import</h3>
+            <div className="row" style={{ gap: '1.2rem', flexWrap: 'wrap' }}>
+              {([['run', 'RUN Powered by ADP'], ['wfn', 'ADP Workforce Now']] as const).map(([k, label]) => (
+                <label key={k} className="check">
+                  <input type="radio" name="adp-product" checked={s.payroll.adp.product === k} onChange={() => setAdp({ product: k })} />
+                  {label}
+                </label>
+              ))}
             </div>
+            {s.payroll.adp.product === 'run' ? (
+              <>
+                <p className="muted small">
+                  Downloads a RUN time sheet import file (Payroll Assigned Identifier layout). Earnings codes must match your RUN Earnings Codes report.
+                  Each person&apos;s ADP ID is their RUN employee ID. Hours are paid at the rate saved for the employee in RUN; day-rate pay is sent as dollars.
+                </p>
+                <div className="settings-grid">
+                  <label>
+                    IID (company code)
+                    <input value={s.payroll.adp.companyCode} maxLength={10} onChange={(e) => setAdp({ companyCode: e.target.value })} />
+                  </label>
+                  <label>
+                    Pay frequency
+                    <select value={s.payroll.adp.run.frequency} onChange={(e) => setRun({ frequency: e.target.value as AdpRun['frequency'] })}>
+                      <option value="W">Weekly</option>
+                      <option value="B">Biweekly</option>
+                      <option value="S">Semimonthly</option>
+                      <option value="M">Monthly</option>
+                      <option value="Q">Quarterly</option>
+                    </select>
+                  </label>
+                  <label>
+                    Regular hours code
+                    <input value={s.payroll.adp.run.regCode} maxLength={10} onChange={(e) => setRun({ regCode: e.target.value })} />
+                  </label>
+                  <label>
+                    Overtime hours code
+                    <input value={s.payroll.adp.run.otCode} maxLength={10} onChange={(e) => setRun({ otCode: e.target.value })} />
+                  </label>
+                  <label>
+                    Double-time hours code
+                    <input value={s.payroll.adp.run.dtCode} maxLength={10} onChange={(e) => setRun({ dtCode: e.target.value })} />
+                  </label>
+                  <label>
+                    Day-rate earnings code
+                    <input value={s.payroll.adp.run.dayCode} maxLength={10} onChange={(e) => setRun({ dayCode: e.target.value })} />
+                  </label>
+                  <label>
+                    Rate code
+                    <select value={s.payroll.adp.run.rateCode} onChange={(e) => setRun({ rateCode: e.target.value as AdpRun['rateCode'] })}>
+                      <option value="BASE">BASE (first pay rate)</option>
+                      <option value="RATE_2">RATE_2 (second pay rate)</option>
+                      <option value="RATE_3">RATE_3 (third pay rate)</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Worked in department <span className="muted small">(optional)</span></span>
+                    <input value={s.payroll.adp.run.dept} maxLength={6} inputMode="numeric" onChange={(e) => setRun({ dept: e.target.value.replace(/\D/g, '') })} />
+                  </label>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="muted small">Match these to the pay data import set up in your ADP Workforce Now account.</p>
+                <div className="settings-grid">
+                  <label>
+                    Company code
+                    <input value={s.payroll.adp.companyCode} maxLength={10} onChange={(e) => setAdp({ companyCode: e.target.value })} />
+                  </label>
+                  <label>
+                    Batch ID
+                    <input value={s.payroll.adp.batchId} maxLength={20} onChange={(e) => setAdp({ batchId: e.target.value })} />
+                  </label>
+                  <label>
+                    Double-time hours code
+                    <input value={s.payroll.adp.dtCode} maxLength={10} onChange={(e) => setAdp({ dtCode: e.target.value })} />
+                  </label>
+                  <label>
+                    Day-rate earnings code
+                    <input value={s.payroll.adp.dayCode} maxLength={10} onChange={(e) => setAdp({ dayCode: e.target.value })} />
+                  </label>
+                </div>
+              </>
+            )}
           </>
         )}
         {s.payroll.enabled.includes('quickbooks') && !q.connected && <p className="small muted">QuickBooks Payroll can take hours straight from LaborOps once QuickBooks Online is connected above; until then use its file.</p>}

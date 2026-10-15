@@ -135,6 +135,29 @@ export function adpFile(s: AcctSettings['payroll']['adp'], people: PayPerson[]) 
   ]);
 }
 
+/**
+ * RUN Powered by ADP time sheet import ("Payroll Assigned Identifier" layout): a ##GENERIC## V1.0 header row,
+ * a row of column titles, then one row per employee per earnings code. ADP pays the hours at the employee's
+ * rate in RUN (Rate Code BASE / RATE_2 / RATE_3); day-rate pay goes as a dollar amount.
+ */
+export function adpRunFile(s: AcctSettings['payroll']['adp'], people: PayPerson[], from: string, to: string) {
+  const r = s.run;
+  const us = (ymd: string) => `${ymd.slice(5, 7)}/${ymd.slice(8, 10)}/${ymd.slice(0, 4)}`;
+  const rows: unknown[][] = [
+    ['##GENERIC## V1.0'],
+    ['IID', 'Pay Frequency', 'Pay Period Start', 'Pay Period End', 'Employee ID', 'Earnings Code', 'Pay Hours', 'Dollars', 'Separate Check', 'Worked In Dept', 'Rate Code'],
+  ];
+  for (const p of people) {
+    const line = (code: string, hours: number | null, dollars: number | null) =>
+      rows.push([s.companyCode, r.frequency, us(from), us(to), p.payrollIds.adp ?? '', code, hours ? hours.toFixed(2) : '', dollars ? dollars.toFixed(2) : '', 0, r.dept, r.rateCode]);
+    if (p.regular) line(r.regCode, p.regular, null);
+    if (p.overtime) line(r.otCode, p.overtime, null);
+    if (p.double) line(r.dtCode, p.double, null);
+    if (p.dayPay) line(r.dayCode, null, p.dayPay);
+  }
+  return csv(rows);
+}
+
 /** Gusto hours import: one row per employee. */
 export function gustoFile(people: PayPerson[]) {
   return csv([
@@ -162,7 +185,8 @@ export function detailFile(people: PayPerson[]) {
   ]);
 }
 
-export function payrollFile(provider: PayrollProvider | 'csv', s: AcctSettings, people: PayPerson[]) {
+export function payrollFile(provider: PayrollProvider | 'csv', s: AcctSettings, people: PayPerson[], from = '', to = '') {
+  if (provider === 'adp' && s.payroll.adp.product === 'run') return { name: 'adp-run-timesheet', body: adpRunFile(s.payroll.adp, people, from, to) };
   if (provider === 'adp') return { name: 'adp-pay-data', body: adpFile(s.payroll.adp, people) };
   if (provider === 'gusto') return { name: 'gusto-hours', body: gustoFile(people) };
   if (provider === 'quickbooks') return { name: 'quickbooks-time', body: quickbooksFile(people) };

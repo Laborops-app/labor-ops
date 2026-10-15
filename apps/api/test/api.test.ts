@@ -1508,7 +1508,21 @@ test('accounting: event billing (time + schedule, per-job OT, day rates), QuickB
     assert.equal((await call(a, 'PUT', `/api/crew/${c1.id}/payroll-ids`, { adp: '001234' })).status, 200);
     assert.equal((await call(a, 'PUT', `/api/crew/${c1.id}/payroll-ids`, { adp: '=cmd' })).status, 400);
     const s1set = (await call(a, 'GET', '/api/accounting')).json.settings;
-    await call(a, 'PUT', '/api/accounting/settings', { ...s1set, payroll: { ...s1set.payroll, adp: { ...s1set.payroll.adp, companyCode: 'XYZ' } } });
+    assert.equal(s1set.payroll.adp.product, 'run');
+    // RUN Powered by ADP time sheet import (the default)
+    await call(a, 'PUT', '/api/accounting/settings', { ...s1set, payroll: { ...s1set.payroll, adp: { ...s1set.payroll.adp, companyCode: 'RFCAV' } } });
+    const run1 = await call(a, 'GET', '/api/payroll/export?provider=adp&from=2030-03-04&to=2030-03-10&mark=0');
+    assert.equal(run1.status, 200);
+    assert.match(String(run1.res.headers['content-disposition']), /adp-run-timesheet-2030-03-04-to-2030-03-10\.csv/);
+    const runRows = run1.text.trim().split('\r\n');
+    assert.equal(runRows[0], '##GENERIC## V1.0');
+    assert.equal(runRows[1], 'IID,Pay Frequency,Pay Period Start,Pay Period End,Employee ID,Earnings Code,Pay Hours,Dollars,Separate Check,Worked In Dept,Rate Code');
+    assert.ok(runRows.includes('RFCAV,W,03/04/2030,03/10/2030,001234,REG,8.00,,0,,BASE'), run1.text);
+    assert.ok(runRows.includes('RFCAV,W,03/04/2030,03/10/2030,001234,OT,3.00,,0,,BASE'), run1.text);
+    assert.ok(runRows.includes('RFCAV,W,03/04/2030,03/10/2030,,DAY,,300.00,0,,BASE'), run1.text);
+    assert.equal((await call(a, 'PUT', '/api/accounting/settings', { ...s1set, payroll: { ...s1set.payroll, adp: { ...s1set.payroll.adp, run: { ...s1set.payroll.adp.run, regCode: '=x' } } } })).status, 400);
+    // ADP Workforce Now pay data import
+    await call(a, 'PUT', '/api/accounting/settings', { ...s1set, payroll: { ...s1set.payroll, adp: { ...s1set.payroll.adp, product: 'wfn', companyCode: 'XYZ' } } });
     assert.equal((await call(a, 'GET', '/api/payroll/export?provider=gusto&from=2030-03-04&to=2030-03-10')).status, 400, 'Gusto is off');
     const adp = await call(a, 'GET', '/api/payroll/export?provider=adp&from=2030-03-04&to=2030-03-10');
     assert.equal(adp.status, 200);
