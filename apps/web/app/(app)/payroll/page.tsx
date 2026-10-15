@@ -112,11 +112,25 @@ function Body() {
                         setBusy(true);
                         setError('');
                         try {
-                          const r = await api<{ people: number; activities: number; skipped: string[]; created: string[]; linked: string[] }>('/api/payroll/quickbooks', { body: period });
+                          type R = { people: number; activities: number; alreadyExported: number; skipped: string[]; created: string[]; linked: string[] };
+                          let r = await api<R>('/api/payroll/quickbooks', { body: period });
+                          const people = [
+                            r.created.length ? ` Added as new QuickBooks employees: ${r.created.join(', ')} (finish their pay and tax setup in QuickBooks Payroll before paying them).` : '',
+                            r.linked.length ? ` Matched to existing QuickBooks employees: ${r.linked.join(', ')}.` : '',
+                          ].join('');
+                          // Nothing new: these hours were exported before (an ADP or QuickBooks file, or an earlier send).
+                          if (!r.activities && r.alreadyExported) {
+                            await load();
+                            if (!confirm(`No new hours to send: all ${r.alreadyExported} entries in this period were already exported to payroll before (for example in a downloaded file).\n\nSend them to QuickBooks anyway? If they were already sent to QuickBooks, they will show there twice.`)) {
+                              setOk(`Nothing sent: the ${r.alreadyExported} entries in this period were already exported.${people}`);
+                              return;
+                            }
+                            r = await api<R>('/api/payroll/quickbooks', { body: { ...period, includeExported: true } });
+                          }
                           setOk(
-                            `Sent ${r.activities} time entr${r.activities === 1 ? 'y' : 'ies'} for ${r.people} people to QuickBooks.` +
-                              (r.created.length ? ` Added as new QuickBooks employees: ${r.created.join(', ')} (finish their pay and tax setup in QuickBooks Payroll before paying them).` : '') +
-                              (r.linked.length ? ` Matched to existing QuickBooks employees: ${r.linked.join(', ')}.` : '') +
+                            `Sent ${r.activities} time entr${r.activities === 1 ? 'y' : 'ies'} for ${r.people} ${r.people === 1 ? 'person' : 'people'} to QuickBooks. Find them under Time (or Reports → Time Activities by Employee Detail).` +
+                              people +
+                              (r.alreadyExported && r.activities ? ` ${r.alreadyExported} entries exported before were left out.` : '') +
                               (r.skipped.length ? ` Not sent: ${r.skipped.join(', ')}.` : ''),
                           );
                           await load();

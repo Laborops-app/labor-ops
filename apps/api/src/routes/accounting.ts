@@ -301,7 +301,7 @@ export async function accountingRoutes(app: FastifyInstance) {
 
   // QuickBooks Payroll: send each worked entry as a time activity on the employee (QuickBooks works out overtime itself).
   app.post('/api/payroll/quickbooks', { preHandler: adm }, async (req, reply) => {
-    const p = { ...period.parse(req.body), addMissing: z.object({ addMissing: z.boolean().default(true) }).parse(req.body ?? {}).addMissing };
+    const p = { ...period.parse(req.body), ...z.object({ addMissing: z.boolean().default(true), includeExported: z.boolean().default(false) }).parse(req.body ?? {}) };
     try {
       const out = await withTenant(req.user.tid, async (c) => {
         const s = await loadAcct(c);
@@ -316,6 +316,7 @@ export async function accountingRoutes(app: FastifyInstance) {
         const linked: string[] = [];
         const sent: typeof sum.people = [];
         let activities = 0;
+        let alreadyExported = 0;
         const valid = new Set(emps.map((e) => String(e.Id)));
         for (const person of sum.people) {
           // Saved ID first (if it still exists in QuickBooks), then email, then name; otherwise add them as an employee.
@@ -341,7 +342,10 @@ export async function accountingRoutes(app: FastifyInstance) {
             person.payrollIds.quickbooks = empId;
           }
           for (const e of person.entries) {
-            if (e.exported) continue;
+            if (e.exported && !p.includeExported) {
+              alreadyExported++;
+              continue;
+            }
             await qb.createTimeActivity({ employeeId: empId, date: e.date, hours: e.hours, description: `${e.event} · ${baseRole(e.role)}${e.day ? ' · day rate' : ''}` });
             activities++;
           }
@@ -349,7 +353,7 @@ export async function accountingRoutes(app: FastifyInstance) {
         }
         if (sent.length) await markExported(c, req.user.tid, req.user.sub, 'quickbooks', p, sent);
         if (created.length || linked.length) await audit(c, req.user.tid, req.user.sub, 'payroll.quickbooks_employees', 'tenant', req.user.tid, { created, linked });
-        return { code: 200, people: sent.length, activities, skipped, created, linked };
+        return { code: 200, people: new Set(sent.filter((x) => x.entries.some((e) => !e.exported || p.includeExported)).map((x) => x.userId)).size, activities, alreadyExported, skipped, created, linked };
       });
       const { code, ...body } = out as any;
       return reply.code(code).send(body);

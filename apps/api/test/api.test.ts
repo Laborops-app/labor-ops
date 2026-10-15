@@ -1536,6 +1536,14 @@ test('accounting: event billing (time + schedule, per-job OT, day rates), QuickB
     await withTenant(tid, (c) => c.query('UPDATE time_entries SET payroll_exported_at = NULL'));
     const qp2 = await call(a, 'POST', '/api/payroll/quickbooks', { from: '2030-03-04', to: '2030-03-10' });
     assert.deepEqual(qp2.json.linked, []);
+    // Sending the same period again: everything is already exported, so nothing goes unless asked to send anyway
+    const qp3 = await call(a, 'POST', '/api/payroll/quickbooks', { from: '2030-03-04', to: '2030-03-10' });
+    assert.equal(qp3.json.activities, 0);
+    assert.ok(qp3.json.alreadyExported > 0);
+    assert.equal(qp3.json.people, 0);
+    const qp4 = await call(a, 'POST', '/api/payroll/quickbooks', { from: '2030-03-04', to: '2030-03-10', includeExported: true });
+    assert.equal(qp4.json.activities, qp3.json.alreadyExported);
+    assert.equal(qp4.json.alreadyExported, 0);
   } finally {
     globalThis.fetch = real;
   }
