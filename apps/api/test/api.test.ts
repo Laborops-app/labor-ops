@@ -1438,6 +1438,7 @@ test('accounting: event billing (time + schedule, per-job OT, day rates), QuickB
     if (url.includes('/customer?')) return ok({ Customer: { Id: '58' } });
     if (url.includes('/invoice?')) return ok({ Invoice: { Id: '130', DocNumber: '1037', TotalAmt: 1025 } });
     if (url.includes('/timeactivity?')) return ok({ TimeActivity: { Id: String(seen.length) } });
+    if (url.includes('/employee?')) return ok({ Employee: { Id: '77', DisplayName: JSON.parse(init.body).DisplayName } });
     return new Response('{}', { status: 404 });
   }) as typeof fetch;
   try {
@@ -1506,14 +1507,35 @@ test('accounting: event billing (time + schedule, per-job OT, day rates), QuickB
     const gusto = await call(a, 'GET', '/api/payroll/export?provider=gusto&from=2030-03-04&to=2030-03-10&mark=0');
     assert.match(gusto.text.split('\r\n')[1], /^acct1,Crew,,acct1-.*@test\.example,8\.00,3\.00,,$/);
     await withTenant(tid, (c) => c.query('UPDATE time_entries SET payroll_exported_at = NULL'));
-    const qp = await call(a, 'POST', '/api/payroll/quickbooks', { from: '2030-03-04', to: '2030-03-10' });
-    assert.equal(qp.status, 200, qp.text);
-    assert.equal(qp.json.activities, 2); // c1 matched by email; c2 has no QuickBooks employee
-    assert.deepEqual(qp.json.skipped, ['Crew acct2']);
+    // Without adding missing people: c1 is matched by email, c2 (not in QuickBooks) is skipped
+    const qp0 = await call(a, 'POST', '/api/payroll/quickbooks', { from: '2030-03-04', to: '2030-03-10', addMissing: false });
+    assert.equal(qp0.status, 200, qp0.text);
+    assert.equal(qp0.json.activities, 2);
+    assert.deepEqual(qp0.json.skipped, ['Crew acct2']);
+    assert.deepEqual(qp0.json.linked, ['Crew acct1']);
     const ta = JSON.parse(seen.filter((x) => x.url.includes('/timeactivity?'))[1].init.body);
     assert.equal(ta.EmployeeRef.value, '55');
     assert.equal(ta.Hours, 5);
     assert.equal(ta.Minutes, 0);
+    // Default: c2 is added to QuickBooks as an employee, and both QuickBooks IDs are saved on the crew profiles
+    await withTenant(tid, (c) => c.query('UPDATE time_entries SET payroll_exported_at = NULL'));
+    const before = seen.length;
+    const qp = await call(a, 'POST', '/api/payroll/quickbooks', { from: '2030-03-04', to: '2030-03-10' });
+    assert.equal(qp.status, 200, qp.text);
+    assert.deepEqual(qp.json.created, ['Crew acct2']);
+    assert.deepEqual(qp.json.skipped, []);
+    assert.ok(qp.json.activities > 2);
+    const emp = JSON.parse(seen.slice(before).find((x) => x.url.includes('/employee?'))!.init.body);
+    assert.equal(emp.DisplayName, 'Crew acct2');
+    assert.equal(emp.GivenName, 'Crew');
+    assert.equal(emp.FamilyName, 'acct2');
+    assert.match(emp.PrimaryEmailAddr.Address, /^acct2-/);
+    const ids = await withTenant(tid, (c) => c.query("SELECT name, payroll_ids->>'quickbooks' AS q FROM users WHERE payroll_ids ? 'quickbooks' ORDER BY name"));
+    assert.deepEqual(ids.rows.map((r: any) => [r.name, r.q]), [['Crew acct1', '55'], ['Crew acct2', '77']]);
+    // A later run uses the saved IDs, so nobody is linked again
+    await withTenant(tid, (c) => c.query('UPDATE time_entries SET payroll_exported_at = NULL'));
+    const qp2 = await call(a, 'POST', '/api/payroll/quickbooks', { from: '2030-03-04', to: '2030-03-10' });
+    assert.deepEqual(qp2.json.linked, []);
   } finally {
     globalThis.fetch = real;
   }

@@ -147,6 +147,31 @@ export class Qbo {
   incomeAccounts = () => this.query<{ Id: string; Name: string }>('Account', "AccountType = 'Income'");
   employees = () => this.query<{ Id: string; DisplayName: string; GivenName?: string; FamilyName?: string; PrimaryEmailAddr?: { Address: string } }>('Employee');
 
+  /**
+   * Add a crew member as a QuickBooks employee. If QuickBooks already has someone with that display name
+   * (for example an inactive employee), that employee is used instead.
+   */
+  async createEmployee(e: { name: string; email?: string | null; phone?: string | null }): Promise<{ id: string; created: boolean }> {
+    const name = e.name.replace(/[:\t\n]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+    const [given, ...rest] = name.split(' ');
+    try {
+      const j = await this.call('POST', 'employee', {
+        DisplayName: name,
+        GivenName: given.slice(0, 100),
+        ...(rest.length ? { FamilyName: rest.join(' ').slice(0, 100) } : {}),
+        ...(e.email ? { PrimaryEmailAddr: { Address: e.email } } : {}),
+        ...(e.phone ? { PrimaryPhone: { FreeFormNumber: e.phone.slice(0, 30) } } : {}),
+      });
+      return { id: String(j.Employee.Id), created: true };
+    } catch (err) {
+      if (!/duplicate/i.test(String((err as Error).message))) throw err;
+      const q = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+      const found = await this.query<{ Id: string }>('Employee', `Active IN (true, false) AND DisplayName = '${q}'`, 1);
+      if (!found[0]) throw err;
+      return { id: String(found[0].Id), created: false };
+    }
+  }
+
   async createItem(name: string, incomeAccountId: string): Promise<string> {
     const j = await this.call('POST', 'item', { Name: name.slice(0, 100), Type: 'Service', IncomeAccountRef: { value: incomeAccountId } });
     return String(j.Item.Id);

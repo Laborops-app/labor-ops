@@ -301,7 +301,7 @@ export async function accountingRoutes(app: FastifyInstance) {
 
   // QuickBooks Payroll: send each worked entry as a time activity on the employee (QuickBooks works out overtime itself).
   app.post('/api/payroll/quickbooks', { preHandler: adm }, async (req, reply) => {
-    const p = period.parse(req.body);
+    const p = { ...period.parse(req.body), addMissing: z.object({ addMissing: z.boolean().default(true) }).parse(req.body ?? {}).addMissing };
     try {
       const out = await withTenant(req.user.tid, async (c) => {
         const s = await loadAcct(c);
@@ -312,13 +312,33 @@ export async function accountingRoutes(app: FastifyInstance) {
         const byName = new Map(emps.map((e) => [e.DisplayName.trim().toLowerCase(), e.Id]));
         const byEmail = new Map(emps.filter((e) => e.PrimaryEmailAddr?.Address).map((e) => [e.PrimaryEmailAddr!.Address.toLowerCase(), e.Id]));
         const skipped: string[] = [];
+        const created: string[] = [];
+        const linked: string[] = [];
         const sent: typeof sum.people = [];
         let activities = 0;
+        const valid = new Set(emps.map((e) => String(e.Id)));
         for (const person of sum.people) {
-          const empId = person.payrollIds.quickbooks || byEmail.get(person.email.toLowerCase()) || byName.get(person.name.trim().toLowerCase());
+          // Saved ID first (if it still exists in QuickBooks), then email, then name; otherwise add them as an employee.
+          let empId = person.payrollIds.quickbooks && valid.has(person.payrollIds.quickbooks) ? person.payrollIds.quickbooks : byEmail.get(person.email.toLowerCase()) || byName.get(person.name.trim().toLowerCase());
+          if (!empId && p.addMissing) {
+            try {
+              const phone = (await c.query('SELECT phone FROM users WHERE id = $1', [person.userId])).rows[0]?.phone ?? null;
+              const made = await qb.createEmployee({ name: person.name, email: person.email, phone });
+              empId = made.id;
+              (made.created ? created : linked).push(person.name);
+            } catch (e) {
+              skipped.push(`${person.name} (${String((e as Error).message).replace(/^QuickBooks: /, '').slice(0, 120)})`);
+              continue;
+            }
+          } else if (empId && empId !== person.payrollIds.quickbooks) linked.push(person.name);
           if (!empId) {
             skipped.push(person.name);
             continue;
+          }
+          // Remember the QuickBooks employee, so the next run (and the crew profile) uses it directly.
+          if (empId !== person.payrollIds.quickbooks) {
+            await c.query(`UPDATE users SET payroll_ids = payroll_ids || jsonb_build_object('quickbooks', $2::text) WHERE id = $1`, [person.userId, empId]);
+            person.payrollIds.quickbooks = empId;
           }
           for (const e of person.entries) {
             if (e.exported) continue;
@@ -328,7 +348,8 @@ export async function accountingRoutes(app: FastifyInstance) {
           sent.push(person);
         }
         if (sent.length) await markExported(c, req.user.tid, req.user.sub, 'quickbooks', p, sent);
-        return { code: 200, people: sent.length, activities, skipped };
+        if (created.length || linked.length) await audit(c, req.user.tid, req.user.sub, 'payroll.quickbooks_employees', 'tenant', req.user.tid, { created, linked });
+        return { code: 200, people: sent.length, activities, skipped, created, linked };
       });
       const { code, ...body } = out as any;
       return reply.code(code).send(body);

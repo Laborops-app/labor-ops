@@ -107,12 +107,18 @@ function Body() {
                       className="btn primary small"
                       disabled={busy}
                       onClick={async () => {
-                        if (!confirm(`Send ${d.totals.hours.toFixed(2)} hours to QuickBooks as time entries?`)) return;
+                        const fresh = d.missingIds.quickbooks ?? [];
+                        if (!confirm(`Send ${d.totals.hours.toFixed(2)} hours to QuickBooks as time entries?${fresh.length ? `\n\nCrew not in QuickBooks yet are matched by email or name, or added as new employees: ${fresh.join(', ')}.` : ''}`)) return;
                         setBusy(true);
                         setError('');
                         try {
-                          const r = await api<{ people: number; activities: number; skipped: string[] }>('/api/payroll/quickbooks', { body: period });
-                          setOk(`Sent ${r.activities} time entr${r.activities === 1 ? 'y' : 'ies'} for ${r.people} people to QuickBooks.${r.skipped.length ? ` Not sent (no matching QuickBooks employee): ${r.skipped.join(', ')}.` : ''}`);
+                          const r = await api<{ people: number; activities: number; skipped: string[]; created: string[]; linked: string[] }>('/api/payroll/quickbooks', { body: period });
+                          setOk(
+                            `Sent ${r.activities} time entr${r.activities === 1 ? 'y' : 'ies'} for ${r.people} people to QuickBooks.` +
+                              (r.created.length ? ` Added as new QuickBooks employees: ${r.created.join(', ')} (finish their pay and tax setup in QuickBooks Payroll before paying them).` : '') +
+                              (r.linked.length ? ` Matched to existing QuickBooks employees: ${r.linked.join(', ')}.` : '') +
+                              (r.skipped.length ? ` Not sent: ${r.skipped.join(', ')}.` : ''),
+                          );
                           await load();
                         } catch (e) {
                           setError((e as Error).message);
@@ -133,7 +139,7 @@ function Body() {
             </div>
             {prov && d.missingIds[prov]?.length > 0 && (
               <p className="small" style={{ color: 'var(--warn)' }}>
-                Missing {ID_LABEL[prov]} for {d.missingIds[prov].join(', ')}.{prov === 'quickbooks' ? ' They are matched by email or name instead.' : ' Add it below before importing.'}
+                Missing {ID_LABEL[prov]} for {d.missingIds[prov].join(', ')}.{prov === 'quickbooks' ? ' When you send hours they are matched to QuickBooks employees by email or name, or added as new employees, and their IDs are saved.' : ' Add it below before importing.'}
               </p>
             )}
             {d.people.length === 0 ? (
