@@ -299,7 +299,17 @@ export async function accountingRoutes(app: FastifyInstance) {
     return download(reply, `${out.name}-${q.from}-to-${q.to}.csv`, 'text/csv', out.body);
   });
 
-  // QuickBooks Payroll: send each worked entry as a time activity on the employee (QuickBooks works out overtime itself).
+  // What a worked entry is called in QuickBooks. The hours split at the end is extra detail, not part of what identifies it.
+  const qbBase = (e: { event: string; role: string; day: boolean }) => `${e.event} · ${baseRole(e.role)}${e.day ? ' · day rate' : ''}`;
+  const qbNote = (e: { event: string; role: string; day: boolean; hours: number; reg: number; ot: number; dt: number }) => {
+    const h = (n: number) => String(Math.round(n * 100) / 100);
+    const split = e.ot || e.dt ? ` (${h(e.hours)} h: ${h(e.reg)} reg + ${h(e.ot)} OT${e.dt ? ` + ${h(e.dt)} DT` : ''})` : '';
+    return qbBase(e) + split;
+  };
+  const qbKey = (emp: string | null, date: string, hours: number, desc: string) => `${emp}|${date}|${hours.toFixed(2)}|${desc.replace(/ \([\d.]+ h: [^)]*\)$/, '')}`;
+
+  // QuickBooks Payroll: send each worked entry as a time activity on the employee. QuickBooks Payroll works out
+  // overtime itself from the week's hours; the split LaborOps calculated is written in the note.
   app.post('/api/payroll/quickbooks', { preHandler: adm }, async (req, reply) => {
     const p = { ...period.parse(req.body), ...z.object({ addMissing: z.boolean().default(true), includeExported: z.boolean().default(false) }).parse(req.body ?? {}) };
     try {
@@ -317,6 +327,18 @@ export async function accountingRoutes(app: FastifyInstance) {
         const sent: typeof sum.people = [];
         let activities = 0;
         let alreadyExported = 0;
+        let alreadyInQbo = 0;
+        const peopleSent = new Set<string>();
+        // What is already in QuickBooks for this period: an identical entry is linked, not sent again.
+        const inQbo = new Map<string, string[]>();
+        for (const a of await qb.timeActivities(p.from, p.to)) {
+          const k = qbKey(a.employeeId, a.date, a.hours, a.description);
+          inQbo.set(k, [...(inQbo.get(k) ?? []), a.id]);
+        }
+        const sentIds = new Map<string, string | null>(
+          (await c.query('SELECT id, qbo_time_activity_id FROM time_entries WHERE id = ANY($1::uuid[])', [sum.people.flatMap((x) => x.entries.map((e) => e.id))])).rows.map((r) => [r.id, r.qbo_time_activity_id]),
+        );
+        const used = new Set([...sentIds.values()].filter(Boolean) as string[]);
         const valid = new Set(emps.map((e) => String(e.Id)));
         for (const person of sum.people) {
           // Saved ID first (if it still exists in QuickBooks), then email, then name; otherwise add them as an employee.
@@ -342,21 +364,78 @@ export async function accountingRoutes(app: FastifyInstance) {
             person.payrollIds.quickbooks = empId;
           }
           for (const e of person.entries) {
+            if (sentIds.get(e.id)) {
+              alreadyInQbo++;
+              continue;
+            }
+            const twin = (inQbo.get(qbKey(empId, e.date, e.hours, qbBase(e))) ?? []).find((id) => !used.has(id));
+            if (twin) {
+              // Sent before this was tracked: remember it instead of sending a copy.
+              used.add(twin);
+              await c.query('UPDATE time_entries SET qbo_time_activity_id = $2 WHERE id = $1', [e.id, twin]);
+              alreadyInQbo++;
+              continue;
+            }
             if (e.exported && !p.includeExported) {
               alreadyExported++;
               continue;
             }
-            await qb.createTimeActivity({ employeeId: empId, date: e.date, hours: e.hours, description: `${e.event} · ${baseRole(e.role)}${e.day ? ' · day rate' : ''}` });
+            const taId = await qb.createTimeActivity({ employeeId: empId, date: e.date, hours: e.hours, description: qbNote(e) });
+            await c.query('UPDATE time_entries SET qbo_time_activity_id = $2 WHERE id = $1', [e.id, taId]);
             activities++;
+            peopleSent.add(person.userId);
           }
           sent.push(person);
         }
         if (sent.length) await markExported(c, req.user.tid, req.user.sub, 'quickbooks', p, sent);
         if (created.length || linked.length) await audit(c, req.user.tid, req.user.sub, 'payroll.quickbooks_employees', 'tenant', req.user.tid, { created, linked });
-        return { code: 200, people: new Set(sent.filter((x) => x.entries.some((e) => !e.exported || p.includeExported)).map((x) => x.userId)).size, activities, alreadyExported, skipped, created, linked };
+        return { code: 200, people: peopleSent.size, activities, alreadyExported, alreadyInQbo, skipped, created, linked };
       });
       const { code, ...body } = out as any;
       return reply.code(code).send(body);
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+
+  // Remove extra copies of the same worked entry that LaborOps sent to QuickBooks more than once in a period.
+  app.post('/api/payroll/quickbooks/dedupe', { preHandler: adm }, async (req, reply) => {
+    const p = period.parse(req.body);
+    try {
+      const out = await withTenant(req.user.tid, async (c) => {
+        const qb = await qboSession(c, req.user.tid);
+        const linked = new Set((await c.query('SELECT qbo_time_activity_id AS id FROM time_entries WHERE qbo_time_activity_id IS NOT NULL')).rows.map((r) => r.id as string));
+        const groups = new Map<string, Awaited<ReturnType<typeof qb.timeActivities>>>();
+        for (const a of await qb.timeActivities(p.from, p.to)) {
+          if (!a.employeeId || !a.description.includes(' · ')) continue; // only what LaborOps sent
+          const k = qbKey(a.employeeId, a.date, a.hours, a.description);
+          groups.set(k, [...(groups.get(k) ?? []), a]);
+        }
+        // How many of each entry LaborOps really has (two identical shifts on one day are not duplicates).
+        const expected = new Map<string, number>();
+        for (const person of (await payrollSummary(c, p.from, p.to)).people) {
+          const emp = person.payrollIds.quickbooks;
+          if (!emp) continue;
+          for (const e of person.entries) {
+            const k = qbKey(emp, e.date, e.hours, qbBase(e));
+            expected.set(k, (expected.get(k) ?? 0) + 1);
+          }
+        }
+        let removed = 0;
+        for (const [k, list] of groups) {
+          const keepCount = Math.max(1, expected.get(k) ?? 1);
+          if (list.length <= keepCount) continue;
+          // Keep the ones LaborOps has on record first.
+          const ordered = [...list.filter((a) => linked.has(a.id)), ...list.filter((a) => !linked.has(a.id))];
+          for (const a of ordered.slice(keepCount)) {
+            await qb.deleteTimeActivity(a.id, a.syncToken);
+            removed++;
+          }
+        }
+        if (removed) await audit(c, req.user.tid, req.user.sub, 'payroll.quickbooks_dedupe', 'tenant', req.user.tid, { ...p, removed });
+        return { removed };
+      });
+      return out;
     } catch (e) {
       return fail(reply, e);
     }

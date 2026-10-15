@@ -112,7 +112,7 @@ function Body() {
                         setBusy(true);
                         setError('');
                         try {
-                          type R = { people: number; activities: number; alreadyExported: number; skipped: string[]; created: string[]; linked: string[] };
+                          type R = { people: number; activities: number; alreadyExported: number; alreadyInQbo: number; skipped: string[]; created: string[]; linked: string[] };
                           let r = await api<R>('/api/payroll/quickbooks', { body: period });
                           const people = [
                             r.created.length ? ` Added as new QuickBooks employees: ${r.created.join(', ')} (finish their pay and tax setup in QuickBooks Payroll before paying them).` : '',
@@ -127,10 +127,17 @@ function Body() {
                             }
                             r = await api<R>('/api/payroll/quickbooks', { body: { ...period, includeExported: true } });
                           }
+                          if (!r.activities && !r.alreadyExported && r.alreadyInQbo) {
+                            setOk(`Nothing new to send: all ${r.alreadyInQbo} entries in this period are already in QuickBooks.${people}`);
+                            await load();
+                            return;
+                          }
                           setOk(
                             `Sent ${r.activities} time entr${r.activities === 1 ? 'y' : 'ies'} for ${r.people} ${r.people === 1 ? 'person' : 'people'} to QuickBooks. Find them under Time (or Reports → Time Activities by Employee Detail).` +
                               people +
+                              (r.alreadyInQbo ? ` ${r.alreadyInQbo} already in QuickBooks were not sent again.` : '') +
                               (r.alreadyExported && r.activities ? ` ${r.alreadyExported} entries exported before were left out.` : '') +
+                              ' QuickBooks Payroll works out overtime from the week\'s hours; each entry\'s note shows the overtime LaborOps calculated.' +
                               (r.skipped.length ? ` Not sent: ${r.skipped.join(', ')}.` : ''),
                           );
                           await load();
@@ -142,6 +149,28 @@ function Body() {
                       }}
                     >
                       Send hours to QuickBooks
+                    </button>
+                  )}
+                  {prov === 'quickbooks' && d.quickbooksConnected && (
+                    <button
+                      className="btn ghost small"
+                      disabled={busy}
+                      title="Delete extra copies of the same hours that were sent to QuickBooks more than once for this period"
+                      onClick={async () => {
+                        if (!confirm('Remove hours that were sent to QuickBooks more than once for this period? One copy of each is kept.')) return;
+                        setBusy(true);
+                        setError('');
+                        try {
+                          const r = await api<{ removed: number }>('/api/payroll/quickbooks/dedupe', { body: period });
+                          setOk(r.removed ? `Removed ${r.removed} duplicate time entr${r.removed === 1 ? 'y' : 'ies'} from QuickBooks.` : 'No duplicates found in QuickBooks for this period.');
+                        } catch (e) {
+                          setError((e as Error).message);
+                        } finally {
+                          setBusy(false);
+                        }
+                      }}
+                    >
+                      Remove duplicates in QuickBooks
                     </button>
                   )}
                   <a className={prov === 'quickbooks' && d.quickbooksConnected ? 'btn small' : 'btn primary small'} href={fileUrl(prov)} onClick={() => setTimeout(load, 1500)}>

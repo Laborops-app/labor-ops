@@ -1422,6 +1422,8 @@ test('accounting: event billing (time + schedule, per-job OT, day rates), QuickB
 
   const real = globalThis.fetch;
   const seen: { url: string; init: any }[] = [];
+  const tas: any[] = []; // time entries "in QuickBooks"
+  let taSeq = 100;
   globalThis.fetch = (async (u: any, init: any) => {
     const url = String(u);
     seen.push({ url, init });
@@ -1434,10 +1436,21 @@ test('accounting: event billing (time + schedule, per-job OT, day rates), QuickB
       if (/from Item/.test(qy)) return ok({ QueryResponse: { Item: [{ Id: '9', Name: 'Labor', Type: 'Service', Active: true }] } });
       if (/from Account/.test(qy)) return ok({ QueryResponse: { Account: [{ Id: '79', Name: 'Services' }] } });
       if (/from Employee/.test(qy)) return ok({ QueryResponse: { Employee: [{ Id: '55', DisplayName: 'Crew acct1', PrimaryEmailAddr: { Address: `acct1-${run}@test.example` } }] } });
+      if (/from TimeActivity/.test(qy)) return ok({ QueryResponse: { TimeActivity: tas } });
+    }
+    if (url.includes('/timeactivity?operation=delete')) {
+      const { Id } = JSON.parse(init.body);
+      tas.splice(tas.findIndex((t) => t.Id === Id), 1);
+      return ok({ TimeActivity: { Id, status: 'Deleted' } });
     }
     if (url.includes('/customer?')) return ok({ Customer: { Id: '58' } });
     if (url.includes('/invoice?')) return ok({ Invoice: { Id: '130', DocNumber: '1037', TotalAmt: 1025 } });
-    if (url.includes('/timeactivity?')) return ok({ TimeActivity: { Id: String(seen.length) } });
+    if (url.includes('/timeactivity?')) {
+      const b = JSON.parse(init.body);
+      const Id = String(taSeq++);
+      tas.push({ Id, SyncToken: '0', TxnDate: b.TxnDate, Hours: b.Hours, Minutes: b.Minutes, Description: b.Description, EmployeeRef: b.EmployeeRef });
+      return ok({ TimeActivity: { Id } });
+    }
     if (url.includes('/employee?')) return ok({ Employee: { Id: '77', DisplayName: JSON.parse(init.body).DisplayName } });
     return new Response('{}', { status: 404 });
   }) as typeof fetch;
@@ -1517,14 +1530,17 @@ test('accounting: event billing (time + schedule, per-job OT, day rates), QuickB
     assert.equal(ta.EmployeeRef.value, '55');
     assert.equal(ta.Hours, 5);
     assert.equal(ta.Minutes, 0);
-    // Default: c2 is added to QuickBooks as an employee, and both QuickBooks IDs are saved on the crew profiles
+    // Default: c2 is added to QuickBooks as an employee, and both QuickBooks IDs are saved on the crew profiles.
+    // c1's hours are already in QuickBooks (remembered from the first send), so only c2's go.
     await withTenant(tid, (c) => c.query('UPDATE time_entries SET payroll_exported_at = NULL'));
     const before = seen.length;
     const qp = await call(a, 'POST', '/api/payroll/quickbooks', { from: '2030-03-04', to: '2030-03-10' });
     assert.equal(qp.status, 200, qp.text);
     assert.deepEqual(qp.json.created, ['Crew acct2']);
     assert.deepEqual(qp.json.skipped, []);
-    assert.ok(qp.json.activities > 2);
+    assert.equal(qp.json.alreadyInQbo, 2);
+    assert.ok(qp.json.activities >= 1);
+    assert.equal(qp.json.people, 1);
     const emp = JSON.parse(seen.slice(before).find((x) => x.url.includes('/employee?'))!.init.body);
     assert.equal(emp.DisplayName, 'Crew acct2');
     assert.equal(emp.GivenName, 'Crew');
@@ -1532,18 +1548,28 @@ test('accounting: event billing (time + schedule, per-job OT, day rates), QuickB
     assert.match(emp.PrimaryEmailAddr.Address, /^acct2-/);
     const ids = await withTenant(tid, (c) => c.query("SELECT name, payroll_ids->>'quickbooks' AS q FROM users WHERE payroll_ids ? 'quickbooks' ORDER BY name"));
     assert.deepEqual(ids.rows.map((r: any) => [r.name, r.q]), [['Crew acct1', '55'], ['Crew acct2', '77']]);
-    // A later run uses the saved IDs, so nobody is linked again
-    await withTenant(tid, (c) => c.query('UPDATE time_entries SET payroll_exported_at = NULL'));
-    const qp2 = await call(a, 'POST', '/api/payroll/quickbooks', { from: '2030-03-04', to: '2030-03-10' });
-    assert.deepEqual(qp2.json.linked, []);
-    // Sending the same period again: everything is already exported, so nothing goes unless asked to send anyway
-    const qp3 = await call(a, 'POST', '/api/payroll/quickbooks', { from: '2030-03-04', to: '2030-03-10' });
-    assert.equal(qp3.json.activities, 0);
-    assert.ok(qp3.json.alreadyExported > 0);
-    assert.equal(qp3.json.people, 0);
-    const qp4 = await call(a, 'POST', '/api/payroll/quickbooks', { from: '2030-03-04', to: '2030-03-10', includeExported: true });
-    assert.equal(qp4.json.activities, qp3.json.alreadyExported);
-    assert.equal(qp4.json.alreadyExported, 0);
+    const inQbo = tas.length;
+    // Sending again (even "send anyway") never makes copies: everything is already in QuickBooks
+    for (const body of [{}, { includeExported: true }]) {
+      const again = await call(a, 'POST', '/api/payroll/quickbooks', { from: '2030-03-04', to: '2030-03-10', ...body });
+      assert.equal(again.json.activities, 0);
+      assert.equal(again.json.alreadyInQbo, inQbo);
+    }
+    assert.equal(tas.length, inQbo);
+    // Hours sent before LaborOps remembered them are linked instead of copied
+    await withTenant(tid, (c) => c.query('UPDATE time_entries SET qbo_time_activity_id = NULL'));
+    const relink = await call(a, 'POST', '/api/payroll/quickbooks', { from: '2030-03-04', to: '2030-03-10', includeExported: true });
+    assert.equal(relink.json.activities, 0);
+    assert.equal(relink.json.alreadyInQbo, inQbo);
+    // Overtime split is written in the note
+    assert.ok(tas.some((t) => / \(\d+(\.\d+)? h: [\d.]+ reg \+ [\d.]+ OT/.test(t.Description)), JSON.stringify(tas.map((t) => t.Description)));
+    // Clean up copies made by an earlier double send
+    tas.push({ ...tas[0], Id: '999' }, { ...tas[1], Id: '998' });
+    const dd = await call(a, 'POST', '/api/payroll/quickbooks/dedupe', { from: '2030-03-04', to: '2030-03-10' });
+    assert.equal(dd.status, 200, dd.text);
+    assert.equal(dd.json.removed, 2);
+    assert.equal(tas.length, inQbo);
+    assert.equal((await call(a, 'POST', '/api/payroll/quickbooks/dedupe', { from: '2030-03-04', to: '2030-03-10' })).json.removed, 0);
   } finally {
     globalThis.fetch = real;
   }

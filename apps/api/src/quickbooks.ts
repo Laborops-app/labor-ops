@@ -193,6 +193,21 @@ export class Qbo {
     return { id: String(j.Invoice.Id), docNumber: j.Invoice.DocNumber ? String(j.Invoice.DocNumber) : null, total: Number(j.Invoice.TotalAmt ?? 0) };
   }
 
+  /** Time entries in QuickBooks between two dates (inclusive), for matching and cleaning up what LaborOps sent. */
+  async timeActivities(from: string, to: string) {
+    const rows = await this.query<{ Id: string; SyncToken: string; TxnDate: string; Hours?: number; Minutes?: number; Description?: string; EmployeeRef?: { value: string } }>(
+      'TimeActivity', `TxnDate >= '${from}' AND TxnDate <= '${to}'`,
+    );
+    return rows.map((a) => ({
+      id: String(a.Id), syncToken: String(a.SyncToken), date: a.TxnDate, employeeId: a.EmployeeRef?.value ? String(a.EmployeeRef.value) : null,
+      hours: Math.round(((a.Hours ?? 0) + (a.Minutes ?? 0) / 60) * 100) / 100, description: a.Description ?? '',
+    }));
+  }
+
+  async deleteTimeActivity(id: string, syncToken: string) {
+    await this.call('POST', 'timeactivity?operation=delete', { Id: id, SyncToken: syncToken });
+  }
+
   async createTimeActivity(t: { employeeId: string; date: string; hours: number; description: string; customerId?: string | null; itemId?: string | null }) {
     const whole = Math.floor(t.hours);
     const minutes = Math.round((t.hours - whole) * 60);
