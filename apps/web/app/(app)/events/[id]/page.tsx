@@ -6,6 +6,7 @@ import { createPortal } from 'react-dom';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { roleKey } from '@/components/Stars';
+import { EventRatings } from '@/components/Rating';
 import FillFromGroup from '@/components/FillFromGroup';
 import CrewPick, { PickOption } from '@/components/CrewPick';
 import InvoicePanel from '@/components/InvoicePanel';
@@ -118,7 +119,17 @@ function Body({ me }: { me: Me }) {
   const [tplId, setTplId] = useState('');
   const [tplPhase, setTplPhase] = useState('');
   // Event settings panel: clock-in, overtime and shift templates live here to keep the page short.
-  const [settings, setSettings] = useState<null | 'clock' | 'ot' | 'tpl' | 'pay' | 'rentman' | 'invoice'>(null);
+  const [settings, setSettings] = useState<null | 'clock' | 'ot' | 'tpl' | 'pay' | 'rentman' | 'invoice' | 'rate'>(null);
+  const [rateInfo, setRateInfo] = useState<{ rated: number; total: number; due: number } | null>(null);
+  const loadRateInfo = () =>
+    api<{ workers: { ended: boolean; review_id: string | null }[]; rated: number; total: number }>(`/api/events/${id}/reviews`)
+      .then((r) => setRateInfo({ rated: r.rated, total: r.total, due: r.workers.filter((w) => w.ended && !w.review_id).length }))
+      .catch(() => undefined);
+  useEffect(() => {
+    loadRateInfo();
+    if (new URLSearchParams(window.location.search).get('rate')) setSettings('rate');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
   // Rentman lives in the same side panel, opened from its own button next to Event settings.
   const [rm, setRm] = useState<RmView | null>(null);
   // The customer's main contact, shown in the strip at the top (like the design's Deal Details).
@@ -590,6 +601,9 @@ function Body({ me }: { me: Me }) {
           </div>
                 </div>
           <div className="acts">
+            <button className={rateInfo?.due ? 'btn small rt-due-btn' : 'btn small'} onClick={() => setSettings('rate')} aria-haspopup="dialog" title="Rate the crew who worked this event">
+              ★ Rate crew{rateInfo?.due ? ` · ${rateInfo.due}` : rateInfo?.total ? ` · ${rateInfo.rated}/${rateInfo.total}` : ''}
+            </button>
             <button className="btn small" onClick={() => setSettings('clock')} aria-haspopup="dialog">⚙ Settings</button>
             {rm && (rm.connected || rm.linked) && (
               <button className="btn small" onClick={() => setSettings('rentman')} aria-haspopup="dialog" title={rm.project ? rm.project.name : 'Link a Rentman project'}>
@@ -614,6 +628,13 @@ function Body({ me }: { me: Me }) {
             </button>
           </div>
       </div>
+      {!!rateInfo?.due && settings !== 'rate' && (
+        <div className="rt-prompt" role="status">
+          <span className="rt-prompt-ico" aria-hidden="true">★</span>
+          <span><b>How did the crew do?</b> <span className="muted">{rateInfo.due} {rateInfo.due === 1 ? 'person has' : 'people have'} finished a shift here without a rating. It takes a few seconds and helps you pick the best people next time.</span></span>
+          <button className="btn primary small" onClick={() => setSettings('rate')}>Rate crew</button>
+        </div>
+      )}
       {error && <Banner onClose={() => setError('')}>{error}</Banner>}
       {note && (
         <Banner kind="ok" onClose={() => setNote('')}>
@@ -765,14 +786,15 @@ function Body({ me }: { me: Me }) {
 
       {settings && typeof document !== 'undefined' && createPortal(
         <div className="drawer-backdrop" onMouseDown={() => setSettings(null)}>
-          <aside className={settings === 'rentman' || settings === 'invoice' ? 'drawer wide' : 'drawer'} role="dialog" aria-modal="true" aria-label={settings === 'rentman' ? 'Rentman' : settings === 'invoice' ? 'Invoice' : 'Event settings'} onMouseDown={(e) => e.stopPropagation()}>
+          <aside className={settings === 'rentman' || settings === 'invoice' || settings === 'rate' ? 'drawer wide' : 'drawer'} role="dialog" aria-modal="true" aria-label={settings === 'rentman' ? 'Rentman' : settings === 'invoice' ? 'Invoice' : settings === 'rate' ? 'Rate crew' : 'Event settings'} onMouseDown={(e) => e.stopPropagation()}>
             <div className="row space">
-              <h2 style={{ margin: 0 }}>{settings === 'rentman' ? 'Rentman' : settings === 'invoice' ? `Invoice · ${ev.name}` : 'Event settings'}</h2>
+              <h2 style={{ margin: 0 }}>{settings === 'rentman' ? 'Rentman' : settings === 'invoice' ? `Invoice · ${ev.name}` : settings === 'rate' ? `Rate crew · ${ev.name}` : 'Event settings'}</h2>
               <button className="btn ghost small" aria-label="Close" onClick={() => setSettings(null)}>✕</button>
             </div>
             {settings === 'rentman' && <div style={{ marginTop: 12 }}><RentmanCard eventId={id} isAdmin={me.role === 'admin'} onError={setError} onView={setRm} /></div>}
             {settings === 'invoice' && <InvoicePanel eventId={id} isAdmin={me.role === 'admin'} />}
-            {settings !== 'rentman' && settings !== 'invoice' && <div className="phase-tabs" role="tablist" aria-label="Settings section" style={{ margin: '12px 0' }}>
+            {settings === 'rate' && <div style={{ marginTop: 12 }}><EventRatings me={me} eventId={id} onProgress={() => loadRateInfo()} /></div>}
+            {settings !== 'rentman' && settings !== 'invoice' && settings !== 'rate' && <div className="phase-tabs" role="tablist" aria-label="Settings section" style={{ margin: '12px 0' }}>
               {([['clock', 'Clock-in'], ['ot', 'Overtime'], ['tpl', 'Shift templates'], ...((me.role === 'admin' || me.canAdjustRates) ? [['pay', 'Crew pay']] as const : [])] as const).map(([k, label]) => (
                 <button key={k} type="button" role="tab" aria-selected={settings === k} className={settings === k ? 'tab on' : 'tab'} onClick={() => setSettings(k)}>
                   {label}

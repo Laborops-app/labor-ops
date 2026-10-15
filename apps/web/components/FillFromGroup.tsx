@@ -55,7 +55,7 @@ export default function FillFromGroup({ shiftId, groups, confirmed, onDone, onEr
             <ol className="plain" style={{ margin: '.4rem 0' }}>
               {pv.candidates.map((c, i) => (
                 <li key={c.user_id} className={i < n ? '' : 'muted'}>
-                  {c.stars ? '★'.repeat(c.stars) + '☆'.repeat(5 - c.stars) : 'unrated'} {c.name}
+                  <span className={c.stars ? 'rt-inline' : 'muted'}>{c.stars ? `★ ${c.stars.toFixed(1)}` : 'unrated'}</span> {c.name}
                   <span className="muted"> · {c.week_hours} h this week{c.overtime ? ' · would be overtime' : ''}</span>
                 </li>
               ))}

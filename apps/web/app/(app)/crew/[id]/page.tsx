@@ -4,7 +4,8 @@ import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import Shell, { initials } from '@/components/Shell';
 import { Banner } from '@/components/ui';
-import { api, ApiError, roleLabel } from '@/lib/api';
+import { api, ApiError, Me, roleLabel } from '@/lib/api';
+import { CrewReviews } from '@/components/Rating';
 import SkillPicker, { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 
 type Member = {
@@ -51,7 +52,7 @@ async function upload(certId: string, file: File) {
   }
 }
 
-function Body() {
+function Body({ me }: { me: Me }) {
   const { id } = useParams<{ id: string }>();
   const [d, setD] = useState<Detail | null>(null);
   const [f, setF] = useState({ name: '', email: '', phone: '', address: '', emergencyName: '', emergencyPhone: '', bio: '', coordinatorNotes: '', skills: [] as string[] });
@@ -248,6 +249,11 @@ function Body() {
 
       {isCrew && (
         <>
+          <section className="card" id="ratings">
+            <h2>Ratings &amp; reviews</h2>
+            <p className="muted small" style={{ marginTop: -4 }}>Private to admins and labor coordinators. {m.name.split(' ')[0]} never sees these.</p>
+            <CrewReviews me={me} memberId={id} />
+          </section>
           <section className="card">
             <h2>Certificates</h2>
             {d.certs.length === 0 ? (
@@ -378,5 +384,5 @@ function Body() {
 }
 
 export default function Page() {
-  return <Shell roles={['admin', 'manager']}>{() => <Body />}</Shell>;
+  return <Shell roles={['admin', 'manager']}>{(me) => <Body me={me} />}</Shell>;
 }

@@ -34,7 +34,7 @@ export default function CrewPick({ options, onPick, onClose, title = 'Add crew',
                 <button key={o.id} type="button" className="crew-pick-item" disabled={busy || k === 'blocked'} onClick={() => onPick(o)}>
                   <span>
                     <b>+</b> {o.name}
-                    {o.stars ? <span className="muted"> {'★'.repeat(o.stars)}</span> : null}
+                    {o.stars ? <span className="rt-inline" title={`Rated ${o.stars.toFixed(1)} of 5 for this position`}> ★ {o.stars.toFixed(1)}</span> : null}
                   </span>
                   <span className="muted small">{o.note ?? o.sub}</span>
                 </button>

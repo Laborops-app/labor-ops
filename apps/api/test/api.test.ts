@@ -1531,6 +1531,67 @@ test('ratings: coordinators rate crew per position, crew cannot, base role name 
   assert.equal((await call(a, 'PUT', `/api/crew/${crypto.randomUUID()}/ratings`, { role: 'Audio', stars: 3 })).status, 404);
 });
 
+test('reviews: rate after a shift, tags and notes, averages per position, only the author or an admin edits', async () => {
+  const a = await register('rev');
+  const c1 = await mkCrew(a, 'rv1');
+  const c2 = await mkCrew(a, 'rv2');
+  await call(a, 'POST', '/api/crew', { name: 'Coord Rev', email: `coord-rev-${run}@test.example`, role: 'manager', password: 'password123' });
+  const m = await login(`coord-rev-${run}@test.example`, 'password123');
+  const ev = await mkEvent(a);
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Audio (A1)', startsAt: start(-10), endsAt: start(-4), headcount: 2 })).json.shift.id;
+  for (const c of [c1, c2]) {
+    const asg = (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c.id })).json.assignment.id;
+    await call(c.session, 'POST', `/api/assignments/${asg}/respond`, { response: 'accepted' });
+  }
+  // the event lists both people, nobody rated yet; crew cannot see it
+  assert.equal((await call(c1.session, 'GET', `/api/events/${ev}/reviews`)).status, 403);
+  let list = (await call(a, 'GET', `/api/events/${ev}/reviews`)).json;
+  assert.equal(list.total, 2);
+  assert.equal(list.rated, 0);
+  assert.equal(list.ended, 2);
+  // autosave a review with tags and a note; unknown tags are refused
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/reviews`, { shiftId: sh, userId: c1.id, stars: 4, tags: ['nope'] })).status, 400);
+  const r1 = await call(a, 'PUT', `/api/events/${ev}/reviews`, { shiftId: sh, userId: c1.id, stars: 4, tags: ['on_time', 'on_time', 'skilled'], note: 'Great patching' });
+  assert.equal(r1.status, 200, r1.text);
+  assert.equal(r1.json.positionAvg, 4);
+  // saving again updates the same review instead of adding one
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/reviews`, { shiftId: sh, userId: c1.id, stars: 5, tags: ['on_time'], note: 'Great patching' })).json.reviewId, r1.json.reviewId);
+  list = (await call(a, 'GET', `/api/events/${ev}/reviews`)).json;
+  const row = list.workers.find((w: any) => w.user_id === c1.id);
+  assert.equal(row.stars, 5);
+  assert.deepEqual(row.tags, ['on_time']);
+  assert.equal(list.rated, 1);
+  // a general review in the same position makes an average, under the base position name
+  assert.equal((await call(m, 'POST', `/api/crew/${c1.id}/reviews`, { role: 'Audio', stars: 2, tags: ['late'], note: 'Late twice' })).status, 201);
+  let rv = (await call(a, 'GET', `/api/crew/${c1.id}/reviews`)).json;
+  assert.equal(rv.summary[0].role_key, 'audio');
+  assert.equal(rv.summary[0].avg, 3.5);
+  assert.equal(rv.summary[0].count, 2);
+  assert.equal(rv.reviews.length, 2);
+  assert.equal(rv.reviews.find((x: any) => x.shift_id).event_name, 'Show');
+  const crewRow = (await call(a, 'GET', '/api/crew')).json.crew.find((x: any) => x.id === c1.id);
+  assert.equal(crewRow.ratings.audio, 3.5);
+  assert.equal(crewRow.review_count, 2);
+  assert.equal(crewRow.flag_count, 1);
+  // the coordinator cannot change the admin's shift review; the admin can change the coordinator's
+  assert.equal((await call(m, 'PUT', `/api/events/${ev}/reviews`, { shiftId: sh, userId: c1.id, stars: 1 })).status, 403);
+  const general = rv.reviews.find((x: any) => !x.shift_id);
+  assert.equal((await call(a, 'PATCH', `/api/reviews/${general.id}`, { stars: 3 })).json.ratings.audio, 4);
+  const shiftReview = rv.reviews.find((x: any) => x.shift_id);
+  assert.equal((await call(m, 'DELETE', `/api/reviews/${shiftReview.id}`)).status, 403);
+  // clearing the stars removes the shift review and the average follows
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/reviews`, { shiftId: sh, userId: c1.id, stars: null })).json.positionAvg, 3);
+  // someone not on the shift cannot be rated for it
+  const c3 = await mkCrew(a, 'rv3');
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/reviews`, { shiftId: sh, userId: c3.id, stars: 4 })).status, 404);
+  assert.equal((await call(a, 'POST', `/api/crew/${c3.id}/reviews`, { role: 'Audio', stars: 4, shiftId: sh })).status, 400);
+  // removing the last review clears the position rating
+  assert.equal((await call(a, 'DELETE', `/api/reviews/${general.id}`)).status, 200);
+  rv = (await call(a, 'GET', `/api/crew/${c1.id}/reviews`)).json;
+  assert.equal(rv.summary.length, 0);
+  assert.equal(rv.overall.count, 0);
+});
+
 test('clocking: geofence, coordinator mode and on-site check-in', async () => {
   const a = await register('geo');
   const c1 = await mkCrew(a, 'geo1');

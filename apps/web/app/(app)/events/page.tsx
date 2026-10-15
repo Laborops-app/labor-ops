@@ -11,7 +11,7 @@ import RentmanPicker from '@/components/RentmanPicker';
 import CustomerSelect from '@/components/CustomerSelect';
 import LocationPick from '@/components/LocationPick';
 
-type Ev = { id: string; name: string; client: string | null; venue: string | null; start_date: string; end_date: string; shift_count: number; slots: number; accepted: number; filled?: number };
+type Ev = { id: string; name: string; client: string | null; venue: string | null; start_date: string; end_date: string; shift_count: number; slots: number; accepted: number; filled?: number; to_rate?: number };
 type View = 'upcoming' | 'past' | 'all';
 const today = () => new Date().toISOString().slice(0, 10);
 const PAGE = 25;
@@ -146,7 +146,14 @@ function Body() {
                       {filled} / {ev.slots}
                       <span className={`mini-bar ${st.cls}`} aria-hidden="true"><i style={{ width: `${pct}%` }} /></span>
                     </td>
-                    <td><span className={`pill ${st.cls}`}>{st.label}</span></td>
+                    <td>
+                      <span className={`pill ${st.cls}`}>{st.label}</span>
+                      {!!ev.to_rate && (
+                        <Link href={`/events/${ev.id}?rate=1`} className="pill rt-due" onClick={(e) => e.stopPropagation()} title="People who worked this event and have not been rated yet">
+                          ★ Rate crew · {ev.to_rate}
+                        </Link>
+                      )}
+                    </td>
                     <td className="edit-col">
                       <Link href={`/events/${ev.id}`} className="btn-round sm" aria-label={`Open ${ev.name}`} onClick={(e) => e.stopPropagation()} style={{ border: 0, background: 'transparent' }}>
                         <EditIcon />

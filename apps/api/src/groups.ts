@@ -15,7 +15,7 @@ export async function groupCandidates(c: PoolClient, shiftId: string, groupId: s
   if (!shift) return null;
   const members = (
     await c.query(
-      `SELECT u.id, u.name, COALESCE(r.stars, 0) AS stars
+      `SELECT u.id, u.name, COALESCE(r.avg_stars, r.stars, 0)::float8 AS stars
          FROM crew_group_members m JOIN users u ON u.id = m.user_id AND u.role = 'crew' AND u.active
          LEFT JOIN crew_ratings r ON r.user_id = u.id AND r.role_key = lower(trim(regexp_replace($2, '\\s*\\(.*\\)\\s*$', '')))
         WHERE m.group_id = $1 ORDER BY u.name`,

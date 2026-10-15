@@ -2,7 +2,8 @@
 import Link from 'next/link';
 import { Fragment, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Stars, roleKey } from '@/components/Stars';
+import { roleKey } from '@/components/Stars';
+import { CrewReviews, StarMeter } from '@/components/Rating';
 import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, Me, roleLabel } from '@/lib/api';
@@ -11,7 +12,7 @@ import Modal from '@/components/Modal';
 import TopbarAction, { PlusIcon, EditIcon, SearchIcon, avClass, initialsOf } from '@/components/TopbarAction';
 
 type Cert = { id: string; name: string; expires_on: string | null; verified: boolean; has_file: boolean };
-type Member = { id: string; name: string; email: string; role: string; phone: string | null; skills: string[]; active: boolean; certs: Cert[]; has_availability: boolean; can_adjust_rates?: boolean; ratings?: Record<string, number> };
+type Member = { id: string; name: string; email: string; role: string; phone: string | null; skills: string[]; active: boolean; certs: Cert[]; has_availability: boolean; can_adjust_rates?: boolean; ratings?: Record<string, number>; rating_avg?: number | null; review_count?: number; flag_count?: number };
 
 const certState = (c: Cert) => {
   if (!c.expires_on) return '';
@@ -31,6 +32,7 @@ function Body({ me }: { me: Me }) {
   const skillSections = useSkillSections();
   const [open, setOpen] = useState<string | null>(null);
   const [cf, setCf] = useState({ name: '', expiresOn: '' });
+  const [rating, setRating] = useState<Member | null>(null);
 
   const load = () =>
     api<{ crew: Member[] }>('/api/crew')
@@ -163,6 +165,7 @@ function Body({ me }: { me: Me }) {
                 <th>Name</th>
                 <th>Role</th>
                 <th>Skills</th>
+                <th>Rating</th>
                 <th>Certificates</th>
                 <th className="hide-sm">Phone</th>
                 <th className="hide-sm" />
@@ -181,22 +184,25 @@ function Body({ me }: { me: Me }) {
                     <td><span className={m.role === 'crew' ? 'pill past' : 'pill'}>{roleLabel(m.role)}</span></td>
                     <td className="wrap" onClick={stop} style={{ cursor: 'default' }}>
                       {m.skills.length === 0 && <span className="muted">—</span>}
-                      {m.skills.map((s) => (
-                        <span key={s} className="chip">
-                          {s}
-                          {m.role === 'crew' && (
-                            <Stars
-                              label={`${m.name} as ${s}`}
-                              value={m.ratings?.[roleKey(s)]}
-                              onChange={(n) =>
-                                api<{ ratings: Record<string, number> }>(`/api/crew/${m.id}/ratings`, { method: 'PUT', body: { role: s, stars: n } })
-                                  .then((r) => setList((l) => l && l.map((x) => (x.id === m.id ? { ...x, ratings: r.ratings } : x))))
-                                  .catch((e) => setError(e.message))
-                              }
-                            />
-                          )}
-                        </span>
-                      ))}
+                      {m.skills.map((s) => {
+                        const r = m.ratings?.[roleKey(s)];
+                        return (
+                          <span key={s} className="chip">
+                            {s}
+                            {r ? <span className="rt-chip-n" title={`Rated ${r.toFixed(1)} as ${s}`}>★ {r.toFixed(1)}</span> : null}
+                          </span>
+                        );
+                      })}
+                    </td>
+                    <td onClick={stop} style={{ cursor: 'default' }}>
+                      {m.role === 'crew' ? (
+                        <button type="button" className="rt-cell" onClick={() => setRating(m)} aria-label={`Ratings for ${m.name}`}>
+                          {m.rating_avg ? <StarMeter value={m.rating_avg} count={m.review_count} size={14} /> : <span className="rt-cell-empty">★ Rate</span>}
+                          {!!m.flag_count && <span className="rt-flag" title={`${m.flag_count} review${m.flag_count === 1 ? '' : 's'} with a warning tag (late, no-show, safety…)`}>⚑ {m.flag_count}</span>}
+                        </button>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
                     </td>
                     <td className="wrap" onClick={stop} style={{ cursor: 'default' }}>
                       {m.certs.map((c) => (
@@ -232,7 +238,7 @@ function Body({ me }: { me: Me }) {
                   </tr>
                   {open === m.id && (
                     <tr onClick={stop} style={{ cursor: 'default' }}>
-                      <td colSpan={8} className="cert-edit wrap" style={{ height: 'auto', padding: '16px 12px', maxWidth: 'none' }}>
+                      <td colSpan={9} className="cert-edit wrap" style={{ height: 'auto', padding: '16px 12px', maxWidth: 'none' }}>
                         <form className="grid-form" onSubmit={(e) => addCert(m, e)}>
                           <label>
                             Certificate
@@ -316,6 +322,12 @@ function Body({ me }: { me: Me }) {
               <button className="btn primary">Add {f.role === 'manager' ? 'Coordinator' : 'Crew Member'}</button>
             </div>
           </form>
+        </Modal>
+      )}
+      {rating && (
+        <Modal title={`Ratings · ${rating.name}`} onClose={() => setRating(null)} wide>
+          <CrewReviews me={me} memberId={rating.id} startAdding={!rating.review_count} onChange={() => load()} />
+          <p className="small" style={{ margin: '12px 0 0' }}><Link href={`/crew/${rating.id}`}>Open full profile →</Link></p>
         </Modal>
       )}
     </>

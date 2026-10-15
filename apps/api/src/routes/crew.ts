@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { withTenant, audit, pool } from '../db';
 import { guard } from '../auth';
 import { sendInvite } from '../notify/tokens';
+import { FLAG_TAGS, ratingsOf, refreshRating, reviewRoleKey } from '../reviews';
 
 const createBody = z.object({
   name: z.string().trim().min(1).max(100),
@@ -38,8 +39,13 @@ export async function crewRoutes(app: FastifyInstance) {
              COALESCE((SELECT json_agg(json_build_object('id', k.id, 'name', k.name, 'expires_on', k.expires_on::text, 'verified', k.verified, 'has_file', EXISTS (SELECT 1 FROM cert_files f WHERE f.cert_id = k.id)) ORDER BY k.name)
                        FROM user_certs k WHERE k.user_id = users.id), '[]'::json) AS certs,
              EXISTS (SELECT 1 FROM availability a WHERE a.user_id = users.id) AS has_availability,
-             COALESCE((SELECT json_object_agg(r.role_key, r.stars) FROM crew_ratings r WHERE r.user_id = users.id), '{}'::json) AS ratings
+             COALESCE((SELECT json_object_agg(r.role_key, COALESCE(r.avg_stars, r.stars)::float8) FROM crew_ratings r WHERE r.user_id = users.id), '{}'::json) AS ratings,
+             (SELECT avg(v.stars)::float8 FROM crew_reviews v WHERE v.user_id = users.id) AS rating_avg,
+             (SELECT count(*)::int FROM crew_reviews v WHERE v.user_id = users.id) AS review_count,
+             (SELECT count(*)::int FROM crew_reviews v WHERE v.user_id = users.id AND v.tags && $1::text[]) AS flag_count,
+             (SELECT max(v.created_at) FROM crew_reviews v WHERE v.user_id = users.id) AS last_reviewed_at
            FROM users ORDER BY role, name`,
+          [FLAG_TAGS],
         )
       ).rows,
     }));
@@ -57,26 +63,25 @@ export async function crewRoutes(app: FastifyInstance) {
     return row ?? reply.code(404).send({ error: 'Labor coordinator not found' });
   });
 
-  // Star rating (1-5) for one position; null clears it. Ratings are internal to admins and coordinators.
+  // Quick rating (1-5) for one position: this coordinator's general review for it (not tied to a shift). null removes it.
+  // Ratings are internal to admins and coordinators.
   app.put('/api/crew/:id/ratings', { preHandler: guard('admin', 'manager') }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const b = z.object({ role: z.string().trim().min(1).max(100), stars: z.number().int().min(1).max(5).nullable() }).parse(req.body);
-    const key = b.role.replace(/\s*\(.*\)\s*$/, '').trim().toLowerCase();
+    const key = reviewRoleKey(b.role);
     const out = await withTenant(req.user.tid, async (c) => {
       const u = (await c.query("SELECT 1 FROM users WHERE id = $1 AND role = 'crew'", [id])).rowCount;
       if (!u) return null;
-      if (b.stars === null) await c.query('DELETE FROM crew_ratings WHERE user_id = $1 AND role_key = $2', [id, key]);
-      else
-        await c.query(
-          `INSERT INTO crew_ratings (tenant_id, user_id, role_key, stars, rated_by) VALUES ($1,$2,$3,$4,$5)
-           ON CONFLICT (user_id, role_key) DO UPDATE SET stars = $4, rated_by = $5, updated_at = now()`,
-          [req.user.tid, id, key, b.stars, req.user.sub],
-        );
+      const mine = (await c.query('SELECT id FROM crew_reviews WHERE user_id = $1 AND role_key = $2 AND shift_id IS NULL AND rated_by = $3 ORDER BY created_at DESC', [id, key, req.user.sub])).rows;
+      if (b.stars === null) await c.query('DELETE FROM crew_reviews WHERE id = ANY($1::uuid[])', [mine.map((r) => r.id)]);
+      else if (mine[0]) await c.query('UPDATE crew_reviews SET stars = $2, updated_at = now() WHERE id = $1', [mine[0].id, b.stars]);
+      else await c.query('INSERT INTO crew_reviews (tenant_id, user_id, role_key, stars, rated_by) VALUES ($1,$2,$3,$4,$5)', [req.user.tid, id, key, b.stars, req.user.sub]);
+      await refreshRating(c, req.user.tid, id, key);
       await audit(c, req.user.tid, req.user.sub, 'crew.rating', 'user', id, { role: key, stars: b.stars });
-      return (await c.query('SELECT role_key, stars FROM crew_ratings WHERE user_id = $1', [id])).rows;
+      return ratingsOf(c, id);
     });
     if (!out) return reply.code(404).send({ error: 'Crew member not found' });
-    return { ratings: Object.fromEntries(out.map((r: any) => [r.role_key, r.stars])) };
+    return { ratings: out };
   });
 
   app.post('/api/crew', { preHandler: guard('admin', 'manager') }, async (req, reply) => {

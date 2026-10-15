@@ -128,7 +128,11 @@ export async function eventRoutes(app: FastifyInstance) {
                WHERE s.event_id = e.id AND a.status = 'accepted') AS accepted,
             -- Seats with someone on them (offered, pending or accepted), counted per shift up to its headcount.
             (SELECT COALESCE(sum(LEAST(s.headcount, (SELECT count(*) FROM shift_assignments a WHERE a.shift_id = s.id AND a.status <> 'declined'))), 0)::int
-               FROM shifts s WHERE s.event_id = e.id) AS filled
+               FROM shifts s WHERE s.event_id = e.id) AS filled,
+            -- People who worked a finished shift and have no review for it yet.
+            (SELECT count(*)::int FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id
+               WHERE s.event_id = e.id AND a.status = 'accepted' AND s.ends_at < now()
+                 AND NOT EXISTS (SELECT 1 FROM crew_reviews r WHERE r.user_id = a.user_id AND r.shift_id = s.id)) AS to_rate
           FROM events e ORDER BY e.start_date DESC, e.name`)
       ).rows,
     })),
