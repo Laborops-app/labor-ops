@@ -194,8 +194,9 @@ export async function rentmanRoutes(app: FastifyInstance) {
         const token = await getToken(c);
         if (!token) throw new RentmanError('Connect Rentman first (Integrations page).', 409);
         const r = await pushEventRequest(c, req.user.tid, token, id);
-        await audit(c, req.user.tid, req.user.sub, 'rentman.push_event', 'event', id, r);
-        return view(c, id, req.user.role === 'admin');
+        await audit(c, req.user.tid, req.user.sub, 'rentman.push_event', 'event', id, { requestId: r.requestId, contactId: r.contactId });
+        const v = await view(c, id, req.user.role === 'admin');
+        return r.contactWarning ? { ...v, warning: `The project request was sent, but the customer could not be saved as a Rentman contact: ${r.contactWarning}` } : v;
       });
       return out === undefined ? reply.code(404).send({ error: 'Event not found' }) : out;
     } catch (e) {

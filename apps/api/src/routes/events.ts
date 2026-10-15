@@ -283,7 +283,8 @@ export async function eventRoutes(app: FastifyInstance) {
           const token = await getToken(c);
           if (!token) throw new RentmanError('Rentman is not connected, so the event was not sent. Connect it on the Integrations page.', 409);
           const r = await pushEventRequest(c, req.user.tid, token, row.id);
-          await audit(c, req.user.tid, req.user.sub, 'rentman.push_event', 'event', row.id, r);
+          await audit(c, req.user.tid, req.user.sub, 'rentman.push_event', 'event', row.id, { requestId: r.requestId, contactId: r.contactId });
+          if (r.contactWarning) warning = `The event was sent to Rentman as a project request, but the customer could not be saved as a Rentman contact: ${r.contactWarning}`;
           return r;
         });
       } catch (e) {

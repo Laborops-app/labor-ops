@@ -191,21 +191,62 @@ async function send(token: string, method: 'POST' | 'PUT', path: string, body: u
   } catch {
     throw new RentmanError('Could not reach Rentman. Try again in a moment.');
   }
-  if (res.status === 401) throw new RentmanError('Rentman rejected the API token. Check it and save again.', 400);
-  if (res.status === 403) throw new RentmanError('Rentman would not allow that. The API token may be read-only, or you hit the rate limit.', 403);
   if (!res.ok) {
-    const detail = await res.json().then((j: any) => j?.message || j?.error || j?.errors?.[0]?.message).catch(() => null);
-    throw new RentmanError(`Rentman could not save ${what} (${res.status})${detail ? `: ${String(detail).slice(0, 200)}` : ''}.`);
+    // Rentman explains most refusals in the body; pass that on so the person can act on it.
+    const raw = await res.text().catch(() => '');
+    let detail: string | null = null;
+    try {
+      const j = JSON.parse(raw);
+      detail = j?.message || j?.error?.message || j?.error || j?.errors?.[0]?.message || j?.errors?.[0] || null;
+      if (detail && typeof detail !== 'string') detail = JSON.stringify(detail);
+    } catch {
+      detail = raw.trim() || null;
+    }
+    const why = detail ? ` Rentman said: "${String(detail).slice(0, 240)}"` : '';
+    if (res.status === 401) throw new RentmanError(`Rentman rejected the API token while saving ${what}. Check it and save it again on the Integrations page.${why}`, 400);
+    if (res.status === 403)
+      throw new RentmanError(
+        `Rentman did not allow saving ${what} (403).${why} Rentman gives an API token the same rights as the Rentman user who created it, so that user's role needs permission to create ${what === 'the customer' ? 'contacts' : 'project requests'}. Make the token with an admin user (Settings → Configuration → Account → Integrations) and paste it on the Integrations page.`,
+        403,
+      );
+    if (res.status === 429) throw new RentmanError(`Rentman's rate limit was hit while saving ${what}. Wait a minute and try again.`, 429);
+    throw new RentmanError(`Rentman could not save ${what} (${res.status}).${why}`);
   }
   return res.json();
 }
 
-/** Create the customer in Rentman (or update the linked one). Name, email and phone of the main contact go across. */
+/** "201 Presidents Cir, Salt Lake City, UT 84112" → Rentman's separate street / city / state / postal code fields. */
+export function addressFields(address: string | null | undefined, prefix: 'mailing' | 'visit' | 'invoice') {
+  const parts = String(address ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  if (!parts.length) return {};
+  const out: Record<string, string> = { [`${prefix}_street`]: parts[0] };
+  const rest = parts.slice(1).filter((x) => !/^(usa?|united states( of america)?)$/i.test(x));
+  const last = rest.at(-1) ?? '';
+  const sz = /^([A-Za-z]{2})\s*(\d{5}(?:-\d{4})?)?$/.exec(last) ?? /^(\d{5}(?:-\d{4})?)$/.exec(last);
+  if (sz) {
+    rest.pop();
+    if (/^\d/.test(sz[1])) out[`${prefix}_postalcode`] = sz[1];
+    else {
+      out[`${prefix}_state`] = sz[1].toUpperCase();
+      if (sz[2]) out[`${prefix}_postalcode`] = sz[2];
+    }
+  }
+  if (rest.length) out[`${prefix}_city`] = rest.join(', ');
+  return out;
+}
+
+/**
+ * Create the customer in Rentman as a company contact (or update the linked one): name, email, phone and address, plus the
+ * main contact person. Only fields Rentman accepts on contacts are sent.
+ */
 export async function pushCustomer(c: PoolClient, token: string, customerId: string): Promise<number> {
   const cu = (await c.query(
-    `SELECT cu.*, pc.email, pc.phone FROM customers cu LEFT JOIN LATERAL (SELECT email, phone FROM customer_contacts WHERE customer_id = cu.id ORDER BY is_primary DESC, created_at LIMIT 1) pc ON true WHERE cu.id = $1`, [customerId])).rows[0];
+    `SELECT cu.*, pc.name AS person, pc.email, pc.phone, dl.address FROM customers cu
+       LEFT JOIN LATERAL (SELECT name, email, phone FROM customer_contacts WHERE customer_id = cu.id ORDER BY is_primary DESC, created_at LIMIT 1) pc ON true
+       LEFT JOIN LATERAL (SELECT address FROM customer_locations WHERE customer_id = cu.id ORDER BY is_default DESC, created_at LIMIT 1) dl ON true
+      WHERE cu.id = $1`, [customerId])).rows[0];
   if (!cu) throw new RentmanError('Customer not found', 404);
-  const payload: Record<string, unknown> = { displayname: cu.name, name: cu.name };
+  const payload: Record<string, unknown> = { type: 'company', name: cu.name, ...addressFields(cu.address, 'mailing'), ...addressFields(cu.address, 'visit') };
   if (cu.email) payload.email_1 = cu.email;
   if (cu.phone) payload.phone_1 = cu.phone;
   let rid: number | null = cu.rentman_contact_id;
@@ -220,6 +261,14 @@ export async function pushCustomer(c: PoolClient, token: string, customerId: str
     const j = await send(token, 'POST', '/contacts', payload);
     rid = Number(j?.data?.id);
     if (!rid) throw new RentmanError('Rentman did not return the new contact.');
+    // The main contact person goes on the new Rentman contact too (best effort: the company contact is what matters).
+    if (cu.person && cu.person !== cu.name) {
+      const [first, ...last] = String(cu.person).trim().split(/\s+/);
+      const person: Record<string, unknown> = last.length ? { firstname: first, lastname: last.join(' ') } : { lastname: first };
+      if (cu.email) person.email = cu.email;
+      if (cu.phone) person.phone = cu.phone;
+      await send(token, 'POST', `/contacts/${rid}/contactpersons`, person, 'the contact person').catch(() => undefined);
+    }
   }
   await c.query('UPDATE customers SET rentman_contact_id = $2, rentman_synced_at = now() WHERE id = $1', [customerId, rid]);
   await c.query(
@@ -281,8 +330,17 @@ export async function pushEventRequest(c: PoolClient, tid: string, token: string
   let contactId: number | null = null;
   let person: { name: string | null; email: string | null; phone: string | null } = { name: null, email: null, phone: null };
   let customerName: string | null = ev.client;
+  let contactWarning: string | null = null;
   if (ev.customer_id) {
-    contactId = await pushCustomer(c, token, ev.customer_id);
+    // The request carries the customer's details as text too, so it still goes through when the contact cannot be saved
+    // (Rentman then offers to create or match the contact when the request is accepted).
+    try {
+      contactId = await pushCustomer(c, token, ev.customer_id);
+    } catch (e) {
+      if (!(e instanceof RentmanError) || e.status === 400) throw e;
+      contactId = (await c.query('SELECT rentman_contact_id FROM customers WHERE id = $1', [ev.customer_id])).rows[0]?.rentman_contact_id ?? null;
+      contactWarning = e.message;
+    }
     const cu = (await c.query(
       `SELECT cu.name, pc.name AS person, pc.email, pc.phone FROM customers cu
          LEFT JOIN LATERAL (SELECT name, email, phone FROM customer_contacts WHERE customer_id = cu.id ORDER BY is_primary DESC, created_at LIMIT 1) pc ON true
@@ -307,7 +365,10 @@ export async function pushEventRequest(c: PoolClient, tid: string, token: string
   if (person.email) body.contact_person_email = person.email;
   if (person.name && person.name !== customerName) Object.assign(body, splitName(person.name));
   if (ev.venue) body.location_name = ev.venue;
-  if (ev.address) body.location_mailing_street = ev.address;
+  if (ev.address) {
+    const a = addressFields(ev.address, 'mailing');
+    for (const [k, v] of Object.entries(a)) if (!k.endsWith('_state')) body[`location_${k}`] = v;
+  }
 
   let rid: number | null = ev.rentman_request_id;
   if (rid) await send(token, 'PUT', `/projectrequests/${rid}`, body, 'the project request');
@@ -320,7 +381,7 @@ export async function pushEventRequest(c: PoolClient, tid: string, token: string
     "UPDATE events SET rentman_request_id = $2, rentman_request_status = 'open', rentman_pushed_at = now(), rentman_checked_at = now() WHERE id = $1",
     [eventId, rid],
   );
-  return { requestId: rid, contactId };
+  return { requestId: rid, contactId, contactWarning };
 }
 
 /**
