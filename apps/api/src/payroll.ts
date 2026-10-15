@@ -140,7 +140,7 @@ export function adpFile(s: AcctSettings['payroll']['adp'], people: PayPerson[]) 
  * a row of column titles, then one row per employee per earnings code. ADP pays the hours at the employee's
  * rate in RUN (Rate Code BASE / RATE_2 / RATE_3); day-rate pay goes as a dollar amount.
  */
-export function adpRunFile(s: AcctSettings['payroll']['adp'], people: PayPerson[], from: string, to: string) {
+export function adpRunFile(s: AcctSettings['payroll']['adp'], people: PayPerson[], from: string, to: string, rateCodeOf: (role: string) => string = () => s.run.rateCode) {
   const r = s.run;
   const us = (ymd: string) => `${ymd.slice(5, 7)}/${ymd.slice(8, 10)}/${ymd.slice(0, 4)}`;
   const rows: unknown[][] = [
@@ -148,12 +148,27 @@ export function adpRunFile(s: AcctSettings['payroll']['adp'], people: PayPerson[
     ['IID', 'Pay Frequency', 'Pay Period Start', 'Pay Period End', 'Employee ID', 'Earnings Code', 'Pay Hours', 'Dollars', 'Separate Check', 'Worked In Dept', 'Rate Code'],
   ];
   for (const p of people) {
-    const line = (code: string, hours: number | null, dollars: number | null) =>
-      rows.push([s.companyCode, r.frequency, us(from), us(to), p.payrollIds.adp ?? '', code, hours ? hours.toFixed(2) : '', dollars ? dollars.toFixed(2) : '', 0, r.dept, r.rateCode]);
-    if (p.regular) line(r.regCode, p.regular, null);
-    if (p.overtime) line(r.otCode, p.overtime, null);
-    if (p.double) line(r.dtCode, p.double, null);
-    if (p.dayPay) line(r.dayCode, null, p.dayPay);
+    // Hours per Rate Code: each role can be paid at a different rate set up on the employee in RUN.
+    const by = new Map<string, { reg: number; ot: number; dt: number; day: number }>();
+    for (const e of p.entries) {
+      const code = rateCodeOf(e.role) || r.rateCode;
+      const t = by.get(code) ?? { reg: 0, ot: 0, dt: 0, day: 0 };
+      if (e.day) t.day += e.pay ?? 0;
+      else {
+        t.reg += e.reg;
+        t.ot += e.ot;
+        t.dt += e.dt;
+      }
+      by.set(code, t);
+    }
+    for (const [code, t] of by) {
+      const line = (earn: string, hours: number | null, dollars: number | null) =>
+        rows.push([s.companyCode, r.frequency, us(from), us(to), p.payrollIds.adp ?? '', earn, hours ? hours.toFixed(2) : '', dollars ? dollars.toFixed(2) : '', 0, r.dept, code]);
+      if (t.reg > 0.004) line(r.regCode, t.reg, null);
+      if (t.ot > 0.004) line(r.otCode, t.ot, null);
+      if (t.dt > 0.004) line(r.dtCode, t.dt, null);
+      if (t.day > 0.004) line(r.dayCode, null, t.day);
+    }
   }
   return csv(rows);
 }
@@ -185,8 +200,8 @@ export function detailFile(people: PayPerson[]) {
   ]);
 }
 
-export function payrollFile(provider: PayrollProvider | 'csv', s: AcctSettings, people: PayPerson[], from = '', to = '') {
-  if (provider === 'adp' && s.payroll.adp.product === 'run') return { name: 'adp-run-timesheet', body: adpRunFile(s.payroll.adp, people, from, to) };
+export function payrollFile(provider: PayrollProvider | 'csv', s: AcctSettings, people: PayPerson[], from = '', to = '', rateCodeOf?: (role: string) => string) {
+  if (provider === 'adp' && s.payroll.adp.product === 'run') return { name: 'adp-run-timesheet', body: adpRunFile(s.payroll.adp, people, from, to, rateCodeOf) };
   if (provider === 'adp') return { name: 'adp-pay-data', body: adpFile(s.payroll.adp, people) };
   if (provider === 'gusto') return { name: 'gusto-hours', body: gustoFile(people) };
   if (provider === 'quickbooks') return { name: 'quickbooks-time', body: quickbooksFile(people) };

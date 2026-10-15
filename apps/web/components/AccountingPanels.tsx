@@ -6,7 +6,7 @@ import { Banner } from '@/components/ui';
 import { api, money } from '@/lib/api';
 
 type Provider = 'adp' | 'gusto' | 'quickbooks';
-type AdpRun = { frequency: 'W' | 'B' | 'S' | 'M' | 'Q'; regCode: string; otCode: string; dtCode: string; dayCode: string; rateCode: 'BASE' | 'RATE_2' | 'RATE_3'; dept: string };
+type AdpRun = { frequency: 'W' | 'B' | 'S' | 'M' | 'Q'; regCode: string; otCode: string; dtCode: string; dayCode: string; rateCodes: { code: string; label: string }[]; rateCode: string; roleRates: Record<string, string>; dept: string };
 type Settings = {
   qbo: { defaultItemId: string | null };
   desktop: { arAccount: string; incomeAccount: string; itemMode: 'single' | 'role'; itemName: string };
@@ -78,6 +78,7 @@ export default function AccountingPanels({ qbo }: { qbo: string | null }) {
   };
   const setAdp = (patch: Partial<Settings['payroll']['adp']>) => setS({ ...s, payroll: { ...s.payroll, adp: { ...s.payroll.adp, ...patch } } });
   const setRun = (patch: Partial<AdpRun>) => setAdp({ run: { ...s.payroll.adp.run, ...patch } });
+  const runS = s.payroll.adp.run;
 
   return (
     <>
@@ -255,7 +256,7 @@ export default function AccountingPanels({ qbo }: { qbo: string | null }) {
               <>
                 <p className="muted small">
                   Downloads a RUN time sheet import file (Payroll Assigned Identifier layout). Earnings codes must match your RUN Earnings Codes report.
-                  Each person&apos;s ADP ID is their RUN employee ID. Hours are paid at the rate saved for the employee in RUN; day-rate pay is sent as dollars.
+                  Each person&apos;s ADP ID is their RUN employee ID. Hours are paid at the employee&apos;s rate in RUN picked by the Rate Code below; day-rate pay is sent as dollars.
                 </p>
                 <div className="settings-grid">
                   <label>
@@ -289,18 +290,93 @@ export default function AccountingPanels({ qbo }: { qbo: string | null }) {
                     <input value={s.payroll.adp.run.dayCode} maxLength={10} onChange={(e) => setRun({ dayCode: e.target.value })} />
                   </label>
                   <label>
-                    Rate code
-                    <select value={s.payroll.adp.run.rateCode} onChange={(e) => setRun({ rateCode: e.target.value as AdpRun['rateCode'] })}>
-                      <option value="BASE">BASE (first pay rate)</option>
-                      <option value="RATE_2">RATE_2 (second pay rate)</option>
-                      <option value="RATE_3">RATE_3 (third pay rate)</option>
-                    </select>
-                  </label>
-                  <label>
                     <span>Worked in department <span className="muted small">(optional)</span></span>
                     <input value={s.payroll.adp.run.dept} maxLength={6} inputMode="numeric" onChange={(e) => setRun({ dept: e.target.value.replace(/\D/g, '') })} />
                   </label>
                 </div>
+                <h4 style={{ marginTop: 14 }}>Rate codes</h4>
+                <p className="muted small">The pay rates set up on each employee in RUN (Employees → Pay → Pay rates). The note is just for you, for example &ldquo;Forklift rate&rdquo;.</p>
+                <table className="table small" style={{ maxWidth: 560 }}>
+                  <thead><tr><th>Rate code</th><th>Note</th><th>Default</th><th></th></tr></thead>
+                  <tbody>
+                    {runS.rateCodes.map((rc, i) => (
+                      <tr key={i}>
+                        <td>
+                          <input
+                            value={rc.code}
+                            maxLength={10}
+                            aria-label="Rate code"
+                            style={{ width: 110 }}
+                            onChange={(e) => {
+                              const code = e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '');
+                              const old = rc.code;
+                              setRun({
+                                rateCodes: runS.rateCodes.map((x, j) => (j === i ? { ...x, code } : x)),
+                                rateCode: runS.rateCode === old ? code : runS.rateCode,
+                                roleRates: Object.fromEntries(Object.entries(runS.roleRates).map(([k, v]) => [k, v === old ? code : v])),
+                              });
+                            }}
+                          />
+                        </td>
+                        <td><input value={rc.label} maxLength={60} aria-label={`Note for ${rc.code}`} onChange={(e) => setRun({ rateCodes: runS.rateCodes.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)) })} /></td>
+                        <td><input type="radio" name="run-default-rate" aria-label={`Use ${rc.code} by default`} checked={runS.rateCode === rc.code} onChange={() => setRun({ rateCode: rc.code })} /></td>
+                        <td>
+                          {runS.rateCodes.length > 1 && (
+                            <button
+                              className="btn ghost small"
+                              onClick={() => {
+                                const rest = runS.rateCodes.filter((_, j) => j !== i);
+                                setRun({
+                                  rateCodes: rest,
+                                  rateCode: runS.rateCode === rc.code ? rest[0].code : runS.rateCode,
+                                  roleRates: Object.fromEntries(Object.entries(runS.roleRates).filter(([, v]) => v !== rc.code)),
+                                });
+                              }}
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {runS.rateCodes.length < 20 && (
+                  <button className="btn ghost small" onClick={() => setRun({ rateCodes: [...runS.rateCodes, { code: `RATE_${runS.rateCodes.length + 1}`, label: '' }] })}>+ Add rate code</button>
+                )}
+                <h4 style={{ marginTop: 14 }}>Rate code by role</h4>
+                <p className="muted small">Hours worked in each role go on their own row with this Rate Code. Roles left on Default use <b>{runS.rateCode}</b>. Day-rate shifts are sent as dollars, under the same Rate Code.</p>
+                {d.roles.length ? (
+                  <table className="table small" style={{ maxWidth: 560 }}>
+                    <thead><tr><th>Role</th><th>Rate code</th></tr></thead>
+                    <tbody>
+                      {d.roles.map((r) => (
+                        <tr key={r.id}>
+                          <td>{r.name}</td>
+                          <td>
+                            <select
+                              value={runS.roleRates[r.id] ?? ''}
+                              aria-label={`Rate code for ${r.name}`}
+                              onChange={(e) => {
+                                const next = { ...runS.roleRates };
+                                if (e.target.value) next[r.id] = e.target.value;
+                                else delete next[r.id];
+                                setRun({ roleRates: next });
+                              }}
+                            >
+                              <option value="">Default ({runS.rateCode})</option>
+                              {runS.rateCodes.filter((x) => x.code).map((x) => (
+                                <option key={x.code} value={x.code}>{x.code}{x.label ? ` · ${x.label}` : ''}</option>
+                              ))}
+                            </select>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <p className="muted small">No roles yet. Add them under Settings → Roles &amp; rates.</p>
+                )}
               </>
             ) : (
               <>

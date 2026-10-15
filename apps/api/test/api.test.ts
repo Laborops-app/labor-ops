@@ -1521,6 +1521,17 @@ test('accounting: event billing (time + schedule, per-job OT, day rates), QuickB
     assert.ok(runRows.includes('RFCAV,W,03/04/2030,03/10/2030,001234,OT,3.00,,0,,BASE'), run1.text);
     assert.ok(runRows.includes('RFCAV,W,03/04/2030,03/10/2030,,DAY,,300.00,0,,BASE'), run1.text);
     assert.equal((await call(a, 'PUT', '/api/accounting/settings', { ...s1set, payroll: { ...s1set.payroll, adp: { ...s1set.payroll.adp, run: { ...s1set.payroll.adp.run, regCode: '=x' } } } })).status, 400);
+    // Rate codes by role: Audio (and "Audio (Lead)") is paid at RATE_4; a mapping to a code that does not exist is dropped
+    const acctNow = (await call(a, 'GET', '/api/accounting')).json;
+    const audio = acctNow.roles.find((r: any) => r.name === 'Audio').id;
+    const runSet = { ...acctNow.settings.payroll.adp.run, rateCodes: [...acctNow.settings.payroll.adp.run.rateCodes, { code: 'rate_4', label: 'Audio rate' }], roleRates: { [audio]: 'RATE_4', other: 'NOPE' } };
+    const saved = await call(a, 'PUT', '/api/accounting/settings', { ...acctNow.settings, payroll: { ...acctNow.settings.payroll, adp: { ...acctNow.settings.payroll.adp, run: runSet } } });
+    assert.equal(saved.status, 200, saved.text);
+    assert.deepEqual(saved.json.settings.payroll.adp.run.roleRates, { [audio]: 'RATE_4' });
+    const run2 = (await call(a, 'GET', '/api/payroll/export?provider=adp&from=2030-03-04&to=2030-03-10&mark=0')).text.trim().split('\r\n');
+    assert.ok(run2.includes('RFCAV,W,03/04/2030,03/10/2030,001234,REG,8.00,,0,,RATE_4'), run2.join('\n'));
+    assert.ok(run2.includes('RFCAV,W,03/04/2030,03/10/2030,001234,OT,3.00,,0,,RATE_4'), run2.join('\n'));
+    assert.ok(run2.includes('RFCAV,W,03/04/2030,03/10/2030,,DAY,,300.00,0,,RATE_4'), run2.join('\n'));
     // ADP Workforce Now pay data import
     await call(a, 'PUT', '/api/accounting/settings', { ...s1set, payroll: { ...s1set.payroll, adp: { ...s1set.payroll.adp, product: 'wfn', companyCode: 'XYZ' } } });
     assert.equal((await call(a, 'GET', '/api/payroll/export?provider=gusto&from=2030-03-04&to=2030-03-10')).status, 400, 'Gusto is off');

@@ -35,7 +35,20 @@ export const acctSchema = z.object({
               otCode: z.string().trim().max(10).regex(/^[A-Za-z0-9_ -]*$/, 'Use letters, numbers, _ or -').default('OT'),
               dtCode: z.string().trim().max(10).regex(/^[A-Za-z0-9_ -]*$/, 'Use letters, numbers, _ or -').default('DT'),
               dayCode: z.string().trim().max(10).regex(/^[A-Za-z0-9_ -]*$/, 'Use letters, numbers, _ or -').default('DAY'),
-              rateCode: z.enum(['BASE', 'RATE_2', 'RATE_3']).default('BASE'),
+              /** The pay rates set up on employees in RUN, by Rate Code. */
+              rateCodes: z
+                .array(z.object({ code: z.string().trim().toUpperCase().min(1).max(10).regex(/^[A-Z0-9_]+$/, 'Rate codes use letters, numbers and _'), label: z.string().trim().max(60).default('') }))
+                .min(1)
+                .max(20)
+                .default([
+                  { code: 'BASE', label: 'First pay rate' },
+                  { code: 'RATE_2', label: 'Second pay rate' },
+                  { code: 'RATE_3', label: 'Third pay rate' },
+                ]),
+              /** Used for any role not in roleRates. */
+              rateCode: z.string().trim().toUpperCase().max(10).default('BASE'),
+              /** Role (skill id) → Rate Code. */
+              roleRates: z.record(z.string().max(40), z.string().trim().toUpperCase().max(10)).default({}),
               dept: z.string().trim().regex(/^\d{0,6}$/, 'Department is a number (up to 6 digits)').default(''),
             })
             .prefault({}),
@@ -54,6 +67,12 @@ export async function loadAcct(c: PoolClient): Promise<AcctSettings> {
 
 export async function saveAcct(c: PoolClient, tid: string, next: AcctSettings) {
   if (!next.payroll.enabled.includes(next.payroll.primary)) next.payroll.primary = next.payroll.enabled[0];
+  // RUN rate codes: no duplicates; the default and every role mapping must be one of them.
+  const run = next.payroll.adp.run;
+  run.rateCodes = run.rateCodes.filter((x, i, all) => all.findIndex((y) => y.code === x.code) === i);
+  const codes = new Set(run.rateCodes.map((x) => x.code));
+  if (!codes.has(run.rateCode)) run.rateCode = run.rateCodes[0].code;
+  run.roleRates = Object.fromEntries(Object.entries(run.roleRates).filter(([, v]) => codes.has(v) && v !== run.rateCode));
   await c.query(
     `INSERT INTO accounting_settings (tenant_id, config) VALUES ($1, $2) ON CONFLICT (tenant_id) DO UPDATE SET config = EXCLUDED.config, updated_at = now()`,
     [tid, JSON.stringify(next)],

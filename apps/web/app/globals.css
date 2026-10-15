@@ -466,7 +466,7 @@ table.rates td input[type=text], table.rates td input:not([type]) { width: 100%;
 .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.85rem; align-items: start; }
 .settings-grid .form-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .settings-grid label { display: block; }
-.settings-grid label input { display: block; margin-top: 4px; }
+.settings-grid label input, .settings-grid label select { display: block; margin-top: 4px; }
 
 /* ---- chat (from the "Message Dashboard UI Kit" Figma design: list | thread | details) ---- */
 .bell-badge.static { position: static; flex: none; }

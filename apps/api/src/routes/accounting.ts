@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { roleKeyOf } from '../pay';
 import { withTenant, audit } from '../db';
 import { guard } from '../auth';
 import { config } from '../config';
@@ -291,7 +292,13 @@ export async function accountingRoutes(app: FastifyInstance) {
       const s = await loadAcct(c);
       if (q.provider !== 'csv' && !s.payroll.enabled.includes(q.provider)) return null;
       const sum = await payrollSummary(c, q.from, q.to);
-      const f = payrollFile(q.provider, s, sum.people, q.from, q.to);
+      // RUN: the Rate Code mapped to each role (matched the same way pay rates are), else the default.
+      const byRole = new Map<string, string>();
+      const mapped = s.payroll.adp.run.roleRates;
+      if (Object.keys(mapped).length) {
+        for (const r of (await c.query('SELECT id, name FROM skills')).rows) if (mapped[r.id]) byRole.set(roleKeyOf(r.name), mapped[r.id]);
+      }
+      const f = payrollFile(q.provider, s, sum.people, q.from, q.to, (role) => byRole.get(roleKeyOf(role)) ?? s.payroll.adp.run.rateCode);
       if (q.mark === '1' && q.provider !== 'csv') await markExported(c, req.user.tid, req.user.sub, q.provider, q, sum.people);
       return f;
     });
