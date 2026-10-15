@@ -1676,3 +1676,17 @@ a.cs-co:hover b { color: var(--primary); }
 .time-edit input[type="datetime-local"] { min-width: 200px; }
 .phase-edit { flex: 1; }
 .time-edit-btn { padding: 2px 8px; margin-right: 4px; }
+/* crew picker: type-ahead with a greyed guess, stars on every row */
+.pick-search { position: relative; background: var(--surface-2); border-radius: 10px; }
+.pick-search input { position: relative; background: transparent; z-index: 1; width: 100%; padding-left: 12px; padding-right: 12px; }
+.pick-ghost { position: absolute; inset: 0; display: flex; align-items: center; padding: 0 13px; color: var(--muted); white-space: pre; overflow: hidden; pointer-events: none; font: inherit; }
+.pick-ghost > span { visibility: hidden; }
+.pick-hint { padding: 4px 4px 0; }
+.crew-pick-item.on { background: var(--primary-soft); }
+.crew-pick-item mark { background: transparent; color: inherit; font-weight: 800; text-decoration: underline; text-underline-offset: 2px; }
+.pick-name { min-width: 0; }
+.crew-pick .crew-pick-item { flex-direction: column; align-items: flex-start; gap: 1px; }
+.pick-sub { padding-left: 1.1em; }
+.crew-pick { width: min(400px, calc(100vw - 32px)); }
+.pick-unrated { color: var(--muted); font-size: 12px; margin-left: 4px; }
+.pick-more { margin-top: 6px; }

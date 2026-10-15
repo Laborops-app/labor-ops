@@ -14,7 +14,7 @@ import { getToken, pushEventRequest, RentmanError } from '../rentman';
 import { STATUSES } from '../pipeline';
 import { flagText, reviewFlags } from '../reviews';
 import { guard } from '../auth';
-import { evaluateShift } from '../eligibility';
+import { evaluateShift, evaluateWindow } from '../eligibility';
 import { customerForRentman } from '../rentman';
 
 const id = z.object({ id: z.string().uuid() });
@@ -559,6 +559,14 @@ export async function eventRoutes(app: FastifyInstance) {
       return r.rowCount;
     });
     return n ? { ok: true } : reply.code(404).send({ error: 'Shift not found' });
+  });
+
+  // Who can work a shift that is not created yet (the add-shift form): availability, time off, certificates, other shifts that day.
+  app.get('/api/events/:id/candidates', { preHandler: mgr }, async (req, reply) => {
+    const q = z.object({ startsAt: z.string().datetime({ offset: true }), endsAt: z.string().datetime({ offset: true }), certs: z.string().max(500).optional() }).parse(req.query);
+    if (new Date(q.endsAt) <= new Date(q.startsAt)) return reply.code(400).send({ error: 'The shift must end after it starts' });
+    const certs = (q.certs ?? '').split(',').map((x) => x.trim()).filter(Boolean).slice(0, 20);
+    return withTenant(req.user.tid, async (c) => ({ crew_status: await evaluateWindow(c, q.startsAt, q.endsAt, certs) }));
   });
 
   // Assign crew to a shift. Blocks double-booking and over-filling.

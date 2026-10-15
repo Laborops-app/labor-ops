@@ -2928,3 +2928,27 @@ test('shift and phase dates: edit a shift time (double-booking asks first, crew 
   await call(a, 'PATCH', `/api/event-phases/${ph}`, { label: 'Load in', startDate: '2031-10-21', endDate: '2031-10-21' });
   assert.equal(new Date((await call(a, 'GET', `/api/events/${ev}`)).json.shifts.find((s: any) => s.id === s2).starts_at).toISOString(), '2031-10-20T14:00:00.000Z');
 });
+
+test('crew picker: shows who is already booked that day, also for a shift not created yet', async () => {
+  const a = await register('booked');
+  const c1 = await mkCrew(a, 'bk1');
+  const c2 = await mkCrew(a, 'bk2');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Gig', startDate: '2032-05-03', endDate: '2032-05-03' })).json.event.id as string;
+  const mk = async (roleName: string, startsAt: string, endsAt: string) => (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName, startsAt, endsAt, headcount: 2 })).json.shift.id as string;
+  const morning = await mk('Loader', '2032-05-03T14:00:00Z', '2032-05-03T18:00:00Z');
+  const evening = await mk('Pusher', '2032-05-04T00:00:00Z', '2032-05-04T04:00:00Z'); // same local day in the evening
+  const nextDay = await mk('Pusher', '2032-05-05T14:00:00Z', '2032-05-05T18:00:00Z');
+  await call(a, 'POST', `/api/shifts/${morning}/assign`, { userId: c1.id, confirmed: true });
+  const det = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  const st = (sid: string, uid: string) => det.shifts.find((s: any) => s.id === sid).crew_status.find((x: any) => x.user_id === uid);
+  assert.equal(st(evening, c1.id).booked.role_name, 'Loader');
+  assert.equal(st(evening, c2.id).booked, null);
+  assert.equal(st(nextDay, c1.id).booked, null);
+  assert.equal(st(morning, c1.id).booked, null); // their own shift does not count
+  const cand = await call(a, 'GET', `/api/events/${ev}/candidates?startsAt=${encodeURIComponent('2032-05-03T19:00:00Z')}&endsAt=${encodeURIComponent('2032-05-03T23:00:00Z')}&certs=Forklift`);
+  assert.equal(cand.status, 200, cand.text);
+  const k1 = cand.json.crew_status.find((x: any) => x.user_id === c1.id);
+  assert.equal(k1.booked.event_name, 'Gig');
+  assert.deepEqual(k1.missing_certs, ['Forklift']);
+  assert.equal((await call(c1.session, 'GET', `/api/events/${ev}/candidates?startsAt=${encodeURIComponent('2032-05-03T19:00:00Z')}&endsAt=${encodeURIComponent('2032-05-03T23:00:00Z')}`)).status, 403);
+});

@@ -20,7 +20,22 @@ import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 
 type Assignment = { id: string; user_id: string; user_name: string; status: string; is_lead?: boolean; clocked_in_at?: string | null; last_clock_out?: string | null; pay_type?: 'hourly' | 'day'; rate?: number | null; estimated_pay?: number | null };
 type CrewRate = { user_id: string; user_name: string; pay_type: 'hourly' | 'day'; rate: number; note: string | null };
-type Elig = { user_id: string; missing_certs: string[]; time_off: boolean; outside_availability: boolean };
+type Elig = { user_id: string; missing_certs: string[]; time_off: boolean; outside_availability: boolean; booked?: { role_name: string; event_name: string; starts_at: string; ends_at: string } | null };
+/** Stars for a position; on a lead role ("Audio Lead") the rating as that position ("Audio") counts. */
+const starsFor = (m: { ratings?: Record<string, number> }, role: string) => {
+  const k = roleKey(role);
+  return m.ratings?.[k] ?? m.ratings?.[k.replace(/\s*\blead$/, '').trim()] ?? 0;
+};
+/** One crew member as an option in the crew picker: why they can or cannot work it, and their stars for the position. */
+const pickOption = (m: Member, e: Elig | undefined, stars: number, sub?: string, eventName?: string): PickOption => {
+  const kind = e?.missing_certs.length ? 'blocked' : e?.booked ? 'busy' : e?.time_off || e?.outside_availability ? 'soft' : 'ok';
+  const note =
+    kind === 'blocked' ? `needs ${e!.missing_certs.join(', ')}`
+    : kind === 'busy' ? `Booked: ${e!.booked!.role_name}${e!.booked!.event_name === eventName ? ' on this event' : ` at ${e!.booked!.event_name}`}, ${fmtTime(e!.booked!.starts_at)}–${fmtTime(e!.booked!.ends_at)}`
+    : kind === 'soft' ? (e?.time_off ? 'time off' : 'not available then')
+    : undefined;
+  return { id: m.id, name: m.name, sub: sub ?? m.skills.join(', '), stars: stars || undefined, kind, note, flag: kind === 'blocked' ? undefined : flagOf(m) };
+};
 type Shift = {
   id: string;
   role_name: string;
@@ -88,6 +103,8 @@ function Body({ me }: { me: Me }) {
   const [timeEdit, setTimeEdit] = useState<{ id: string; role: string; start: string; end: string } | null>(null);
   const [phaseEdit, setPhaseEdit] = useState<{ id: string; label: string; start: string; end: string; move: boolean } | null>(null);
   const formDated = useRef(false);
+  // Who is free for the shift being added (checked against its date, time and certificates while the picker is open).
+  const [newElig, setNewElig] = useState<Map<string, Elig> | null>(null);
   // "Confirm automatically": crew are put straight on the shift instead of being asked to accept. Remembered on this device.
   const [autoConfirm, setAutoConfirmState] = useState(false);
   useEffect(() => {
@@ -360,6 +377,19 @@ function Body({ me }: { me: Me }) {
     }
   };
 
+  useEffect(() => {
+    if (adding !== 'new') return;
+    const st = new Date(f.startsAt), en = new Date(f.endsAt);
+    if (isNaN(st.getTime()) || !(en > st)) return setNewElig(new Map());
+    setNewElig(null);
+    let live = true;
+    const qs = new URLSearchParams({ startsAt: st.toISOString(), endsAt: en.toISOString(), certs: f.certs });
+    api<{ crew_status: Elig[] }>(`/api/events/${id}/candidates?${qs}`)
+      .then((r) => live && setNewElig(new Map(r.crew_status.map((x) => [x.user_id, x]))))
+      .catch(() => live && setNewElig(new Map()));
+    return () => { live = false; };
+  }, [adding, f.startsAt, f.endsAt, f.certs, id]);
+
   // Opening a shift's picker: "Add as lead" starts on for lead roles ("Audio Lead", "Audio (Lead)").
   useEffect(() => {
     const sh = d?.shifts.find((x) => x.id === adding);
@@ -379,12 +409,9 @@ function Body({ me }: { me: Me }) {
           const full = active.length >= s.headcount;
           const st = new Map(s.crew_status.map((x) => [x.user_id, x]));
           const candidates = crew.filter((m) => !assignedIds.has(m.id)).map((m) => ({ m, e: st.get(m.id) }));
-          const rk = roleKey(s.role_name);
-          const stars = (m: Member) => m.ratings?.[rk] ?? 0;
+          const stars = (m: Member) => starsFor(m, s.role_name);
           const best = (a: { m: Member }, b: { m: Member }) => Number(!!flagOf(a.m)) - Number(!!flagOf(b.m)) || stars(b.m) - stars(a.m) || a.m.name.localeCompare(b.m.name);
-          const ok = candidates.filter((c) => !c.e?.missing_certs.length && !c.e?.time_off && !c.e?.outside_availability).sort(best);
-          const blocked = candidates.filter((c) => c.e?.missing_certs.length);
-          const soft = candidates.filter((c) => !c.e?.missing_certs.length && (c.e?.time_off || c.e?.outside_availability));
+          const options = [...candidates].sort(best).map(({ m, e }) => pickOption(m, e, stars(m), undefined, d.event.name));
           return (
             <section className="card" key={s.id}>
               <div className="row space">
@@ -597,14 +624,10 @@ function Body({ me }: { me: Me }) {
                       </label>
                     }
                     onClose={() => setAdding(null)}
-                    options={[
-                      ...ok.map(({ m }) => ({ id: m.id, name: m.name, sub: m.skills.join(', '), stars: stars(m), kind: 'ok' as const, flag: flagOf(m) })),
-                      ...soft.map(({ m, e }) => ({ id: m.id, name: m.name, kind: 'soft' as const, note: e?.time_off ? 'time off' : 'not available then', flag: flagOf(m) })),
-                      ...blocked.map(({ m, e }) => ({ id: m.id, name: m.name, kind: 'blocked' as const, note: `needs ${e?.missing_certs.join(', ')}` })),
-                    ]}
+                    options={options}
                     onPick={(o) => {
                       if (active.length + 1 >= s.headcount && !full) setAdding(null);
-                      addCrew(s, o.id, o.kind === 'soft', full, asLead);
+                      addCrew(s, o.id, o.kind === 'soft' || o.kind === 'busy', full, asLead);
                     }}
                   />
                 )}
@@ -906,11 +929,12 @@ function Body({ me }: { me: Me }) {
                   <CrewPick
                     title="Add crew to the new shift"
                     onClose={() => setAdding(null)}
+                    loading={!newElig}
                     options={crew
                       .filter((m) => !f.crew.includes(m.id))
-                      .map((m) => ({ m, fit: !!f.roleName && m.skills.some((k) => roleKey(k) === roleKey(f.roleName)) }))
-                      .sort((a, b) => Number(b.fit) - Number(a.fit) || a.m.name.localeCompare(b.m.name))
-                      .map(({ m, fit }) => ({ id: m.id, name: m.name, sub: fit ? `${m.skills.join(', ')} · matches role` : m.skills.join(', '), flag: flagOf(m) }))}
+                      .map((m) => ({ m, fit: !!f.roleName && m.skills.some((k) => roleKey(k) === roleKey(f.roleName)), st: f.roleName ? starsFor(m, f.roleName) : 0 }))
+                      .sort((a, b) => Number(!!flagOf(a.m)) - Number(!!flagOf(b.m)) || b.st - a.st || Number(b.fit) - Number(a.fit) || a.m.name.localeCompare(b.m.name))
+                      .map(({ m, fit, st }) => pickOption(m, newElig?.get(m.id), st, fit ? `${m.skills.join(', ')} · matches role` : m.skills.join(', '), d.event.name))}
                     onPick={(o) => setF((x) => ({ ...x, crew: [...x.crew, o.id] }))}
                   />
                 )}
