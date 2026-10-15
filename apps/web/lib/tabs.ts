@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { usePathname } from 'next/navigation';
 
 /**
@@ -105,4 +105,20 @@ export function useTabTitle(title: string | null | undefined) {
   useEffect(() => {
     if (title) setTabTitle(path, title);
   }, [path, title]);
+}
+
+/**
+ * Like useEffect for loading a page's data, but it does not run again when the page's tab is shown again
+ * (only when `deps` change). Use it where the load also fills a form, so coming back to a tab never
+ * overwrites what you typed there.
+ */
+export function useLoadEffect(load: () => void, deps: unknown[]) {
+  const last = useRef<string | null>(null);
+  useEffect(() => {
+    const key = JSON.stringify(deps);
+    if (last.current === key) return;
+    last.current = key;
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
 }

@@ -1,5 +1,5 @@
 'use client';
-import { useTabTitle } from '@/lib/tabs';
+import { useLoadEffect, useTabTitle } from '@/lib/tabs';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
@@ -88,10 +88,7 @@ function Body({ me }: { me: Me }) {
       setError((e as Error).message);
     }
   };
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  useLoadEffect(load, [id]);
 
   const act = async (key: string, msg: string, fn: () => Promise<unknown>) => {
     setError('');

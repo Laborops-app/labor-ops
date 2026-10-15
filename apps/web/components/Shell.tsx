@@ -2,14 +2,15 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 import { api, Me, Role, roleLabel } from '@/lib/api';
 import ThemeToggle from '@/components/ThemeToggle';
 import InstallApp, { InstallPopup } from '@/components/InstallApp';
 import NotificationBell from '@/components/NotificationBell';
 import Sidebar from '@/components/Sidebar';
 import AppTabs from '@/components/AppTabs';
-import { initTabs, openTab } from '@/lib/tabs';
+import KeepAlive, { usePageActive } from '@/components/KeepAlive';
+import { closeTab, initTabs, openTab } from '@/lib/tabs';
 
 const icon = (d: React.ReactNode) => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -284,7 +285,15 @@ function tabIcon(path: string) {
   return n?.icon ?? null;
 }
 
-export default function Shell({ roles, children }: { roles: Role[]; children: (me: Me) => React.ReactNode }) {
+const MeContext = createContext<Me | null>(null);
+/** The signed-in person, for pages inside the app frame. */
+export const useMe = () => useContext(MeContext);
+
+/**
+ * The app frame (sidebar, top bar, tab bar), drawn once for every page in the app. Each open tab's page is kept
+ * alive underneath it (see KeepAlive), so switching tabs does not lose what was on screen.
+ */
+export function AppFrame({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const path = usePathname();
   const [me, setMe] = useState<Me | null>(null);
@@ -292,10 +301,7 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
 
   useEffect(() => {
     api<{ user: Me }>('/api/auth/me')
-      .then(({ user }) => {
-        if (!roles.includes(user.role)) router.replace(user.role === 'crew' ? '/my-shifts' : '/dashboard');
-        else setMe(user);
-      })
+      .then(({ user }) => setMe(user))
       .catch(() => router.replace(`/login?next=${encodeURIComponent(location.pathname + location.search)}`));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -319,13 +325,15 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
 
   const signOut = async () => {
     await api('/api/auth/logout', { method: 'POST', body: {} });
-    router.replace('/login');
+    // A full reload, so nothing from this session's open tabs stays in memory.
+    window.location.href = '/login';
   };
   const items = NAV.filter((n) => n.roles.includes(me.role) && (!n.rates || me.role === 'admin' || me.canAdjustRates));
 
   const current = items.find((n) => path.startsWith(n.href));
 
   return (
+    <MeContext.Provider value={me}>
     <div className="app">
       <Sidebar items={items} me={me} path={path} chatUnread={chatUnread} />
 
@@ -354,7 +362,7 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
           </button>
         </header>
         <AppTabs path={path} iconFor={tabIcon} />
-        <main className="page">{children(me)}</main>
+        <main className="page"><KeepAlive fallback={children} /></main>
       </div>
 
       {items.length > 1 && (
@@ -369,5 +377,26 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
         </nav>
       )}
     </div>
+    </MeContext.Provider>
   );
+}
+
+/**
+ * A page's content inside the app frame. Only people with one of `roles` see it; others are sent to their home page.
+ * (The frame itself is drawn once by AppFrame in the (app) layout.)
+ */
+export default function Shell({ roles, children }: { roles: Role[]; children: (me: Me) => React.ReactNode }) {
+  const me = useMe();
+  const router = useRouter();
+  const active = usePageActive();
+  const here = usePathname();
+  const allowed = !!me && roles.includes(me.role);
+  useEffect(() => {
+    if (!me || allowed || !active) return;
+    closeTab(here, ''); // no tab for a page this person cannot open
+    router.replace(me.role === 'crew' ? '/my-shifts' : '/dashboard');
+  }, [me, allowed, active, router, here]);
+  if (!me) return <div className="center muted">Loading…</div>;
+  if (!allowed) return null;
+  return <>{children(me)}</>;
 }

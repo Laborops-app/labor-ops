@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { closeOtherTabs, closeTab, moveTab, openTab, useTabs } from '@/lib/tabs';
 
 /** The row of in-app tabs under the top bar. Middle-click or × closes a tab; drag to reorder. */
@@ -10,11 +10,6 @@ export default function AppTabs({ path, iconFor }: { path: string; iconFor: (hre
   const tabs = useTabs();
   const bar = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<string | null>(null);
-
-  // Keep the open tab in view when there are more tabs than fit.
-  useEffect(() => {
-    bar.current?.querySelector<HTMLElement>('.at-tab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  }, [path, tabs.length]);
 
   if (!tabs.length) return null;
   const close = (key: string) => {

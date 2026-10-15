@@ -1,5 +1,5 @@
 'use client';
-import { useTabTitle } from '@/lib/tabs';
+import { useLoadEffect, useTabTitle } from '@/lib/tabs';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -46,10 +46,7 @@ function Body() {
         setF({ name: r.customer.name, notes: r.customer.notes ?? '' });
       })
       .catch((e) => setError(e.message));
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  useLoadEffect(load, [id]);
   const run = (p: Promise<unknown>, ok = '') => p.then(() => { if (ok) setNote(ok); return load(); }).catch((x) => setError((x as Error).message));
 
   useTabTitle(d?.customer.name);

@@ -1,5 +1,6 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useLoadEffect } from '@/lib/tabs';
+import { useState } from 'react';
 import Panel from '@/components/Panel';
 import { Banner } from '@/components/ui';
 import { api, money } from '@/lib/api';
@@ -46,12 +47,11 @@ export default function AccountingPanels({ qbo }: { qbo: string | null }) {
             .catch((e) => setError(e.message));
       })
       .catch((e) => setError(e.message));
-  useEffect(() => {
+  useLoadEffect(() => {
     load();
     const q = qbo;
     if (q === 'connected') setOk('QuickBooks is connected.');
     else if (q) setError(q === 'denied' ? 'QuickBooks access was not approved.' : 'Could not connect QuickBooks. Check the client ID, secret and redirect URI, then try again.');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const run = async (key: string, fn: () => Promise<string | void>) => {

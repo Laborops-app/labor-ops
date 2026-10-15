@@ -1,5 +1,6 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useLoadEffect } from '@/lib/tabs';
+import { useRef, useState } from 'react';
 import { InstallCard } from '@/components/InstallApp';
 import NotificationSettings from '@/components/NotificationSettings';
 import Shell, { initials } from '@/components/Shell';
@@ -74,9 +75,7 @@ function Body({ role }: { role: string }) {
       setError((e as Error).message);
     }
   };
-  useEffect(() => {
-    load();
-  }, []);
+  useLoadEffect(load, []);
 
   const act = async (key: string, msg: string, fn: () => Promise<unknown>) => {
     setError('');

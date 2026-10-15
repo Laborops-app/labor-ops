@@ -1,5 +1,6 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useLoadEffect } from '@/lib/tabs';
+import { useState } from 'react';
 import { api } from '@/lib/api';
 import { Banner } from '@/components/ui';
 import BrowserPush from '@/components/BrowserPush';
@@ -24,11 +25,8 @@ export default function NotificationSettings({ phone }: { phone?: string | null 
         setAgree(!!r.consentAt);
       })
       .catch((e) => setError(e.message));
-  useEffect(() => {
-    load();
-    // reload when the phone number on the profile changes
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phone]);
+  // reload when the phone number on the profile changes (not when its tab is shown again)
+  useLoadEffect(load, [phone]);
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
