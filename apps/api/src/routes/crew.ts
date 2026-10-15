@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import { withTenant, audit, pool } from '../db';
-import { guard } from '../auth';
+import { guard, forgetUser } from '../auth';
 import { sendInvite } from '../notify/tokens';
 import { FLAG_TAGS, ratingsOf, refreshRating, reviewRoleKey } from '../reviews';
 
@@ -12,7 +12,7 @@ const createBody = z.object({
   email: z.string().trim().email().max(200),
   phone: z.string().trim().max(40).optional().nullable(),
   skills: z.array(z.string().trim().min(1).max(40)).max(30).default([]),
-  role: z.enum(['crew', 'manager']).default('crew'),
+  role: z.enum(['crew', 'manager', 'admin']).default('crew'),
   password: z.string().min(8).max(200).optional(),
 });
 const patchBody = z.object({
@@ -28,7 +28,8 @@ const patchBody = z.object({
   active: z.boolean().optional(),
 });
 
-const COLS = 'id, name, email, role, phone, skills, active, created_at, address, emergency_name, emergency_phone, bio, coordinator_notes, can_adjust_rates';
+const COLS = 'id, name, email, role, phone, skills, field_roles, active, created_at, address, emergency_name, emergency_phone, bio, coordinator_notes, can_adjust_rates';
+export const FIELD_ROLES = ['onsite_coordinator', 'crew_lead'] as const;
 
 export async function crewRoutes(app: FastifyInstance) {
   app.get('/api/crew', { preHandler: guard('admin', 'manager') }, async (req) => {
@@ -88,8 +89,8 @@ export async function crewRoutes(app: FastifyInstance) {
 
   app.post('/api/crew', { preHandler: guard('admin', 'manager') }, async (req, reply) => {
     const body = createBody.parse(req.body);
-    if (body.role === 'manager' && req.user.role !== 'admin')
-      return reply.code(403).send({ error: 'Only an admin can add managers' });
+    if (body.role !== 'crew' && req.user.role !== 'admin')
+      return reply.code(403).send({ error: body.role === 'admin' ? 'Only an admin can add admins' : 'Only an admin can add labor coordinators' });
     if ((await pool.query('SELECT 1 FROM auth_find_user($1)', [body.email])).rowCount)
       return reply.code(409).send({ error: 'That email is already registered' });
     // Demo has no email invites yet, so a temporary password is shown once to whoever adds the person.
@@ -165,6 +166,7 @@ export async function crewRoutes(app: FastifyInstance) {
   app.patch('/api/crew/:id', { preHandler: guard('admin', 'manager') }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const b = patchBody.parse(req.body);
+    if (b.active === false && id === req.user.sub) return reply.code(400).send({ error: 'You cannot deactivate your own account' });
     if (b.email) {
       const taken = (await pool.query('SELECT id FROM auth_find_user($1)', [b.email])).rows[0];
       if (taken && taken.id !== id) return reply.code(409).send({ error: 'That email is already registered to someone else' });
@@ -192,6 +194,40 @@ export async function crewRoutes(app: FastifyInstance) {
       return r.rows[0];
     });
     if (!row) return reply.code(404).send({ error: 'Not found' });
+    if (b.active !== undefined) forgetUser(id);
+    return { member: row };
+  });
+
+  // Change someone's role. Only admins, and never your own (so a company always keeps an admin).
+  app.put('/api/crew/:id/role', { preHandler: guard('admin') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const { role } = z.object({ role: z.enum(['crew', 'manager', 'admin']) }).parse(req.body);
+    if (id === req.user.sub) return reply.code(400).send({ error: 'You cannot change your own role. Ask another admin.' });
+    const row = await withTenant(req.user.tid, async (c) => {
+      const prev = (await c.query('SELECT role FROM users WHERE id = $1', [id])).rows[0];
+      if (!prev) return null;
+      // Field permissions are for crew; a coordinator or admin already has the full event pages.
+      const r = await c.query(`UPDATE users SET role = $2, field_roles = CASE WHEN $2 = 'crew' THEN field_roles ELSE '{}' END,
+                                 can_adjust_rates = CASE WHEN $2 = 'manager' THEN can_adjust_rates ELSE false END
+                               WHERE id = $1 RETURNING ${COLS}`, [id, role]);
+      if (prev.role !== role) await audit(c, req.user.tid, req.user.sub, 'user.role', 'user', id, { from: prev.role, to: role });
+      return r.rows[0];
+    });
+    if (!row) return reply.code(404).send({ error: 'Not found' });
+    forgetUser(id);
+    return { member: row };
+  });
+
+  // Field permissions for a crew member: On-site Labor Coordinator and Crew Lead.
+  app.put('/api/crew/:id/field-roles', { preHandler: guard('admin', 'manager') }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const { fieldRoles } = z.object({ fieldRoles: z.array(z.enum(FIELD_ROLES)).max(2) }).parse(req.body);
+    const row = await withTenant(req.user.tid, async (c) => {
+      const r = await c.query(`UPDATE users SET field_roles = $2 WHERE id = $1 AND role = 'crew' RETURNING ${COLS}`, [id, [...new Set(fieldRoles)]]);
+      if (r.rows[0]) await audit(c, req.user.tid, req.user.sub, 'user.field_roles', 'user', id, { fieldRoles });
+      return r.rows[0];
+    });
+    if (!row) return reply.code(404).send({ error: 'Field permissions are for crew members' });
     return { member: row };
   });
 }

@@ -405,3 +405,107 @@ export function EventRatings({ me, eventId, onProgress }: { me: Me; eventId: str
     </div>
   );
 }
+
+/* ---------- on-site rating (crew leads and on-site labor coordinators): no averages, no other people's reviews ---------- */
+
+type OnsiteWorker = {
+  shift_id: string; role_name: string; starts_at: string; ends_at: string; started: boolean; user_id: string; user_name: string; worked: boolean;
+  mine: { stars: number; tags: string[]; note: string | null } | null; locked_by: string | null;
+};
+type OnsiteReviews = { event: { id: string; name: string }; kind: 'coordinator' | 'lead'; workers: OnsiteWorker[] };
+
+function OnsiteRow({ eventId, w, onSaved }: { eventId: string; w: OnsiteWorker; onSaved: (w: OnsiteWorker) => void }) {
+  const [v, setV] = useState({ stars: w.mine?.stars ?? 0, tags: w.mine?.tags ?? [], note: w.mine?.note ?? '' });
+  const [state, setState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [msg, setMsg] = useState('');
+  const [noteOpen, setNoteOpen] = useState(!!w.mine?.note);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const locked = !!w.locked_by;
+  const waiting = !w.started;
+  const save = async (next: typeof v) => {
+    setState('saving');
+    try {
+      await api(`/api/onsite/events/${eventId}/reviews`, { method: 'PUT', body: { shiftId: w.shift_id, userId: w.user_id, stars: next.stars || null, tags: next.tags, note: next.note || null } });
+      setState('saved');
+      onSaved({ ...w, mine: next.stars ? { stars: next.stars, tags: next.tags, note: next.note || null } : null });
+    } catch (e: any) {
+      setState('error');
+      setMsg(e.message);
+    }
+  };
+  const change = (next: typeof v, delay = 0) => {
+    setV(next);
+    if (!next.stars) return;
+    if (timer.current) clearTimeout(timer.current);
+    if (delay) timer.current = setTimeout(() => save(next), delay);
+    else save(next);
+  };
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  return (
+    <li className={`rt-worker ${v.stars ? 'done' : ''}`}>
+      <div className="rt-worker-top">
+        <span className={avClass(w.user_name)} aria-hidden="true" style={{ width: 40, height: 40, fontSize: 14 }}>{initialsOf(w.user_name)}</span>
+        <span className="rt-worker-who">
+          <b>{w.user_name}</b>
+          <span className="muted small">{w.role_name}{waiting ? ' · shift not started' : !w.worked ? ' · not checked in' : ''}</span>
+        </span>
+        <StarInput value={v.stars} onChange={(n) => change({ ...v, stars: n })} label={`Rate ${w.user_name}`} size={30} disabled={locked || waiting} />
+        <span className={`rt-status ${state}`} aria-live="polite">
+          {locked ? `Already rated by ${w.locked_by}` : state === 'saving' ? 'Saving…' : state === 'saved' ? '✓ Saved' : state === 'error' ? msg || 'Not saved' : ''}
+        </span>
+      </div>
+      {!!v.stars && !locked && (
+        <div className="rt-worker-more">
+          <TagPicker value={v.tags} onChange={(tags) => change({ ...v, tags })} />
+          {noteOpen ? (
+            <textarea value={v.note} onChange={(e) => change({ ...v, note: e.target.value }, 900)} onBlur={() => { if (timer.current) { clearTimeout(timer.current); timer.current = null; save(v); } }} placeholder="Private note for the office (optional)" rows={2} maxLength={1000} autoFocus={!w.mine?.note} />
+          ) : (
+            <span className="rt-worker-links">
+              <button type="button" className="rt-link" onClick={() => setNoteOpen(true)}>+ Add a note</button>
+              <button type="button" className="rt-link quiet" onClick={() => { setV({ stars: 0, tags: [], note: '' }); save({ stars: 0, tags: [], note: '' }); }}>Clear rating</button>
+            </span>
+          )}
+        </div>
+      )}
+    </li>
+  );
+}
+
+/** The crew rate page for a crew lead or on-site labor coordinator. */
+export function OnsiteRatings({ eventId, onLoaded }: { eventId: string; onLoaded?: (d: OnsiteReviews) => void }) {
+  const [d, setD] = useState<OnsiteReviews | null>(null);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    api<OnsiteReviews>(`/api/onsite/events/${eventId}/reviews`).then((r) => { setD(r); onLoaded?.(r); }).catch((e) => setErr(e.message));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventId]);
+  if (!d) return err ? <Banner>{err}</Banner> : <div className="muted small">Loading…</div>;
+  if (!d.workers.length) return <div className="muted" style={{ padding: '12px 0' }}>Nobody on your crew to rate yet.</div>;
+  const mine = d.workers.filter((w) => w.mine).length;
+  const open = d.workers.filter((w) => !w.locked_by).length;
+  const shifts = [...new Map(d.workers.map((w) => [w.shift_id, w])).values()];
+  const update = (w: OnsiteWorker) => setD({ ...d, workers: d.workers.map((x) => (x.shift_id === w.shift_id && x.user_id === w.user_id ? w : x)) });
+  return (
+    <div className="rt-event">
+      <div className="rt-progress">
+        <div className="rt-progress-top"><b>{mine} of {open} rated</b></div>
+        <span className="rt-bar big" aria-hidden="true"><i style={{ width: `${open ? (mine / open) * 100 : 100}%` }} /></span>
+        <span className="muted small">Tap the stars to rate; it saves straight away. Your ratings go to the office and are never shown to the crew.</span>
+      </div>
+      {err && <Banner onClose={() => setErr('')}>{err}</Banner>}
+      {shifts.map((s) => (
+        <section key={s.shift_id} className="rt-shift">
+          <div className="rt-shift-head">
+            <b>{s.role_name}</b>
+            <span className="muted small">{shiftWhen(s.starts_at, s.ends_at)}</span>
+          </div>
+          <ul className="rt-workers">
+            {d.workers.filter((w) => w.shift_id === s.shift_id).map((w) => (
+              <OnsiteRow key={w.shift_id + w.user_id} eventId={eventId} w={w} onSaved={update} />
+            ))}
+          </ul>
+        </section>
+      ))}
+    </div>
+  );
+}

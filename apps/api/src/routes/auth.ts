@@ -77,11 +77,11 @@ export async function authRoutes(app: FastifyInstance) {
 
   app.get('/api/auth/me', { preHandler: authenticate }, async (req) => {
     const u = req.user;
-    const { company, name, rates } = await withTenant(u.tid, async (c) => ({
+    const { company, name, rates, fieldRoles } = await withTenant(u.tid, async (c) => ({
       rates: await canAdjustRates(c, u),
       company: (await c.query('SELECT name FROM tenants')).rows[0]?.name as string | undefined,
-      name: ((await c.query('SELECT name FROM users WHERE id = $1', [u.sub])).rows[0]?.name as string | undefined) ?? u.name,
+      ...(await c.query('SELECT name, field_roles FROM users WHERE id = $1', [u.sub]).then((r) => ({ name: (r.rows[0]?.name as string | undefined) ?? u.name, fieldRoles: (r.rows[0]?.field_roles ?? []) as string[] }))),
     }));
-    return { user: { id: u.sub, name, role: u.role, company, canAdjustRates: rates } };
+    return { user: { id: u.sub, name, role: u.role, company, canAdjustRates: rates, fieldRoles: u.role === 'crew' ? fieldRoles : [] } };
   });
 }

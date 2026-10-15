@@ -2749,3 +2749,117 @@ test('chat v2: files and images, typing, pinning, presence and read point', asyn
   assert.equal((await call(a, 'DELETE', `/api/chat/messages/${delId}`)).status, 200);
   assert.equal((await app.inject({ method: 'GET', url: `/api/chat/files/${img.id}`, headers: { cookie: c1.session.cookie } })).statusCode, 404);
 });
+
+test('admins: only admins add admins and change roles; role changes and deactivation apply at once; field permissions', async () => {
+  const a = await register('adm');
+  const mk = (tag: string, role: string) => call(a, 'POST', '/api/crew', { name: `Person ${tag}`, email: `${tag}-${run}@test.example`, password: 'password123', role });
+  assert.equal((await mk('adm-m', 'manager')).status, 201);
+  const m = await login(`adm-m-${run}@test.example`, 'password123');
+  // A labor coordinator cannot add admins (or other coordinators), an admin can
+  assert.equal((await call(m, 'POST', '/api/crew', { name: 'X', email: `adm-x-${run}@test.example`, role: 'admin' })).status, 403);
+  assert.equal((await call(m, 'POST', '/api/crew', { name: 'X', email: `adm-x-${run}@test.example`, role: 'manager' })).status, 403);
+  const a2 = await mk('adm-a2', 'admin');
+  assert.equal(a2.status, 201);
+  assert.equal(a2.json.member.role, 'admin');
+  const c = await mkCrew(a, 'adm-c');
+  // Only admins change roles, never their own
+  assert.equal((await call(m, 'PUT', `/api/crew/${c.id}/role`, { role: 'manager' })).status, 403);
+  const me = (await call(a, 'GET', '/api/auth/me')).json.user;
+  assert.equal((await call(a, 'PUT', `/api/crew/${me.id}/role`, { role: 'crew' })).status, 400);
+  assert.equal((await call(c.session, 'GET', '/api/crew')).status, 403);
+  assert.equal((await call(a, 'PUT', `/api/crew/${c.id}/role`, { role: 'manager' })).json.member.role, 'manager');
+  assert.equal((await call(c.session, 'GET', '/api/crew')).status, 200); // same sign-in, new role right away
+  assert.equal((await call(a, 'PUT', `/api/crew/${c.id}/role`, { role: 'crew' })).status, 200);
+  assert.equal((await call(c.session, 'GET', '/api/crew')).status, 403);
+  // Field permissions: set by staff, only on crew, shown in /me
+  assert.equal((await call(c.session, 'PUT', `/api/crew/${c.id}/field-roles`, { fieldRoles: ['crew_lead'] })).status, 403);
+  assert.equal((await call(m, 'PUT', `/api/crew/${c.id}/field-roles`, { fieldRoles: ['crew_lead', 'onsite_coordinator'] })).status, 200);
+  assert.equal((await call(m, 'PUT', `/api/crew/${c.id}/field-roles`, { fieldRoles: ['boss'] })).status, 400);
+  assert.equal((await call(a, 'PUT', `/api/crew/${a2.json.member.id}/field-roles`, { fieldRoles: ['crew_lead'] })).status, 404);
+  assert.deepEqual((await call(c.session, 'GET', '/api/auth/me')).json.user.fieldRoles.sort(), ['crew_lead', 'onsite_coordinator']);
+  // Crew cannot give themselves field permissions through their profile skills
+  await call(c.session, 'PATCH', '/api/my/profile', { skills: ['onsite_coordinator'] });
+  assert.equal((await call(a, 'PUT', `/api/crew/${c.id}/field-roles`, { fieldRoles: [] })).status, 200);
+  assert.deepEqual((await call(c.session, 'GET', '/api/auth/me')).json.user.fieldRoles, []);
+  // Promoting to coordinator clears field permissions; deactivating signs them out
+  await call(a, 'PUT', `/api/crew/${c.id}/field-roles`, { fieldRoles: ['crew_lead'] });
+  assert.deepEqual((await call(a, 'PUT', `/api/crew/${c.id}/role`, { role: 'manager' })).json.member.field_roles, []);
+  assert.equal((await call(a, 'PATCH', `/api/crew/${me.id}`, { active: false })).status, 400);
+  assert.equal((await call(a, 'PATCH', `/api/crew/${c.id}`, { active: false })).status, 200);
+  assert.equal((await call(c.session, 'GET', '/api/auth/me')).status, 401);
+});
+
+test('on-site: labor coordinator covers the whole event, crew lead only their team; check in/out and rating without averages', async () => {
+  const a = await register('onsite');
+  const lead = await mkCrew(a, 'os-lead');
+  const coord = await mkCrew(a, 'os-coord');
+  const au = await mkCrew(a, 'os-audio');
+  const au2 = await mkCrew(a, 'os-audio2');
+  const li = await mkCrew(a, 'os-light');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Expo', startDate: '2030-01-01', endDate: '2030-01-03' })).json.event.id as string;
+  const shift = async (roleName: string, from: number, to: number) => (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName, startsAt: start(from), endsAt: start(to), headcount: 3 })).json.shift.id as string;
+  const sLead = await shift('Audio (Lead)', -1, 6);
+  const sAudio = await shift('Audio', -1, 6);
+  const sLight = await shift('Lighting', -1, 6);
+  const sAudioLater = await shift('Audio', 30, 36);
+  const put = async (s: string, u: string) => {
+    const r = await call(a, 'POST', `/api/shifts/${s}/assign`, { userId: u, confirmed: true, override: true });
+    assert.ok(r.status === 201 || r.status === 200, r.text);
+    return r.json.assignment.id as string;
+  };
+  await put(sLead, lead.id);
+  await put(sLight, coord.id);
+  const aAudio = await put(sAudio, au.id);
+  const aLight = await put(sLight, li.id);
+  const aLater = await put(sAudioLater, au2.id);
+
+  // No field permission: no access
+  assert.equal((await call(lead.session, 'GET', `/api/onsite/events/${ev}`)).status, 404);
+  assert.equal((await call(lead.session, 'POST', `/api/onsite/assignments/${aAudio}/check-in`)).status, 404);
+  await call(a, 'PUT', `/api/crew/${lead.id}/field-roles`, { fieldRoles: ['crew_lead'] });
+  await call(a, 'PUT', `/api/crew/${coord.id}/field-roles`, { fieldRoles: ['onsite_coordinator'] });
+
+  // Crew lead: their audio team on their shift times (and themselves), not lighting, not tomorrow's audio
+  const lv = await call(lead.session, 'GET', `/api/onsite/events/${ev}`);
+  assert.equal(lv.status, 200, lv.text);
+  assert.equal(lv.json.kind, 'lead');
+  const names = (v: any) => v.shifts.flatMap((s: any) => s.crew.map((x: any) => x.name)).sort();
+  assert.deepEqual(names(lv.json), ['Crew os-audio', 'Crew os-lead']);
+  assert.equal((await call(lead.session, 'GET', '/api/onsite/events')).json.events.length, 1);
+  assert.equal((await call(lead.session, 'POST', `/api/onsite/assignments/${aAudio}/check-in`)).status, 201);
+  assert.equal((await call(lead.session, 'POST', `/api/onsite/assignments/${aAudio}/check-in`)).status, 409);
+  assert.equal((await call(lead.session, 'POST', `/api/onsite/assignments/${aLight}/check-in`)).status, 404);
+  assert.equal((await call(lead.session, 'POST', `/api/onsite/assignments/${aLater}/check-in`)).status, 404);
+  assert.equal((await call(lead.session, 'POST', `/api/onsite/assignments/${aAudio}/check-out`)).status, 200);
+
+  // On-site coordinator: everyone at the event
+  const cv = (await call(coord.session, 'GET', `/api/onsite/events/${ev}`)).json;
+  assert.equal(cv.kind, 'coordinator');
+  assert.deepEqual(names(cv), ['Crew os-audio', 'Crew os-audio2', 'Crew os-coord', 'Crew os-lead', 'Crew os-light']);
+  assert.equal((await call(coord.session, 'POST', `/api/onsite/assignments/${aLight}/check-in`)).status, 201);
+  const early = await call(coord.session, 'POST', `/api/onsite/assignments/${aLater}/check-in`);
+  assert.equal(early.status, 409);
+  assert.match(early.json.error, /opens 2 hours/);
+
+  // Rating: only their own crew, never themselves, no averages, and not over someone else's review
+  const lr = (await call(lead.session, 'GET', `/api/onsite/events/${ev}/reviews`)).json;
+  assert.deepEqual(lr.workers.map((w: any) => w.user_name), ['Crew os-audio']);
+  assert.ok(!JSON.stringify(lr).includes('avg'));
+  assert.equal((await call(lead.session, 'PUT', `/api/onsite/events/${ev}/reviews`, { shiftId: sAudio, userId: au.id, stars: 5, tags: ['hard_worker'] })).status, 200);
+  assert.equal((await call(lead.session, 'PUT', `/api/onsite/events/${ev}/reviews`, { shiftId: sLight, userId: li.id, stars: 2 })).status, 404);
+  assert.equal((await call(lead.session, 'PUT', `/api/onsite/events/${ev}/reviews`, { shiftId: sLead, userId: lead.id, stars: 5 })).status, 400);
+  assert.equal((await call(coord.session, 'PUT', `/api/onsite/events/${ev}/reviews`, { shiftId: sAudio, userId: au.id, stars: 1 })).status, 403);
+  assert.equal((await call(coord.session, 'PUT', `/api/onsite/events/${ev}/reviews`, { shiftId: sAudioLater, userId: au2.id, stars: 4 })).status, 409);
+  const cr = (await call(coord.session, 'GET', `/api/onsite/events/${ev}/reviews`)).json.workers;
+  const audioRow = cr.find((w: any) => w.user_id === au.id);
+  assert.equal(audioRow.mine, null);
+  assert.equal(audioRow.locked_by, 'Crew os-lead');
+  assert.equal((await call(lead.session, 'GET', `/api/onsite/events/${ev}/reviews`)).json.workers[0].mine.stars, 5);
+  // Staff see the review on the event page; crew without a field permission have no access
+  const staff = (await call(a, 'GET', `/api/events/${ev}/reviews`)).json.workers.find((w: any) => w.user_id === au.id);
+  assert.equal(staff.stars, 5);
+  assert.equal(staff.rated_by_name, 'Crew os-lead');
+  assert.equal((await call(li.session, 'GET', `/api/onsite/events/${ev}/reviews`)).status, 404);
+  assert.equal((await call(li.session, 'GET', '/api/onsite/events')).json.events.length, 0);
+  assert.equal((await call(lead.session, 'GET', '/api/crew')).status, 403);
+});

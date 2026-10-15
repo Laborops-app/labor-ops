@@ -18,7 +18,7 @@ const icon = (d: React.ReactNode) => (
   </svg>
 );
 
-const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; icon: React.ReactNode }[] = [
+const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; field?: boolean; icon: React.ReactNode }[] = [
   {
     href: '/dashboard',
     label: 'Dashboard',
@@ -213,6 +213,18 @@ const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; icon: 
     ),
   },
   {
+    href: '/onsite',
+    label: 'On site',
+    roles: ['crew'],
+    field: true, // crew leads and on-site labor coordinators
+    icon: icon(
+      <>
+        <path d="M9 11l3 3 7-7" />
+        <path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9" />
+      </>,
+    ),
+  },
+  {
     href: '/my-shifts',
     label: 'My shifts',
     roles: ['crew'],
@@ -328,7 +340,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     // A full reload, so nothing from this session's open tabs stays in memory.
     window.location.href = '/login';
   };
-  const items = NAV.filter((n) => n.roles.includes(me.role) && (!n.rates || me.role === 'admin' || me.canAdjustRates));
+  const items = NAV.filter((n) => n.roles.includes(me.role) && (!n.rates || me.role === 'admin' || me.canAdjustRates) && (!n.field || !!me.fieldRoles?.length));
 
   const current = items.find((n) => path.startsWith(n.href));
 

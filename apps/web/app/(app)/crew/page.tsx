@@ -12,7 +12,7 @@ import Modal from '@/components/Modal';
 import TopbarAction, { PlusIcon, EditIcon, SearchIcon, avClass, initialsOf } from '@/components/TopbarAction';
 
 type Cert = { id: string; name: string; expires_on: string | null; verified: boolean; has_file: boolean };
-type Member = { id: string; name: string; email: string; role: string; phone: string | null; skills: string[]; active: boolean; certs: Cert[]; has_availability: boolean; can_adjust_rates?: boolean; ratings?: Record<string, number>; rating_avg?: number | null; review_count?: number; flag_count?: number };
+type Member = { id: string; name: string; email: string; role: string; phone: string | null; skills: string[]; field_roles?: string[]; active: boolean; certs: Cert[]; has_availability: boolean; can_adjust_rates?: boolean; ratings?: Record<string, number>; rating_avg?: number | null; review_count?: number; flag_count?: number };
 
 const certState = (c: Cert) => {
   if (!c.expires_on) return '';
@@ -181,7 +181,11 @@ function Body({ me }: { me: Me }) {
                       <Link href={`/crew/${m.id}`} className="rowlink" onClick={stop}>{m.name}</Link>
                       <span className="sub">{m.email}{!m.active ? ' · inactive' : ''}</span>
                     </td>
-                    <td><span className={m.role === 'crew' ? 'pill past' : 'pill'}>{roleLabel(m.role)}</span></td>
+                    <td>
+                      <span className={m.role === 'crew' ? 'pill past' : 'pill'}>{roleLabel(m.role)}</span>
+                      {m.field_roles?.includes('onsite_coordinator') && <span className="chip small-chip" title="On-site Labor Coordinator">On-site LC</span>}
+                      {m.field_roles?.includes('crew_lead') && <span className="chip small-chip" title="Crew Lead">Lead</span>}
+                    </td>
                     <td className="wrap" onClick={stop} style={{ cursor: 'default' }}>
                       {m.skills.length === 0 && <span className="muted">—</span>}
                       {m.skills.map((s) => {
@@ -314,12 +318,13 @@ function Body({ me }: { me: Me }) {
                 <select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>
                   <option value="crew">Crew</option>
                   <option value="manager">Labor Coordinator</option>
+                  <option value="admin">Admin</option>
                 </select>
               </label>
             )}
             <div className="acts">
               <button type="button" className="btn" onClick={() => setAdding(false)}>Cancel</button>
-              <button className="btn primary">Add {f.role === 'manager' ? 'Coordinator' : 'Crew Member'}</button>
+              <button className="btn primary">Add {f.role === 'manager' ? 'Coordinator' : f.role === 'admin' ? 'Admin' : 'Crew Member'}</button>
             </div>
           </form>
         </Modal>

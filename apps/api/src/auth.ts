@@ -33,8 +33,30 @@ export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
   // A platform console session is not a company session.
   if (!req.user?.tid || (req.user as any).kind === 'platform') return reply.code(401).send({ error: 'Not signed in' });
   if (req.user?.tid && req.user?.sub) touchSeen(req.user.tid, req.user.sub);
+  // The role and active flag are read from the database (cached briefly), so a role change or a deactivation
+  // takes effect right away instead of when the sign-in expires.
+  const cur = await currentUser(req.user.tid, req.user.sub);
+  if (!cur || !cur.active) return reply.code(401).send({ error: 'Not signed in' });
+  req.user.role = cur.role;
   if (req.user?.tid && (await isSuspended(req.user.tid))) return reply.code(403).send({ error: 'This company account is suspended. Contact LaborOps support.', reason: 'suspended' });
 }
+
+const users = new Map<string, { role: Role; active: boolean; at: number }>();
+async function currentUser(tid: string, uid: string) {
+  const hit = users.get(uid);
+  if (hit && Date.now() - hit.at < 15_000) return hit;
+  const r = (await adminPool().query('SELECT role, active FROM users WHERE id = $1 AND tenant_id = $2', [uid, tid])).rows[0];
+  if (!r) {
+    users.delete(uid);
+    return null;
+  }
+  const v = { role: r.role as Role, active: !!r.active, at: Date.now() };
+  users.set(uid, v);
+  if (users.size > 20000) users.clear();
+  return v;
+}
+/** Call after changing someone's role or deactivating them. */
+export const forgetUser = (uid: string) => users.delete(uid);
 
 // Suspended companies (Platform page) are locked out; checked at most every 30 seconds per company.
 const suspended = new Map<string, { v: boolean; at: number }>();

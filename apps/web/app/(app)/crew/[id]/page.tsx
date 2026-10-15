@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import Shell, { initials } from '@/components/Shell';
 import { Banner } from '@/components/ui';
-import { api, ApiError, Me, roleLabel } from '@/lib/api';
+import { api, ApiError, FIELD_ROLES, FieldRole, Me, roleLabel } from '@/lib/api';
 import { CrewReviews } from '@/components/Rating';
 import SkillPicker, { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 
@@ -21,6 +21,7 @@ type Member = {
   bio: string | null;
   coordinator_notes: string | null;
   skills: string[];
+  field_roles?: FieldRole[];
   active: boolean;
 };
 type Cert = { id: string; name: string; expires_on: string | null; verified: boolean; file_name: string | null; file_size: number | null };
@@ -147,6 +148,8 @@ function Body({ me }: { me: Me }) {
     return { cls: 'open', label: 'Verified' };
   };
   const isCrew = m.role === 'crew';
+  const canManageAccount = isCrew || (me.role === 'admin' && m.id !== me.id);
+  const fieldRoles = m.field_roles ?? [];
 
   return (
     <>
@@ -230,7 +233,7 @@ function Body({ me }: { me: Me }) {
           <button className="btn primary" disabled={busy === 'save'}>
             Save changes
           </button>
-          {isCrew && (
+          {canManageAccount && (
             <>
               <button type="button" className="btn" onClick={() => act('active', m.active ? 'Deactivated.' : 'Reactivated.', () => api(`/api/crew/${id}`, { method: 'PATCH', body: { active: !m.active } }))}>
                 {m.active ? 'Deactivate' : 'Reactivate'}
@@ -245,6 +248,57 @@ function Body({ me }: { me: Me }) {
           )}
         </div>
       </form>
+
+      {(isCrew || (me.role === 'admin' && m.id !== me.id)) && (
+        <section className="card" id="access">
+          <h2>Access</h2>
+          {me.role === 'admin' && m.id !== me.id && (
+            <label className="access-role">
+              <span>Role</span>
+              <select
+                value={m.role}
+                disabled={busy === 'role'}
+                onChange={(e) => {
+                  const role = e.target.value;
+                  const warn = role === 'admin'
+                    ? `Make ${m.name} an admin? Admins can do everything, including billing, payroll, integrations and adding other admins.`
+                    : m.role === 'admin' ? `Remove admin access from ${m.name}?` : '';
+                  if (warn && !confirm(warn)) return;
+                  act('role', `${m.name} is now ${roleLabel(role) === 'Crew' ? 'crew' : `a ${roleLabel(role)}`}.`, () => api(`/api/crew/${id}/role`, { method: 'PUT', body: { role } }));
+                }}
+              >
+                <option value="crew">Crew</option>
+                <option value="manager">Labor Coordinator</option>
+                <option value="admin">Admin</option>
+              </select>
+              <span className="muted small">Only admins can change roles or add admins. Changes apply right away.</span>
+            </label>
+          )}
+          {isCrew && (
+            <div className="access-field" role="group" aria-label="Field permissions">
+              <span className="field-label">Field permissions</span>
+              <p className="muted small" style={{ margin: '0 0 6px' }}>Gives {m.name.split(' ')[0]} an <b>On site</b> page for the events they work. They never see anyone&apos;s average rating.</p>
+              {FIELD_ROLES.map((r) => (
+                <label key={r.key} className="check access-check">
+                  <input
+                    type="checkbox"
+                    checked={fieldRoles.includes(r.key)}
+                    disabled={busy === 'field'}
+                    onChange={(e) => {
+                      const next = e.target.checked ? [...fieldRoles, r.key] : fieldRoles.filter((x) => x !== r.key);
+                      act('field', 'Field permissions saved.', () => api(`/api/crew/${id}/field-roles`, { method: 'PUT', body: { fieldRoles: next } }));
+                    }}
+                  />
+                  <span>
+                    <b>{r.label}</b>
+                    <span className="muted small" style={{ display: 'block' }}>{r.help}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       {isCrew && (
         <>

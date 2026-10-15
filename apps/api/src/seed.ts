@@ -20,6 +20,7 @@ export async function seedDemo(): Promise<void> {
       await seedAddresses(c);
       await seedSkills(c, tid);
       await seedPayroll(c, tid);
+      await seedOnsite(c, tid);
     });
     return;
   }
@@ -104,6 +105,7 @@ export async function seedDemo(): Promise<void> {
     await seedAddresses(c);
     await seedSkills(c, tenantId);
     await seedPayroll(c, tenantId);
+    await seedOnsite(c, tenantId);
     await audit(c, tenantId, admin, 'tenant.seed', 'tenant', tenantId);
   });
   console.log('demo data created (admin@demo.laborops.app, manager@..., crew1@... through crew5@...)');
@@ -283,12 +285,49 @@ export async function seedPayroll(c: import('pg').PoolClient, tenantId: string, 
   console.log(`demo: added last week's sample hours for payroll (${iso(monday)} to ${iso(monday + 6 * day)})`);
 }
 
+const ONSITE_NOTE = 'Sample event for the On site pages (crew lead and on-site labor coordinator).';
+
+/**
+ * A sample event today, so the On site pages have something to show: Jordan (crew1) is Crew Lead on Audio,
+ * Riley (crew5) is the On-site Labor Coordinator. Field permissions are only given the first time.
+ */
+export async function seedOnsite(c: import('pg').PoolClient, tenantId: string, now = new Date()): Promise<void> {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Denver', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  if ((await c.query('SELECT 1 FROM events WHERE notes = $1 AND start_date = $2', [ONSITE_NOTE, today])).rowCount) return;
+  const first = !(await c.query('SELECT 1 FROM events WHERE notes = $1', [ONSITE_NOTE])).rowCount;
+  const people = (await c.query("SELECT id, lower(split_part(email, '@', 1)) AS k FROM users WHERE email LIKE '%@demo.laborops.app' AND role = 'crew'")).rows as { id: string; k: string }[];
+  const who = Object.fromEntries(people.map((p) => [p.k, p.id]));
+  if (!who.crew1 || !who.crew5) return;
+  if (first) {
+    await c.query("UPDATE users SET field_roles = '{crew_lead}' WHERE id = $1 AND field_roles = '{}'", [who.crew1]);
+    await c.query("UPDATE users SET field_roles = '{onsite_coordinator}' WHERE id = $1 AND field_roles = '{}'", [who.crew5]);
+  }
+  const label = new Date(`${today}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  const ev = (await c.query(
+    `INSERT INTO events (tenant_id, name, client, venue, address, start_date, end_date, notes, clock_mode)
+     VALUES ($1,$2,'Ball Arena','Ball Arena','1000 Chopper Cir, Denver, CO 80204',$3,$3,$4,'coordinator') RETURNING id`,
+    [tenantId, `Arena Concert Load-in (${label})`, today, ONSITE_NOTE],
+  )).rows[0].id as string;
+  // 7:00-17:00 Denver (UTC-6 is close enough for a demo).
+  const startMs = Date.parse(`${today}T13:00:00Z`);
+  const plan: [string, string[]][] = [['Audio (Lead)', ['crew1']], ['Audio', ['crew3']], ['Lighting', ['crew2']], ['Stagehand', ['crew4']], ['Security', ['crew5']]];
+  for (const [role, crew] of plan) {
+    const sid = (await c.query(
+      'INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
+      [tenantId, ev, role, new Date(startMs).toISOString(), new Date(startMs + 10 * 3600_000).toISOString(), crew.length],
+    )).rows[0].id as string;
+    for (const k of crew) if (who[k]) await c.query("INSERT INTO shift_assignments (tenant_id, shift_id, user_id, status) VALUES ($1,$2,$3,'accepted')", [tenantId, sid, who[k]]);
+  }
+  console.log(`demo: added today's on-site sample event (${today})`);
+}
+
 /** For the running demo: add last week's sample hours if they are missing (called every few hours). */
 export async function refreshDemoPayroll(): Promise<void> {
   const found = await pool.query('SELECT tenant_id FROM auth_find_user($1)', ['admin@demo.laborops.app']);
   if (!found.rowCount) return;
   const tid = found.rows[0].tenant_id as string;
   await withTenant(tid, (c) => seedPayroll(c, tid));
+  await withTenant(tid, (c) => seedOnsite(c, tid)).catch((e) => console.error('demo on-site sample:', e.message));
 }
 
 /** Removes the demo company (and everything in it) using the owner connection. */
