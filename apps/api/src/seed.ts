@@ -189,11 +189,31 @@ async function seedScheduling(c: import('pg').PoolClient, tenantId: string): Pro
  * run. Added again whenever the demo starts and last week has no approved time, so the sample never goes stale.
  * Includes overtime (over 40 hours, and long days), one entry still waiting for approval, and ADP file numbers.
  */
+const SAMPLE_NOTE = 'Sample week for the Payroll page.';
 export async function seedPayroll(c: import('pg').PoolClient, tenantId: string, now = new Date()): Promise<void> {
   const day = 86400_000;
   const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   const monday = todayUtc - (((now.getUTCDay() + 6) % 7) + 7) * day; // Monday of last week (00:00 UTC)
   const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
+  // Sample roles must have a pay rate in this company's own skill list (it may have been renamed or replaced).
+  const { loadRates, rateFor } = await import('./pay');
+  const rates = await loadRates(c);
+  const rated = (await c.query('SELECT name FROM skills WHERE pay_rate > 0 ORDER BY pay_rate DESC, name')).rows.map((r) => r.name as string);
+  const taken = new Set<string>();
+  const roleFor = (wanted: string) => {
+    if (rateFor(rates, wanted) || !rated.length) return wanted;
+    const r = rated.find((x) => !taken.has(x)) ?? rated[taken.size % rated.length];
+    taken.add(r);
+    return r;
+  };
+  // Earlier sample weeks with roles that have no rate are fixed in place.
+  const stale = (await c.query(
+    `SELECT DISTINCT s.role_name FROM shifts s JOIN events e ON e.id = s.event_id WHERE e.notes = $1`, [SAMPLE_NOTE],
+  )).rows.map((r) => r.role_name as string).filter((r) => !rateFor(rates, r));
+  for (const r of stale) {
+    await c.query('UPDATE shifts s SET role_name = $2 FROM events e WHERE e.id = s.event_id AND e.notes = $3 AND s.role_name = $1', [r, roleFor(r), SAMPLE_NOTE]);
+  }
+
   const has = await c.query(
     "SELECT 1 FROM time_entries WHERE status = 'approved' AND clock_in >= $1 AND clock_in < $2 LIMIT 1",
     [new Date(monday).toISOString(), new Date(monday + 7 * day).toISOString()],
@@ -219,8 +239,8 @@ export async function seedPayroll(c: import('pg').PoolClient, tenantId: string, 
   const label = new Date(monday).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
   const ev = (await c.query(
     `INSERT INTO events (tenant_id, name, client, venue, address, start_date, end_date, notes, created_by)
-     VALUES ($1,$2,'Colorado Convention Center','Colorado Convention Center','700 14th St, Denver, CO 80202',$3,$4,'Sample week for the Payroll page.',$5) RETURNING id`,
-    [tenantId, `Denver Home & Garden Expo (week of ${label})`, iso(monday), iso(monday + 5 * day), manager],
+     VALUES ($1,$2,'Colorado Convention Center','Colorado Convention Center','700 14th St, Denver, CO 80202',$3,$4,$5,$6) RETURNING id`,
+    [tenantId, `Denver Home & Garden Expo (week of ${label})`, iso(monday), iso(monday + 5 * day), SAMPLE_NOTE, manager],
   )).rows[0].id as string;
 
   // [crew, role, day offsets from Monday, start hour (Denver), hours each day]
@@ -232,7 +252,8 @@ export async function seedPayroll(c: import('pg').PoolClient, tenantId: string, 
     ['crew5', 'Security', [4, 5], 14, 12.5],                // two long show days
   ];
   const shifts = new Map<string, string>();
-  for (const [k, role, days, startH, hours] of plan) {
+  for (const [k, wanted, days, startH, hours] of plan) {
+    const role = roleFor(wanted);
     for (const d of days) {
       const startMs = monday + d * day + (startH + 6) * 3600_000; // Denver is UTC-6 (MDT) / -7: close enough for a demo
       const endMs = startMs + hours * 3600_000;
