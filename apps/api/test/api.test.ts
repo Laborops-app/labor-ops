@@ -2278,3 +2278,62 @@ test('labor rules: the daily maximum counts the company-time-zone day, not a shi
   const s4 = await mk('2030-06-10T14:00:00Z', '2030-06-11T03:00:00Z');
   assert.equal((await call(a, 'POST', `/api/shifts/${s4}/assign`, { userId: c1.id })).status, 409);
 });
+
+test('chat v2: files and images, typing, pinning, presence and read point', async () => {
+  const a = await register('chatv2');
+  const c1 = await mkCrew(a, 'cv1');
+  const c2 = await mkCrew(a, 'cv2');
+  const dm = (await call(a, 'POST', '/api/chat/dm', { userId: c1.id })).json.id;
+  const ip = { remoteAddress: '10.20.30.41' };
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 1)]);
+  const up = (who: any, body: Buffer, filename: string, caption = '') =>
+    app.inject({ method: 'POST', url: `/api/chat/channels/${dm}/files?filename=${encodeURIComponent(filename)}&caption=${encodeURIComponent(caption)}`, payload: body, headers: { cookie: who.cookie, 'content-type': 'application/octet-stream' }, ...ip });
+
+  // an image shows inline, any other file downloads; strangers cannot open them
+  const r1 = await up(a, png, 'stage plot.png', 'Here is the plot');
+  assert.equal(r1.statusCode, 200, r1.body);
+  const img = r1.json().message.files[0];
+  assert.equal(img.kind, 'image');
+  const r2 = await up(a, Buffer.from('<html><script>alert(1)</script></html>'), 'notes.html');
+  const doc = r2.json().message.files[0];
+  assert.equal(doc.kind, 'file');
+  const g1 = await app.inject({ method: 'GET', url: `/api/chat/files/${img.id}`, headers: { cookie: c1.session.cookie } });
+  assert.equal(g1.statusCode, 200);
+  assert.equal(g1.headers['content-type'], 'image/png');
+  const g2 = await app.inject({ method: 'GET', url: `/api/chat/files/${doc.id}`, headers: { cookie: c1.session.cookie } });
+  assert.equal(g2.headers['content-type'], 'application/octet-stream');
+  assert.match(String(g2.headers['content-disposition']), /^attachment/);
+  assert.equal((await app.inject({ method: 'GET', url: `/api/chat/files/${img.id}`, headers: { cookie: c2.session.cookie } })).statusCode, 404);
+  assert.equal((await up(a, Buffer.alloc(0), 'empty.txt')).statusCode, 400);
+
+  // files panel, newest first; messages carry their files
+  const files = (await call(c1.session, 'GET', `/api/chat/channels/${dm}/files`)).json.files;
+  assert.deepEqual(files.map((f: any) => f.filename), ['notes.html', 'stage plot.png']);
+  const msgs = (await call(c1.session, 'GET', `/api/chat/channels/${dm}/messages`)).json;
+  assert.equal(msgs.messages[0].body, 'Here is the plot');
+  assert.equal(msgs.messages[0].files[0].id, img.id);
+
+  // the crew member reads; the sender's list shows it was read; typing shows to the other side
+  await call(c1.session, 'POST', `/api/chat/channels/${dm}/read`, {});
+  const mine = (await call(a, 'GET', '/api/chat/channels')).json.channels.find((x: any) => x.id === dm);
+  assert.deepEqual([mine.last_mine, mine.last_read, mine.last_file], [true, true, true]);
+  assert.equal((await call(c1.session, 'POST', `/api/chat/channels/${dm}/typing`, {})).status, 200);
+  assert.equal((await call(a, 'GET', '/api/chat/channels')).json.channels.find((x: any) => x.id === dm).typing, 'Crew cv1');
+  assert.equal((await call(a, 'GET', `/api/chat/channels/${dm}/messages?after=0`)).json.typing, 'Crew cv1');
+
+  // pinning puts a conversation first; presence follows use of the app
+  const grp = (await call(a, 'POST', '/api/chat/channels', { name: 'Load-in crew', memberIds: [c1.id] })).json.id;
+  assert.equal((await call(a, 'GET', '/api/chat/channels')).json.channels[0].id, grp);
+  assert.equal((await call(a, 'PATCH', `/api/chat/channels/${dm}`, { pinned: true })).status, 200);
+  const list = (await call(a, 'GET', '/api/chat/channels')).json.channels;
+  assert.deepEqual([list[0].id, list[0].pinned], [dm, true]);
+  assert.equal(list[0].other_online, true);
+  const det = (await call(a, 'GET', `/api/chat/channels/${grp}`)).json;
+  assert.equal(det.online, 1);
+  assert.ok(det.members.find((m: any) => m.id === c1.id).email); // staff see contact details
+
+  // deleting the message hides its file
+  const delId = r1.json().message.id;
+  assert.equal((await call(a, 'DELETE', `/api/chat/messages/${delId}`)).status, 200);
+  assert.equal((await app.inject({ method: 'GET', url: `/api/chat/files/${img.id}`, headers: { cookie: c1.session.cookie } })).statusCode, 404);
+});
