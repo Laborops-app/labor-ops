@@ -43,7 +43,9 @@ export async function crewRoutes(app: FastifyInstance) {
              (SELECT avg(v.stars)::float8 FROM crew_reviews v WHERE v.user_id = users.id) AS rating_avg,
              (SELECT count(*)::int FROM crew_reviews v WHERE v.user_id = users.id) AS review_count,
              (SELECT count(*)::int FROM crew_reviews v WHERE v.user_id = users.id AND v.tags && $1::text[]) AS flag_count,
-             (SELECT max(v.created_at) FROM crew_reviews v WHERE v.user_id = users.id) AS last_reviewed_at
+             (SELECT max(v.created_at) FROM crew_reviews v WHERE v.user_id = users.id) AS last_reviewed_at,
+             (SELECT count(*)::int FROM crew_reviews v WHERE v.user_id = users.id AND 'no_show' = ANY(v.tags)) AS no_show_count,
+             (SELECT count(*)::int FROM crew_reviews v WHERE v.user_id = users.id AND 'no_rehire' = ANY(v.tags)) AS no_rehire_count
            FROM users ORDER BY role, name`,
           [FLAG_TAGS],
         )

@@ -41,7 +41,10 @@ type Shift = {
 };
 type Overtime = { otAfter: number | null; state: string | null; effectiveState: string | null; stateFromAddress: boolean; companyDailyOt: number; otMult: number; dtAfter: number | null; dtMult: number };
 type Detail = { event: EventFull; shifts: Shift[]; phases: Phase[]; overtime?: Overtime; crewRates?: CrewRate[] };
-type Member = { id: string; name: string; role: string; skills: string[]; active: boolean; ratings?: Record<string, number> };
+type Member = { id: string; name: string; role: string; skills: string[]; active: boolean; ratings?: Record<string, number>; no_show_count?: number; no_rehire_count?: number };
+const times = (n: number) => (n === 1 ? '' : ` ×${n}`);
+/** Short warning for the crew picker, from past reviews. */
+const flagOf = (m: Member) => [m.no_rehire_count ? `Do not rehire${times(m.no_rehire_count)}` : '', m.no_show_count ? `No-show${times(m.no_show_count)}` : ''].filter(Boolean).join(' · ') || undefined;
 type TplItem = { role: string; section?: string; dayOffset: number; start: string; end: string; headcount: number; isOpen: boolean; requiredCerts: string[] };
 type Template = { id: string; name: string; items: TplItem[]; customer_id?: string | null };
 
@@ -272,13 +275,18 @@ function Body({ me }: { me: Me }) {
   };
 
   /** Put one person on a shift. Returns an error message, or null when they were added. Rule breaks ask before overriding when `ask` is set. */
-  const assignUser = async (shiftId: string, userId: string, override = false, ask = true): Promise<string | null> => {
+  const assignUser = async (shiftId: string, userId: string, override = false, ask = true, acceptFlags = false): Promise<string | null> => {
     try {
-      const r = await api<{ warnings?: string[] }>(`/api/shifts/${shiftId}/assign`, { body: { userId, override: override || undefined, confirmed: autoConfirm || undefined } });
+      const r = await api<{ warnings?: string[] }>(`/api/shifts/${shiftId}/assign`, { body: { userId, override: override || undefined, confirmed: autoConfirm || undefined, acceptFlags: acceptFlags || undefined } });
       if (r.warnings?.length) setNote(r.warnings.join(' '));
       return null;
     } catch (err) {
-      if (ask && err instanceof ApiError && err.reason === 'rules' && !override && confirm(`${err.message}\n\nAssign anyway?`)) return assignUser(shiftId, userId, true, false);
+      if (ask && err instanceof ApiError && err.reason === 'rules' && !override && confirm(`${err.message}\n\nAssign anyway?`)) return assignUser(shiftId, userId, true, ask, acceptFlags);
+      // Flagged in past reviews (No-show / Do not rehire): always ask, even when adding several people at once.
+      if (err instanceof ApiError && err.reason === 'flagged' && !acceptFlags) {
+        if (confirm(`⚠ ${err.message}\n\nAdd them to this shift anyway?`)) return assignUser(shiftId, userId, override, ask, true);
+        return 'Not added. ' + err.message;
+      }
       return (err as Error).message;
     }
   };
@@ -316,7 +324,7 @@ function Body({ me }: { me: Me }) {
           const candidates = crew.filter((m) => !assignedIds.has(m.id)).map((m) => ({ m, e: st.get(m.id) }));
           const rk = roleKey(s.role_name);
           const stars = (m: Member) => m.ratings?.[rk] ?? 0;
-          const best = (a: { m: Member }, b: { m: Member }) => stars(b.m) - stars(a.m) || a.m.name.localeCompare(b.m.name);
+          const best = (a: { m: Member }, b: { m: Member }) => Number(!!flagOf(a.m)) - Number(!!flagOf(b.m)) || stars(b.m) - stars(a.m) || a.m.name.localeCompare(b.m.name);
           const ok = candidates.filter((c) => !c.e?.missing_certs.length && !c.e?.time_off && !c.e?.outside_availability).sort(best);
           const blocked = candidates.filter((c) => c.e?.missing_certs.length);
           const soft = candidates.filter((c) => !c.e?.missing_certs.length && (c.e?.time_off || c.e?.outside_availability));
@@ -481,8 +489,8 @@ function Body({ me }: { me: Me }) {
                     busy={busyAdd}
                     onClose={() => setAdding(null)}
                     options={[
-                      ...ok.map(({ m }) => ({ id: m.id, name: m.name, sub: m.skills.join(', '), stars: stars(m), kind: 'ok' as const })),
-                      ...soft.map(({ m, e }) => ({ id: m.id, name: m.name, kind: 'soft' as const, note: e?.time_off ? 'time off' : 'not available then' })),
+                      ...ok.map(({ m }) => ({ id: m.id, name: m.name, sub: m.skills.join(', '), stars: stars(m), kind: 'ok' as const, flag: flagOf(m) })),
+                      ...soft.map(({ m, e }) => ({ id: m.id, name: m.name, kind: 'soft' as const, note: e?.time_off ? 'time off' : 'not available then', flag: flagOf(m) })),
                       ...blocked.map(({ m, e }) => ({ id: m.id, name: m.name, kind: 'blocked' as const, note: `needs ${e?.missing_certs.join(', ')}` })),
                     ]}
                     onPick={(o) => {
@@ -737,7 +745,7 @@ function Body({ me }: { me: Me }) {
                       .filter((m) => !f.crew.includes(m.id))
                       .map((m) => ({ m, fit: !!f.roleName && m.skills.some((k) => roleKey(k) === roleKey(f.roleName)) }))
                       .sort((a, b) => Number(b.fit) - Number(a.fit) || a.m.name.localeCompare(b.m.name))
-                      .map(({ m, fit }) => ({ id: m.id, name: m.name, sub: fit ? `${m.skills.join(', ')} · matches role` : m.skills.join(', ') }))}
+                      .map(({ m, fit }) => ({ id: m.id, name: m.name, sub: fit ? `${m.skills.join(', ')} · matches role` : m.skills.join(', '), flag: flagOf(m) }))}
                     onPick={(o) => setF((x) => ({ ...x, crew: [...x.crew, o.id] }))}
                   />
                 )}

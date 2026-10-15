@@ -7,6 +7,7 @@ import { respondLinks } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
+import { flagText, reviewFlags } from '../reviews';
 import { guard } from '../auth';
 import { evaluateShift } from '../eligibility';
 import { customerForRentman } from '../rentman';
@@ -37,7 +38,7 @@ const shiftBody = z.object({
 const mgr = guard('admin', 'manager');
 
 /** Offer a shift to one crew member: checks, assignment, notification and chat message. Shared by the assign and fill-from-group routes. */
-export async function assignCrew(c: PoolClient, tid: string, actorId: string, shiftId: string, userId: string, override?: boolean, confirmed?: boolean): Promise<{ code: number; [k: string]: unknown }> {
+export async function assignCrew(c: PoolClient, tid: string, actorId: string, shiftId: string, userId: string, override?: boolean, confirmed?: boolean, acceptFlags?: boolean): Promise<{ code: number; [k: string]: unknown }> {
   const shift = (await c.query('SELECT * FROM shifts WHERE id = $1 FOR UPDATE', [shiftId])).rows[0];
   if (!shift) return { code: 404, error: 'Shift not found' };
   const user = (await c.query("SELECT id, name, active FROM users WHERE id = $1 AND role = 'crew'", [userId])).rows[0];
@@ -81,6 +82,10 @@ export async function assignCrew(c: PoolClient, tid: string, actorId: string, sh
   const chk = await checkRules(c, await loadRules(c), userId, shiftId, shift.starts_at, shift.ends_at, user.name);
   if (chk.blocks.length && !override)
     return { code: 409, error: chk.blocks.join('. ') + '.', reason: 'rules' };
+
+  // Past reviews tagged No-show or Do not rehire: ask the coordinator before booking them again.
+  const flags = (await reviewFlags(c, [userId])).get(userId);
+  if (flags && !acceptFlags) return { code: 409, error: flagText(user.name, flags), reason: 'flagged', flags };
 
   const a = (
     await c.query(
@@ -497,8 +502,8 @@ export async function eventRoutes(app: FastifyInstance) {
   // Assign crew to a shift. Blocks double-booking and over-filling.
   app.post('/api/shifts/:id/assign', { preHandler: mgr }, async (req, reply) => {
     const { id: shiftId } = id.parse(req.params);
-    const { userId, override, confirmed } = z.object({ userId: z.string().uuid(), override: z.boolean().optional(), confirmed: z.boolean().optional() }).parse(req.body);
-    const result = await withTenant(req.user.tid, (c) => assignCrew(c, req.user.tid, req.user.sub, shiftId, userId, override, confirmed));
+    const { userId, override, confirmed, acceptFlags } = z.object({ userId: z.string().uuid(), override: z.boolean().optional(), confirmed: z.boolean().optional(), acceptFlags: z.boolean().optional() }).parse(req.body);
+    const result = await withTenant(req.user.tid, (c) => assignCrew(c, req.user.tid, req.user.sub, shiftId, userId, override, confirmed, acceptFlags));
     const { code, ...body } = result as { code: number; [k: string]: unknown };
     return reply.code(code).send(body);
   });

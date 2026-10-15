@@ -106,7 +106,7 @@ export async function groupRoutes(app: FastifyInstance) {
         const picked = [];
         for (const p of cand.candidates) {
           if (picked.length >= Math.min(b.count ?? spots, spots)) break;
-          const res = await assignCrew(c, req.user.tid, req.user.sub, id, p.user_id, false, b.confirmed);
+          const res = await assignCrew(c, req.user.tid, req.user.sub, id, p.user_id, false, b.confirmed, true); // flagged people are already ranked last
           if (res.code === 201) picked.push({ user_id: p.user_id, name: p.name, stars: p.stars });
         }
         await audit(c, req.user.tid, req.user.sub, 'shift.fill_group', 'shift', id, { groupId: b.groupId, picked: picked.map((x) => x.user_id) });

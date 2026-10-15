@@ -1,8 +1,9 @@
 import type { PoolClient } from 'pg';
 import { evaluateShift, findClash } from './eligibility';
 import { checkRules, loadRules, priorWeekHours, hoursBetween } from './pay';
+import { flagText, reviewFlags } from './reviews';
 
-export type Candidate = { user_id: string; name: string; stars: number; week_hours: number; overtime: boolean };
+export type Candidate = { user_id: string; name: string; stars: number; week_hours: number; overtime: boolean; flag: string | null };
 
 /**
  * Who in a group can actually take this shift, best first. People who are already on it, already scheduled at that time,
@@ -25,6 +26,7 @@ export async function groupCandidates(c: PoolClient, shiftId: string, groupId: s
   const onShift = new Set((await c.query('SELECT user_id FROM shift_assignments WHERE shift_id = $1', [shiftId])).rows.map((r) => r.user_id));
   const elig = new Map((await evaluateShift(c, shiftId)).map((e) => [e.user_id, e]));
   const rules = await loadRules(c);
+  const flags = await reviewFlags(c, members.map((m) => m.id));
   const candidates: Candidate[] = [];
   const skipped: { user_id: string; name: string; reason: string }[] = [];
   for (const m of members) {
@@ -38,9 +40,11 @@ export async function groupCandidates(c: PoolClient, shiftId: string, groupId: s
     if (e?.outside_availability) { skip('not available then'); continue; }
     const chk = await checkRules(c, rules, m.id, shiftId, shift.starts_at, shift.ends_at, m.name);
     if (chk.blocks.length) { skip('would break the rest / hours rules'); continue; }
+    const f = flags.get(m.id);
+    if (f?.no_rehire) { skip('tagged Do not rehire in a past review'); continue; }
     const prior = await priorWeekHours(c, rules, m.id, shiftId, shift.starts_at);
-    candidates.push({ user_id: m.id, name: m.name, stars: Number(m.stars), week_hours: Math.round(prior * 10) / 10, overtime: rules.weeklyOt > 0 && prior + hoursBetween(shift.starts_at, shift.ends_at) > rules.weeklyOt });
+    candidates.push({ user_id: m.id, name: m.name, stars: Number(m.stars), week_hours: Math.round(prior * 10) / 10, overtime: rules.weeklyOt > 0 && prior + hoursBetween(shift.starts_at, shift.ends_at) > rules.weeklyOt, flag: f ? flagText(m.name, f) : null });
   }
-  candidates.sort((a, b) => b.stars - a.stars || Number(a.overtime) - Number(b.overtime) || a.week_hours - b.week_hours || a.name.localeCompare(b.name));
+  candidates.sort((a, b) => Number(!!a.flag) - Number(!!b.flag) || b.stars - a.stars || Number(a.overtime) - Number(b.overtime) || a.week_hours - b.week_hours || a.name.localeCompare(b.name));
   return { shift, candidates, skipped };
 }

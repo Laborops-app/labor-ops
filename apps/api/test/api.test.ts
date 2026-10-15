@@ -1592,6 +1592,34 @@ test('reviews: rate after a shift, tags and notes, averages per position, only t
   assert.equal(rv.overall.count, 0);
 });
 
+test('flags: No-show and Do not rehire reviews make the coordinator confirm, and keep people out of group fills', async () => {
+  const a = await register('flag');
+  const [c1, c2, c3] = [await mkCrew(a, 'fl1'), await mkCrew(a, 'fl2'), await mkCrew(a, 'fl3')];
+  await call(a, 'POST', `/api/crew/${c1.id}/reviews`, { role: 'Stagehand', stars: 1, tags: ['no_show'] });
+  await call(a, 'POST', `/api/crew/${c1.id}/reviews`, { role: 'Stagehand', stars: 2, tags: ['no_show', 'late'] });
+  await call(a, 'POST', `/api/crew/${c2.id}/reviews`, { role: 'Stagehand', stars: 1, tags: ['no_rehire'] });
+  const row = (await call(a, 'GET', '/api/crew')).json.crew.find((m: any) => m.id === c1.id);
+  assert.equal(row.no_show_count, 2);
+  assert.equal(row.no_rehire_count, 0);
+  const ev = await mkEvent(a);
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: start(400), endsAt: start(406), headcount: 3 })).json.shift.id;
+  const ask = await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id });
+  assert.equal(ask.status, 409);
+  assert.equal(ask.json.reason, 'flagged');
+  assert.match(ask.json.error, /No-show twice/);
+  assert.equal(ask.json.flags.no_show, 2);
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, acceptFlags: true })).status, 201);
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c3.id })).status, 201); // no flags, no question
+  // group fill leaves out Do not rehire, and ranks No-show after everyone else
+  const g = (await call(a, 'POST', '/api/crew-groups', { name: 'Flag crew' })).json.group.id;
+  await call(a, 'PUT', `/api/crew-groups/${g}/members`, { userIds: [c1.id, c2.id, c3.id] });
+  const sh2 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: start(500), endsAt: start(506), headcount: 3 })).json.shift.id;
+  const cand = (await call(a, 'GET', `/api/shifts/${sh2}/group-candidates?groupId=${g}`)).json;
+  assert.deepEqual(cand.candidates.map((x: any) => x.user_id), [c3.id, c1.id]);
+  assert.match(cand.candidates[1].flag, /No-show/);
+  assert.ok(cand.skipped.some((x: any) => x.user_id === c2.id && /Do not rehire/.test(x.reason)));
+});
+
 test('clocking: geofence, coordinator mode and on-site check-in', async () => {
   const a = await register('geo');
   const c1 = await mkCrew(a, 'geo1');

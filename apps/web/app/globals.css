@@ -1181,3 +1181,5 @@ a.pill.rt-due:hover { background: color-mix(in srgb, var(--star) 32%, var(--surf
   .rt-prompt { flex-wrap: wrap; }
   .rt-prompt .btn { width: 100%; }
 }
+.rt-flag.pick { margin-left: 6px; font-size: 11px; vertical-align: 1px; }
+.rt-flag-line { font-size: 12px; font-weight: 600; color: var(--bad); margin: 2px 0 4px; }

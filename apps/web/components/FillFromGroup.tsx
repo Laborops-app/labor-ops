@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { api } from '@/lib/api';
 
-type Cand = { user_id: string; name: string; stars: number; week_hours: number; overtime: boolean };
+type Cand = { user_id: string; name: string; stars: number; week_hours: number; overtime: boolean; flag?: string | null };
 type Preview = { candidates: Cand[]; skipped: { user_id: string; name: string; reason: string }[]; spots: number };
 
 /** Staff a shift from a crew group: preview the best available people, then auto-pick the top ones or offer the shift to the whole group. */
@@ -57,6 +57,7 @@ export default function FillFromGroup({ shiftId, groups, confirmed, onDone, onEr
                 <li key={c.user_id} className={i < n ? '' : 'muted'}>
                   <span className={c.stars ? 'rt-inline' : 'muted'}>{c.stars ? `★ ${c.stars.toFixed(1)}` : 'unrated'}</span> {c.name}
                   <span className="muted"> · {c.week_hours} h this week{c.overtime ? ' · would be overtime' : ''}</span>
+                  {c.flag && <div className="rt-flag-line">⚠ {c.flag}</div>}
                 </li>
               ))}
             </ol>

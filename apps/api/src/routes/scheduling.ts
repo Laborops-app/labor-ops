@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
+import { flagText, reviewFlags } from '../reviews';
 import { guard, authenticate } from '../auth';
 import { notify, notifyStaff, describeShift } from '../notify';
 import { loadRules, checkRules } from '../pay';
@@ -59,7 +60,14 @@ export async function claimShift(c: PoolClient, tid: string, user: { id: string;
   await syncEventChannel(c, tid, s.event_id, user.id, true);
   if (d) {
     // Claims are approved automatically: tell the coordinators for their information, and confirm to the crew member.
-    await notifyStaff(c, tid, { category: 'approval_result', title: `${user.name} took ${d.role}`, body: `${user.name} claimed an open shift and is confirmed.\n\n${d.line}`, link: '/events' });
+    // Reviews are private, so the crew member is not told; the coordinators get a heads-up if they were flagged before.
+    const f = (await reviewFlags(c, [user.id])).get(user.id);
+    await notifyStaff(c, tid, {
+      category: 'approval_result',
+      title: `${f ? '⚠ ' : ''}${user.name} took ${d.role}`,
+      body: `${user.name} claimed an open shift and is confirmed.\n\n${d.line}${f ? `\n\nHeads-up: ${flagText(user.name, f)} You can remove them from the shift on the event page.` : ''}`,
+      link: `/events/${s.event_id}`,
+    });
     await notify(c, tid, { userId: user.id, category: 'assignment', title: `You're confirmed: ${d.role}`, body: `${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nYou're on this shift.`, link: `/my-shifts/${a.id}`, sms: `Confirmed: ${d.role}, ${d.event}, ${d.when}.` });
   }
   return { code: 201, assignmentId: a.id };

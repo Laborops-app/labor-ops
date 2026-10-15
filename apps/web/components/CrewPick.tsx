@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 
-export type PickOption = { id: string; name: string; sub?: string; stars?: number; kind?: 'ok' | 'soft' | 'blocked'; note?: string };
+export type PickOption = { id: string; name: string; sub?: string; stars?: number; kind?: 'ok' | 'soft' | 'blocked'; note?: string; flag?: string };
 
 /** Search-as-you-type crew list. Click a name to pick it; the list stays open so several people can be added in a row. */
 export default function CrewPick({ options, onPick, onClose, title = 'Add crew', busy }: { options: PickOption[]; onPick: (o: PickOption) => void; onClose: () => void; title?: string; busy?: boolean }) {
@@ -35,6 +35,7 @@ export default function CrewPick({ options, onPick, onClose, title = 'Add crew',
                   <span>
                     <b>+</b> {o.name}
                     {o.stars ? <span className="rt-inline" title={`Rated ${o.stars.toFixed(1)} of 5 for this position`}> ★ {o.stars.toFixed(1)}</span> : null}
+                    {o.flag ? <span className="rt-flag pick" title={`Tagged in past reviews: ${o.flag}. You will be asked to confirm.`}>⚠ {o.flag}</span> : null}
                   </span>
                   <span className="muted small">{o.note ?? o.sub}</span>
                 </button>
