@@ -206,7 +206,7 @@ async function send(token: string, method: 'POST' | 'PUT', path: string, body: u
     if (res.status === 401) throw new RentmanError(`Rentman rejected the API token while saving ${what}. Check it and save it again on the Integrations page.${why}`, 400);
     if (res.status === 403)
       throw new RentmanError(
-        `Rentman did not allow saving ${what} (403).${why} Rentman gives an API token the same rights as the Rentman user who created it, so that user's role needs permission to create ${what === 'the customer' ? 'contacts' : 'project requests'}. Make the token with an admin user (Settings → Configuration → Account → Integrations) and paste it on the Integrations page.`,
+        `Rentman did not allow saving ${what} (403).${why} Rentman gives an API token the same rights as the Rentman user who created it, so that user's role needs permission to create ${what === 'the customer' || what === 'the venue' ? 'contacts' : what === 'the contact person' ? 'contact persons' : 'project requests'}. Make the token with an admin user (Settings → Configuration → Account → Integrations) and paste it on the Integrations page.`,
         403,
       );
     if (res.status === 429) throw new RentmanError(`Rentman's rate limit was hit while saving ${what}. Wait a minute and try again.`, 429);
@@ -261,14 +261,6 @@ export async function pushCustomer(c: PoolClient, token: string, customerId: str
     const j = await send(token, 'POST', '/contacts', payload);
     rid = Number(j?.data?.id);
     if (!rid) throw new RentmanError('Rentman did not return the new contact.');
-    // The main contact person goes on the new Rentman contact too (best effort: the company contact is what matters).
-    if (cu.person && cu.person !== cu.name) {
-      const [first, ...last] = String(cu.person).trim().split(/\s+/);
-      const person: Record<string, unknown> = last.length ? { firstname: first, lastname: last.join(' ') } : { lastname: first };
-      if (cu.email) person.email = cu.email;
-      if (cu.phone) person.phone = cu.phone;
-      await send(token, 'POST', `/contacts/${rid}/contactpersons`, person, 'the contact person').catch(() => undefined);
-    }
   }
   await c.query('UPDATE customers SET rentman_contact_id = $2, rentman_synced_at = now() WHERE id = $1', [customerId, rid]);
   await c.query(
@@ -307,6 +299,36 @@ function splitName(full: string | null) {
   if (!parts.length) return {};
   if (parts.length === 1) return { contact_person_lastname: parts[0] };
   return { contact_person_first_name: parts[0], contact_person_lastname: parts.slice(1).join(' ') };
+}
+
+
+/** The venue as a Rentman contact (Rentman keeps locations as contacts): found by name, else created with its address. */
+export async function ensureLocationContact(c: PoolClient, tid: string, token: string, venue: string, address: string | null): Promise<number> {
+  const known = (await c.query('SELECT id FROM rentman_contacts WHERE lower(name) = lower($1) ORDER BY id LIMIT 1', [venue.trim()])).rows[0]?.id;
+  if (known) return Number(known);
+  const j = await send(token, 'POST', '/contacts', { type: 'company', name: venue.trim(), ...addressFields(address, 'visit'), ...addressFields(address, 'mailing') }, 'the venue');
+  const id = Number(j?.data?.id);
+  if (!id) throw new RentmanError('Rentman did not return the new venue contact.');
+  await c.query(
+    `INSERT INTO rentman_contacts (tenant_id, id, name, address) VALUES ($1,$2,$3,$4)
+     ON CONFLICT (tenant_id, id) DO UPDATE SET name = EXCLUDED.name, address = EXCLUDED.address`, [tid, id, venue.trim(), address]);
+  return id;
+}
+
+/** The customer's contact person in Rentman: matched by email or name on the Rentman contact, else added. */
+export async function ensureContactPerson(token: string, contactId: number, p: { name: string | null; email: string | null; phone: string | null }): Promise<number | null> {
+  if (!p.name && !p.email) return null;
+  const list = (await get(token, `/contacts/${contactId}/contactpersons`).catch(() => null))?.data ?? [];
+  const low = (x: unknown) => String(x ?? '').trim().toLowerCase();
+  const full = (x: any) => [x.firstname, x.middle_name, x.lastname ?? x.surname].filter(Boolean).join(' ');
+  const hit = (Array.isArray(list) ? list : []).find((x: any) => (p.email && low(x.email) === low(p.email)) || (p.name && low(full(x)) === low(p.name)));
+  if (hit?.id) return Number(hit.id);
+  const [first, ...last] = String(p.name ?? p.email).trim().split(/\s+/);
+  const body: Record<string, unknown> = last.length ? { firstname: first, lastname: last.join(' ') } : { lastname: first };
+  if (p.email) body.email = p.email;
+  if (p.phone) body.phone = p.phone;
+  const j = await send(token, 'POST', `/contacts/${contactId}/contactpersons`, body, 'the contact person');
+  return Number(j?.data?.id) || null;
 }
 
 /**
@@ -370,17 +392,49 @@ export async function pushEventRequest(c: PoolClient, tid: string, token: string
     for (const [k, v] of Object.entries(a)) if (!k.endsWith('_state')) body[`location_${k}`] = v;
   }
 
-  let rid: number | null = ev.rentman_request_id;
-  if (rid) await send(token, 'PUT', `/projectrequests/${rid}`, body, 'the project request');
-  else {
-    const j = await send(token, 'POST', '/projectrequests', body, 'the project request');
-    rid = Number(j?.data?.id);
-    if (!rid) throw new RentmanError('Rentman did not return the new project request.');
+  // Connect the real Rentman records too: the customer's contact person and the venue (Rentman keeps venues as contacts).
+  const notes: string[] = [];
+  if (contactId && (person.name || person.email)) {
+    try {
+      const pid = await ensureContactPerson(token, contactId, person);
+      if (pid) body.linked_contact_person = `/contactpersons/${pid}`;
+    } catch (e) {
+      notes.push(`the contact person could not be added (${e instanceof RentmanError ? e.message : 'error'})`);
+    }
+  }
+  if (ev.venue) {
+    try {
+      body.linked_location = `/contacts/${await ensureLocationContact(c, tid, token, ev.venue, ev.address)}`;
+    } catch (e) {
+      notes.push(`the venue could not be saved as a Rentman location (${e instanceof RentmanError ? e.message : 'error'})`);
+    }
+  }
+
+  const save = async (b: Record<string, unknown>) => {
+    if (ev.rentman_request_id) {
+      await send(token, 'PUT', `/projectrequests/${ev.rentman_request_id}`, b, 'the project request');
+      return ev.rentman_request_id as number;
+    }
+    const j = await send(token, 'POST', '/projectrequests', b, 'the project request');
+    const id = Number(j?.data?.id);
+    if (!id) throw new RentmanError('Rentman did not return the new project request.');
+    return id;
+  };
+  let rid: number;
+  try {
+    rid = await save(body);
+  } catch (e) {
+    // If Rentman will not take the person / location links on a request, send it with the details as text instead.
+    if (!(e instanceof RentmanError) || e.status !== 502 || !(body.linked_location || body.linked_contact_person)) throw e;
+    const { linked_location, linked_contact_person, ...plain } = body;
+    rid = await save(plain);
+    notes.push('Rentman would not link the venue and contact person on the request itself, so they are included as text; pick them when accepting it');
   }
   await c.query(
     "UPDATE events SET rentman_request_id = $2, rentman_request_status = 'open', rentman_pushed_at = now(), rentman_checked_at = now() WHERE id = $1",
     [eventId, rid],
   );
+  if (notes.length) contactWarning = [contactWarning, ...notes].filter(Boolean).join(' Also, ');
   return { requestId: rid, contactId, contactWarning };
 }
 

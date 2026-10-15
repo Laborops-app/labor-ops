@@ -1690,14 +1690,17 @@ test('new event: create a customer or a division on the spot, send it to Rentman
   assert.equal((await call(a, 'PATCH', `/api/customers/${parent.id}`, { parentId: parent.id })).status, 400);
 
   const posted: any[] = [];
+  const people: any[] = [];
   let accepted = false;
   const real = globalThis.fetch;
   const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: { 'content-type': 'application/json' } });
   globalThis.fetch = (async (input: any, init?: any) => {
     const url = String(input);
     if (!url.startsWith('https://api.rentman.net')) return real(input, init);
-    if (init?.method === 'POST' && url.endsWith('/contacts')) { posted.push({ url, body: JSON.parse(init.body) }); return json({ data: { id: 701 } }); }
+    if (init?.method === 'POST' && url.endsWith('/contacts')) { const b = JSON.parse(init.body); posted.push({ url, body: b }); return json({ data: { id: b.name === 'Rice-Eccles Stadium' ? 702 : 701 } }); }
     if (init?.method === 'PUT' && url.endsWith('/contacts/701')) return json({ data: { id: 701 } });
+    if (init?.method === 'POST' && url.endsWith('/contacts/701/contactpersons')) { const b = JSON.parse(init.body); people.push({ id: 55, ...b }); posted.push({ url, body: b }); return json({ data: { id: 55 } }); }
+    if (url.includes('/contacts/701/contactpersons')) return json({ data: people });
     if (init?.method === 'POST' && url.endsWith('/projectrequests')) { posted.push({ url, body: JSON.parse(init.body) }); return json({ data: { id: 88 } }); }
     if (init?.method === 'PUT' && url.endsWith('/projectrequests/88')) { posted.push({ url, body: JSON.parse(init.body) }); return json({ data: { id: 88 } }); }
     if (url.includes('/projectrequests/88')) return json({ data: accepted ? { id: 88, status: 'accepted', linked_project: '/projects/300' } : { id: 88, status: 'open', linked_project: null } });
@@ -1736,6 +1739,11 @@ test('new event: create a customer or a division on the spot, send it to Rentman
     assert.equal(req.contact_person_lastname, 'Lee');
     assert.equal(req.contact_person_email, 'dana@utah.example');
     assert.equal(req.location_name, 'Rice-Eccles Stadium');
+    // the venue becomes a Rentman location contact and the contact person is added to the customer, both linked on the request
+    assert.equal(req.linked_location, '/contacts/702');
+    assert.equal(req.linked_contact_person, '/contactpersons/55');
+    assert.equal(posted.find((p) => p.body.name === 'Rice-Eccles Stadium').body.type, 'company');
+    assert.equal(posted.find((p) => p.url.endsWith('/contactpersons')).body.email, 'dana@utah.example');
     assert.match(req.planperiod_start, /^2030-09-01T\d\d:00:00Z$/);
     assert.match(req.planperiod_end, /^2030-09-0[23]T\d\d:00:00Z$/);
     const id = ev.json.event.id;
@@ -1746,6 +1754,9 @@ test('new event: create a customer or a division on the spot, send it to Rentman
     // sending again updates the same request
     assert.equal((await call(a, 'POST', `/api/events/${id}/rentman/push`)).status, 200);
     assert.ok(posted.some((p) => p.url.endsWith('/projectrequests/88')));
+    // nothing is duplicated on the second send
+    assert.equal(posted.filter((p) => p.url.endsWith('/contactpersons')).length, 1);
+    assert.equal(posted.filter((p) => p.body?.name === 'Rice-Eccles Stadium' && p.url.endsWith('/contacts')).length, 1);
     // accepted in Rentman: the project links itself and its equipment comes over
     accepted = true;
     v = (await call(a, 'POST', `/api/events/${id}/rentman/check`)).json;
@@ -1764,25 +1775,33 @@ test('rentman push: a refused contact does not block the request, and Rentman\'s
   const a = await register('rm403');
   const cu = (await call(a, 'POST', '/api/customers', { name: 'Zions Bank', contactName: 'Sam Z', email: 'sam@zions.example' })).json.customer;
   let denyRequests = false;
+  let sentPlain = 0;
   const real = globalThis.fetch;
   const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: { 'content-type': 'application/json' } });
   globalThis.fetch = (async (input: any, init?: any) => {
     const url = String(input);
     if (!url.startsWith('https://api.rentman.net')) return real(input, init);
-    if (init?.method === 'POST' && url.endsWith('/contacts')) return json({ message: 'You are not allowed to create contacts' }, 403);
-    if (init?.method === 'POST' && url.endsWith('/projectrequests'))
-      return denyRequests ? json({ message: 'Insufficient rights for projectrequests' }, 403) : json({ data: { id: 41 } });
+    if (init?.method === 'POST' && url.endsWith('/contacts'))
+      return JSON.parse(init.body).name === 'Zions Bank' ? json({ message: 'You are not allowed to create contacts' }, 403) : json({ data: { id: 900 } });
+    if (init?.method === 'POST' && url.endsWith('/projectrequests')) {
+      if (denyRequests) return json({ message: 'Insufficient rights for projectrequests' }, 403);
+      if (JSON.parse(init.body).linked_location) return json({ message: 'Unknown field linked_location' }, 400);
+      sentPlain++;
+      return json({ data: { id: 41 } });
+    }
     if (url.includes('/projects')) return json({ data: [] });
     return json({ error: 'unexpected' }, 404);
   }) as typeof fetch;
   try {
     assert.equal((await call(a, 'PUT', '/api/rentman/settings', { token: 'some-token-123456' })).status, 200);
-    const ev = (await call(a, 'POST', '/api/events', { name: 'Gala', startDate: '2030-10-01', endDate: '2030-10-01', customerId: cu.id })).json.event.id;
+    const ev = (await call(a, 'POST', '/api/events', { name: 'Gala', startDate: '2030-10-01', endDate: '2030-10-01', customerId: cu.id, venue: 'Grand America' })).json.event.id;
     const r = await call(a, 'POST', `/api/events/${ev}/rentman/push`);
     assert.equal(r.status, 200, r.text);
     assert.equal(r.json.request.id, 41);
     assert.match(r.json.warning, /could not be saved as a Rentman contact/);
     assert.match(r.json.warning, /You are not allowed to create contacts/);
+    assert.equal(sentPlain, 1); // the venue link was refused, so the request went again without it
+    assert.match(r.json.warning, /included as text/);
     denyRequests = true;
     const ev2 = (await call(a, 'POST', '/api/events', { name: 'Gala 2', startDate: '2030-10-02', endDate: '2030-10-02' })).json.event.id;
     const r2 = await call(a, 'POST', `/api/events/${ev2}/rentman/push`);

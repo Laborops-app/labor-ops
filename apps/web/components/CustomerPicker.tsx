@@ -160,7 +160,7 @@ export function RentmanSend({ state, disabled, note }: { state: ReturnType<typeo
       <input type="checkbox" checked={state.on && !disabled} disabled={disabled} onChange={(e) => state.set(e.target.checked)} />
       <span>
         <b>Also create it in Rentman</b>
-        <span className="muted small">{disabled ? note : 'Sends the event as a project request with the customer, contact, venue and dates. The customer is added to Rentman if it is new. Accept the request in Rentman and the project links back here.'}</span>
+        <span className="muted small">{disabled ? note : 'Sends the event as a project request with its dates, linked to the customer, contact person and venue (as a Rentman location). Any of those missing in Rentman are created there. Accept the request in Rentman and the project links back here.'}</span>
       </span>
     </label>
   );

@@ -363,7 +363,7 @@ export function RentmanCard({ eventId, isAdmin, onError, onView }: { eventId: st
             <>
               <div>
                 <b>Create this event in Rentman</b>
-                <p className="muted small">Sends it as a project request with the customer, contact person, venue and dates. The customer is created in Rentman if it is not there yet. Once someone accepts the request in Rentman, the new project links back here with its equipment.</p>
+                <p className="muted small">Sends it as a project request with the dates, linked to the customer, its contact person and the venue as a location. Any of those not yet in Rentman are created there first. Once someone accepts the request in Rentman, the new project links back here with its equipment.</p>
               </div>
               <button className="btn primary" disabled={busy} onClick={() => run(() => api<RmView>(`/api/events/${eventId}/rentman/push`, { body: {} }))}>{busy ? 'Sending…' : 'Send to Rentman'}</button>
             </>
