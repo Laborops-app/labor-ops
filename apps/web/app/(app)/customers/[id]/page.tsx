@@ -9,12 +9,12 @@ import CopyEvent from '@/components/CopyEvent';
 import TopbarAction, { PlusIcon, TrashIcon, avClass, initialsOf } from '@/components/TopbarAction';
 import { api, fmtDate, money } from '@/lib/api';
 
-type Cust = { id: string; name: string; notes: string | null; rentman_contact_id: number | null };
+type Cust = { id: string; name: string; notes: string | null; rentman_contact_id: number | null; parent_id?: string | null; parent_name?: string | null };
 type Contact = { id: string; name: string; title: string | null; email: string | null; phone: string | null; notes: string | null; is_primary: boolean };
 type Loc = { id: string; label: string; venue: string | null; address: string | null; notes: string | null; is_default: boolean };
 type Ev = { id: string; name: string; venue: string | null; start_date: string; end_date: string; shift_count: number; slots: number };
 type Qt = { id: string; number: number; title: string; status: string; total: number; created_at: string };
-type Data = { customer: Cust; contacts: Contact[]; locations: Loc[]; events: Ev[]; quotes: Qt[] };
+type Data = { customer: Cust; contacts: Contact[]; locations: Loc[]; events: Ev[]; quotes: Qt[]; divisions?: { id: string; name: string; event_count: number }[] };
 
 const day = (s: string) => new Date(`${s.slice(0, 10)}T12:00:00`);
 function DateBadge({ date }: { date: string }) {
@@ -102,6 +102,9 @@ function Body() {
             Notes
             <textarea rows={3} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} maxLength={5000} placeholder="Billing preferences, who approves quotes, things to remember" />
           </label>
+          {c.parent_id && (
+            <p className="small">Division of <Link href={`/customers/${c.parent_id}`}>{c.parent_name}</Link></p>
+          )}
           {dirty && (
             <div className="row">
               <button className="btn primary">Save changes</button>
@@ -109,6 +112,25 @@ function Body() {
             </div>
           )}
         </form>
+
+        <section style={{ marginTop: 32 }}>
+          <div className="row space">
+            <h2 style={{ margin: 0 }}>Divisions</h2>
+          </div>
+          {(d.divisions ?? []).length > 0 ? (
+            <ul className="plain">
+              {d.divisions!.map((dv) => (
+                <li key={dv.id} style={{ padding: "6px 0" }}><Link href={`/customers/${dv.id}`}>{dv.name}</Link> <span className="muted small">· {dv.event_count} event{dv.event_count === 1 ? "" : "s"}</span></li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted small">No divisions. Add one with “+ New division” when you create an event, or below.</p>
+          )}
+          <form className="row" style={{ gap: 8, marginTop: 8 }} onSubmit={(e) => { e.preventDefault(); const el = (e.currentTarget.elements.namedItem('division') as HTMLInputElement); const name = el.value.trim(); if (!name) return; run(api('/api/customers', { body: { name, parentId: id } }).then(() => { el.value = ''; }), `Added the ${name} division.`); }}>
+            <input name="division" placeholder="New division name, e.g. Athletics" maxLength={120} style={{ flex: 1, minWidth: 200 }} />
+            <button className="btn small">Add division</button>
+          </form>
+        </section>
 
         <section style={{ marginTop: 32 }}>
           <div className="row space" style={{ marginBottom: 8 }}>

@@ -7,6 +7,8 @@ import { respondLinks } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
+import { CustomerError, createCustomer } from '../crm';
+import { getToken, pushEventRequest, RentmanError } from '../rentman';
 import { STATUSES } from '../pipeline';
 import { flagText, reviewFlags } from '../reviews';
 import { guard } from '../auth';
@@ -27,6 +29,19 @@ const eventBody = z.object({
   // Pipeline column and priority for a new event (the board's "+" buttons); changed later with PATCH /api/events/:id/pipeline.
   status: z.enum(STATUSES).optional(),
   priority: z.enum(['low', 'medium', 'high']).optional(),
+  // Make the customer while creating the event: a brand-new one, or a division of an existing one (parentId).
+  newCustomer: z
+    .object({
+      name: z.string().trim().min(1).max(150),
+      parentId: z.string().uuid().nullable().optional(),
+      contactName: z.string().trim().max(150).optional().nullable(),
+      email: z.string().trim().email().max(200).optional().nullable().or(z.literal('')),
+      phone: z.string().trim().max(50).optional().nullable(),
+      address: z.string().trim().max(300).optional().nullable(),
+    })
+    .optional(),
+  // Also send the new event to Rentman as a project request (with the customer created there if needed).
+  pushToRentman: z.boolean().optional(),
 });
 const shiftBody = z.object({
   roleName: z.string().trim().min(1).max(100),
@@ -222,9 +237,15 @@ export async function eventRoutes(app: FastifyInstance) {
   app.post('/api/events', { preHandler: mgr }, async (req, reply) => {
     const b = eventBody.parse(req.body);
     if (b.endDate < b.startDate) return reply.code(400).send({ error: 'End date is before the start date' });
-    const row = await withTenant(req.user.tid, async (c) => {
-      const cust = b.customerId ? (await c.query('SELECT id, name FROM customers WHERE id = $1', [b.customerId])).rows[0] : null;
+    if (b.newCustomer && b.customerId) return reply.code(400).send({ error: 'Pick an existing customer or make a new one, not both' });
+    if (b.pushToRentman && b.rentmanProjectId) return reply.code(400).send({ error: 'This event is already linked to a Rentman project' });
+    let row;
+    try {
+      row = await withTenant(req.user.tid, async (c) => {
+      const made = b.newCustomer ? await createCustomer(c, req.user.tid, req.user.sub, b.newCustomer) : null;
+      const cust = made ?? (b.customerId ? (await c.query('SELECT id, name FROM customers WHERE id = $1', [b.customerId])).rows[0] : null);
       if (b.customerId && !cust) return null;
+      if (made && !b.address) b.address = b.newCustomer?.address || undefined;
       const rmp = b.rentmanProjectId ? (await c.query('SELECT p.id, p.customer_id, lc.name AS loc_name, lc.address AS loc_address FROM rentman_projects p LEFT JOIN rentman_contacts lc ON lc.id = p.location_id WHERE p.id = $1', [b.rentmanProjectId])).rows[0] : null;
       const rentmanId: number | null = rmp ? rmp.id : null;
       // A linked Rentman project fills in the customer (created in the CRM if new), venue and address when they were left empty.
@@ -246,9 +267,30 @@ export async function eventRoutes(app: FastifyInstance) {
         if (token) await syncEquipment(c, req.user.tid, token, rentmanId).catch(() => {});
       }
       await audit(c, req.user.tid, req.user.sub, 'event.create', 'event', r.rows[0].id);
-      return r.rows[0];
+      return { ...r.rows[0], new_customer: made };
     });
-    return row ? reply.code(201).send({ event: row }) : reply.code(404).send({ error: 'Customer not found' });
+    } catch (e) {
+      if (e instanceof CustomerError) return reply.code(e.status).send({ error: e.message });
+      throw e;
+    }
+    if (!row) return reply.code(404).send({ error: 'Customer not found' });
+    // Rentman is a separate step: the event is kept even if Rentman cannot be reached, and it can be sent again from the event page.
+    let rentman: { requestId: number } | undefined;
+    let warning: string | undefined;
+    if (b.pushToRentman) {
+      try {
+        rentman = await withTenant(req.user.tid, async (c) => {
+          const token = await getToken(c);
+          if (!token) throw new RentmanError('Rentman is not connected, so the event was not sent. Connect it on the Integrations page.', 409);
+          const r = await pushEventRequest(c, req.user.tid, token, row.id);
+          await audit(c, req.user.tid, req.user.sub, 'rentman.push_event', 'event', row.id, r);
+          return r;
+        });
+      } catch (e) {
+        warning = e instanceof RentmanError ? `The event was created, but sending it to Rentman failed: ${e.message}` : 'The event was created, but sending it to Rentman failed.';
+      }
+    }
+    return reply.code(201).send({ event: row, rentman, warning });
   });
 
   app.get('/api/events/:id', { preHandler: mgr }, async (req, reply) => {

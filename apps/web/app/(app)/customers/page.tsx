@@ -8,7 +8,7 @@ import TopbarAction, { PlusIcon, EditIcon, SearchIcon, avClass, initialsOf } fro
 import { Banner, Empty } from '@/components/ui';
 import { api, fmtDate } from '@/lib/api';
 
-type Cust = { id: string; name: string; contact_name: string | null; email: string | null; phone: string | null; address: string | null; event_count: number; quote_count: number; last_event: string | null; created_at: string };
+type Cust = { id: string; name: string; parent_id?: string | null; parent_name?: string | null; division_count?: number; contact_name: string | null; email: string | null; phone: string | null; address: string | null; event_count: number; quote_count: number; last_event: string | null; created_at: string };
 type Sort = 'name' | 'created' | 'recent' | 'events';
 const PAGE = 25;
 
@@ -114,6 +114,8 @@ function Body() {
                   <td className="av-col"><span className={avClass(c.name)} aria-hidden="true">{initialsOf(c.name)}</span></td>
                   <td>
                     <Link href={`/customers/${c.id}`} className="rowlink" onClick={(e) => e.stopPropagation()}>{c.name}</Link>
+                    {c.parent_name && <span className="sub">Division of {c.parent_name}</span>}
+                    {!!c.division_count && <span className="sub">{c.division_count} division{c.division_count === 1 ? '' : 's'}</span>}
                     {c.last_event && <span className="sub">Last event {fmtDate(String(c.last_event).slice(0, 10))}</span>}
                   </td>
                   <td>{c.contact_name ?? <span className="muted">—</span>}</td>

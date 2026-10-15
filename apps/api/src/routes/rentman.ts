@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
 import { guard } from '../auth';
-import { clearToken, getToken, pullCustomers, pushCustomer, RentmanError, saveToken, syncEquipment, syncProjects, testToken } from '../rentman';
+import { checkEventRequest, checkOpenRequests, clearToken, getToken, pullCustomers, pushCustomer, pushEventRequest, RentmanError, saveToken, syncEquipment, syncProjects, testToken } from '../rentman';
 
 const uuid = z.string().uuid();
 const adm = guard('admin');
@@ -51,10 +51,11 @@ export async function rentmanRoutes(app: FastifyInstance) {
         if (!token) throw new RentmanError('Connect Rentman first (Integrations page).', 409);
         const n = await syncProjects(c, req.user.tid, token);
         const customers = await pullCustomers(c, req.user.tid, token);
-        await audit(c, req.user.tid, req.user.sub, 'rentman.sync', 'integration', null, { projects: n, customers });
-        return { n, customers };
+        const linked = await checkOpenRequests(c, req.user.tid, token);
+        await audit(c, req.user.tid, req.user.sub, 'rentman.sync', 'integration', null, { projects: n, customers, linked });
+        return { n, customers, linked };
       });
-      return { synced: n.n, customers: n.customers };
+      return { synced: n.n, customers: n.customers, requestsLinked: n.linked };
     } catch (e) {
       return fail(reply, e);
     }
@@ -117,18 +118,27 @@ export async function rentmanRoutes(app: FastifyInstance) {
 
   // The Rentman project and equipment linked to an event.
   const view = async (c: any, eventId: string, isAdmin: boolean) => {
-    const ev = (await c.query('SELECT rentman_project_id FROM events WHERE id = $1', [eventId])).rows[0];
+    const ev = (await c.query('SELECT rentman_project_id, rentman_request_id, rentman_request_status, rentman_pushed_at FROM events WHERE id = $1', [eventId])).rows[0];
     if (!ev) return undefined;
-    if (!ev.rentman_project_id) return { linked: false, connected: !!(await getToken(c)) };
+    const request = ev.rentman_request_id ? { id: ev.rentman_request_id, status: ev.rentman_request_status ?? 'open', pushedAt: ev.rentman_pushed_at } : null;
+    if (!ev.rentman_project_id) return { linked: false, connected: !!(await getToken(c)), request };
     const project = (await c.query('SELECT * FROM rentman_projects WHERE id = $1', [ev.rentman_project_id])).rows[0] ?? null;
     const equipment = (await c.query('SELECT item_id, name, quantity, unit_price, is_option, period_start, period_end, remark, group_id, group_name, group_sort, parent_id FROM rentman_equipment WHERE project_id = $1 ORDER BY sort', [ev.rentman_project_id])).rows
       .map((r: any) => (isAdmin ? r : { ...r, unit_price: undefined }));
-    return { linked: true, connected: !!(await getToken(c)), project, equipment };
+    return { linked: true, connected: !!(await getToken(c)), project, equipment, request };
   };
 
   app.get('/api/events/:id/rentman', { preHandler: mgr }, async (req, reply) => {
     const { id } = z.object({ id: uuid }).parse(req.params);
-    const out = await withTenant(req.user.tid, (c) => view(c, id, req.user.role === 'admin'));
+    const out = await withTenant(req.user.tid, async (c) => {
+      // An open project request is checked at most every two minutes; once accepted in Rentman, the project links itself.
+      const ev = (await c.query(
+        "SELECT 1 FROM events WHERE id = $1 AND rentman_request_id IS NOT NULL AND rentman_project_id IS NULL AND COALESCE(rentman_request_status, 'open') = 'open' AND (rentman_checked_at IS NULL OR rentman_checked_at < now() - interval '2 minutes')",
+        [id])).rowCount;
+      const token = ev ? await getToken(c) : null;
+      if (token) await checkEventRequest(c, req.user.tid, token, id).catch(() => undefined);
+      return view(c, id, req.user.role === 'admin');
+    });
     return out === undefined ? reply.code(404).send({ error: 'Event not found' }) : out;
   });
 
@@ -167,6 +177,41 @@ export async function rentmanRoutes(app: FastifyInstance) {
         const token = await getToken(c);
         if (!token) throw new RentmanError('Connect Rentman first (Integrations page).', 409);
         await syncEquipment(c, req.user.tid, token, ev.rentman_project_id);
+        return view(c, id, req.user.role === 'admin');
+      });
+      return out === undefined ? reply.code(404).send({ error: 'Event not found' }) : out;
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+
+  // Send the event to Rentman as a project request, with its customer (created in Rentman if needed), contact, venue and dates.
+  app.post('/api/events/:id/rentman/push', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    try {
+      const out = await withTenant(req.user.tid, async (c) => {
+        if (!(await c.query('SELECT 1 FROM events WHERE id = $1', [id])).rowCount) return undefined;
+        const token = await getToken(c);
+        if (!token) throw new RentmanError('Connect Rentman first (Integrations page).', 409);
+        const r = await pushEventRequest(c, req.user.tid, token, id);
+        await audit(c, req.user.tid, req.user.sub, 'rentman.push_event', 'event', id, r);
+        return view(c, id, req.user.role === 'admin');
+      });
+      return out === undefined ? reply.code(404).send({ error: 'Event not found' }) : out;
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+
+  // Ask Rentman now whether the request was accepted (and link the project if so).
+  app.post('/api/events/:id/rentman/check', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    try {
+      const out = await withTenant(req.user.tid, async (c) => {
+        if (!(await c.query('SELECT 1 FROM events WHERE id = $1', [id])).rowCount) return undefined;
+        const token = await getToken(c);
+        if (!token) throw new RentmanError('Connect Rentman first (Integrations page).', 409);
+        await checkEventRequest(c, req.user.tid, token, id);
         return view(c, id, req.user.role === 'admin');
       });
       return out === undefined ? reply.code(404).send({ error: 'Event not found' }) : out;

@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
 import { guard } from '../auth';
-import { CUSTOMER_SQL, addContact, addLocation, setMainContact, setMainAddress } from '../crm';
+import { CUSTOMER_SQL, CustomerError, addContact, addLocation, createCustomer, setMainContact, setMainAddress } from '../crm';
 
 const uuid = z.string().uuid();
 const mgr = guard('admin', 'manager');
@@ -30,16 +30,17 @@ export async function customerRoutes(app: FastifyInstance) {
   );
 
   app.post('/api/customers', { preHandler: mgr }, async (req, reply) => {
-    const b = body.parse(req.body);
-    const r = await withTenant(req.user.tid, async (c) => {
-      if ((await c.query('SELECT 1 FROM customers WHERE lower(name) = lower($1)', [b.name])).rowCount) return null;
-      const row = (await c.query('INSERT INTO customers (tenant_id, name, notes) VALUES ($1,$2,$3) RETURNING id', [req.user.tid, b.name, b.notes || null])).rows[0];
-      await setMainContact(c, req.user.tid, row.id, b, b.name);
-      await setMainAddress(c, req.user.tid, row.id, b.address);
-      await audit(c, req.user.tid, req.user.sub, 'customer.create', 'customer', row.id, { name: b.name });
-      return (await c.query(`SELECT * FROM (${CUSTOMER_SQL}) u WHERE u.id = $1`, [row.id])).rows[0];
-    });
-    return r ? reply.code(201).send({ customer: r }) : reply.code(409).send({ error: 'A customer with that name already exists' });
+    const b = body.extend({ parentId: uuid.nullable().optional() }).parse(req.body);
+    try {
+      const r = await withTenant(req.user.tid, async (c) => {
+        const made = await createCustomer(c, req.user.tid, req.user.sub, b);
+        return (await c.query(`SELECT * FROM (${CUSTOMER_SQL}) u WHERE u.id = $1`, [made.id])).rows[0];
+      });
+      return reply.code(201).send({ customer: r });
+    } catch (e) {
+      if (e instanceof CustomerError) return reply.code(e.status).send({ error: e.message });
+      throw e;
+    }
   });
 
   // Turn the free-text "client" names already on events into customers and link those events.
@@ -74,17 +75,27 @@ export async function customerRoutes(app: FastifyInstance) {
                 (SELECT coalesce(sum(l.qty*l.hours*l.rate),0) FROM quote_lines l WHERE l.quote_id = q.id) AS subtotal, q.discount, q.tax_pct
            FROM quotes q WHERE q.customer_id = $1 ORDER BY q.number DESC`, [id])).rows
         .map((q) => ({ ...q, total: Math.round(((Number(q.subtotal) - Number(q.discount)) * (1 + Number(q.tax_pct) / 100)) * 100) / 100 }));
-      return { customer, contacts, locations, events, quotes };
+      const divisions = (await c.query(`SELECT id, name, (SELECT count(*)::int FROM events e WHERE e.customer_id = d.id) AS event_count FROM customers d WHERE d.parent_id = $1 ORDER BY lower(name)`, [id])).rows;
+      return { customer, contacts, locations, events, quotes, divisions };
     });
     return out ?? reply.code(404).send({ error: 'Customer not found' });
   });
 
   app.patch('/api/customers/:id', { preHandler: mgr }, async (req, reply) => {
     const { id } = z.object({ id: uuid }).parse(req.params);
-    const b = body.partial().parse(req.body);
+    const b = body.partial().extend({ parentId: uuid.nullable().optional() }).parse(req.body);
     const r = await withTenant(req.user.tid, async (c) => {
       const cur = (await c.query('SELECT * FROM customers WHERE id = $1', [id])).rows[0];
       if (!cur) return { code: 404, error: 'Customer not found' };
+      if (b.parentId !== undefined) {
+        // A customer cannot sit under itself or under one of its own divisions.
+        const loop = b.parentId && (await c.query(
+          `WITH RECURSIVE up AS (SELECT id, parent_id FROM customers WHERE id = $1 UNION ALL SELECT p.id, p.parent_id FROM customers p JOIN up ON p.id = up.parent_id) SELECT 1 FROM up WHERE id = $2`,
+          [b.parentId, id])).rowCount;
+        if (loop) return { code: 400, error: 'A customer cannot be a division of itself or of one of its own divisions' };
+        if (b.parentId && !(await c.query('SELECT 1 FROM customers WHERE id = $1', [b.parentId])).rowCount) return { code: 404, error: 'Parent customer not found' };
+        await c.query('UPDATE customers SET parent_id = $2 WHERE id = $1', [id, b.parentId]);
+      }
       if (b.name && (await c.query('SELECT 1 FROM customers WHERE lower(name) = lower($1) AND id <> $2', [b.name, id])).rowCount) return { code: 409, error: 'A customer with that name already exists' };
       const name = b.name ?? cur.name;
       await c.query('UPDATE customers SET name = $2, notes = $3 WHERE id = $1', [id, name, b.notes === undefined ? cur.notes : b.notes || null]);

@@ -88,6 +88,18 @@ const contactRow = (x: any) => ({
   address: addressOf(x),
 });
 
+async function upsertProject(c: PoolClient, tid: string, p: any, nm: (v: unknown) => string | null) {
+  await c.query(
+    `INSERT INTO rentman_projects (tenant_id, id, number, name, customer, location, reference, project_type, tags, planperiod_start, planperiod_end,
+       usageperiod_start, usageperiod_end, equipment_period_from, equipment_period_to, customer_id, location_id, synced_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17, now())
+     ON CONFLICT (tenant_id, id) DO UPDATE SET number=$3, name=$4, customer=$5, location=$6, reference=$7, project_type=$8, tags=$9, planperiod_start=$10,
+       planperiod_end=$11, usageperiod_start=$12, usageperiod_end=$13, equipment_period_from=$14, equipment_period_to=$15, customer_id=$16, location_id=$17, synced_at=now()`,
+    [tid, p.id, p.number ?? null, String(p.displayname || p.name || `Project ${p.id}`), nm(p.customer), nm(p.location), p.reference || null, p.project_type || null, p.tags || null,
+     ts(p.planperiod_start), ts(p.planperiod_end), ts(p.usageperiod_start), ts(p.usageperiod_end), ts(p.equipment_period_from), ts(p.equipment_period_to), refId(p.customer), refId(p.location)],
+  );
+}
+
 /** Pull every project (and the contacts they point at) into the local cache. */
 export async function syncProjects(c: PoolClient, tid: string, token: string) {
   const [projects, contacts] = await Promise.all([
@@ -104,17 +116,7 @@ export async function syncProjects(c: PoolClient, tid: string, token: string) {
     );
   const names = new Map<number, string>(rows.map((r) => [r.id, r.name]));
   const nm = (v: unknown) => names.get(refId(v) ?? -1) ?? null;
-  for (const p of projects) {
-    await c.query(
-      `INSERT INTO rentman_projects (tenant_id, id, number, name, customer, location, reference, project_type, tags, planperiod_start, planperiod_end,
-         usageperiod_start, usageperiod_end, equipment_period_from, equipment_period_to, customer_id, location_id, synced_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17, now())
-       ON CONFLICT (tenant_id, id) DO UPDATE SET number=$3, name=$4, customer=$5, location=$6, reference=$7, project_type=$8, tags=$9, planperiod_start=$10,
-         planperiod_end=$11, usageperiod_start=$12, usageperiod_end=$13, equipment_period_from=$14, equipment_period_to=$15, customer_id=$16, location_id=$17, synced_at=now()`,
-      [tid, p.id, p.number ?? null, String(p.displayname || p.name || `Project ${p.id}`), nm(p.customer), nm(p.location), p.reference || null, p.project_type || null, p.tags || null,
-       ts(p.planperiod_start), ts(p.planperiod_end), ts(p.usageperiod_start), ts(p.usageperiod_end), ts(p.equipment_period_from), ts(p.equipment_period_to), refId(p.customer), refId(p.location)],
-    );
-  }
+  for (const p of projects) await upsertProject(c, tid, p, nm);
   return projects.length;
 }
 
@@ -182,7 +184,7 @@ export async function customerForRentman(c: PoolClient, tid: string, rentmanCont
   return cu;
 }
 
-async function send(token: string, method: 'POST' | 'PUT', path: string, body: unknown): Promise<any> {
+async function send(token: string, method: 'POST' | 'PUT', path: string, body: unknown, what = 'the customer'): Promise<any> {
   let res: Response;
   try {
     res = await fetch(`${BASE}${path}`, { method, headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(20000) });
@@ -191,7 +193,10 @@ async function send(token: string, method: 'POST' | 'PUT', path: string, body: u
   }
   if (res.status === 401) throw new RentmanError('Rentman rejected the API token. Check it and save again.', 400);
   if (res.status === 403) throw new RentmanError('Rentman would not allow that. The API token may be read-only, or you hit the rate limit.', 403);
-  if (!res.ok) throw new RentmanError(`Rentman could not save the customer (${res.status}).`);
+  if (!res.ok) {
+    const detail = await res.json().then((j: any) => j?.message || j?.error || j?.errors?.[0]?.message).catch(() => null);
+    throw new RentmanError(`Rentman could not save ${what} (${res.status})${detail ? `: ${String(detail).slice(0, 200)}` : ''}.`);
+  }
   return res.json();
 }
 
@@ -243,4 +248,115 @@ export async function syncEquipment(c: PoolClient, tid: string, token: string, p
     );
   }
   return rows.length;
+}
+
+// ---------- sending events to Rentman ----------
+
+/** "Dana Lee" → first "Dana", last "Lee"; one word goes in the last name, which Rentman always shows. */
+function splitName(full: string | null) {
+  const parts = String(full ?? '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return {};
+  if (parts.length === 1) return { contact_person_lastname: parts[0] };
+  return { contact_person_first_name: parts[0], contact_person_lastname: parts.slice(1).join(' ') };
+}
+
+/**
+ * Send an event to Rentman as a project request, with the customer (created or updated in Rentman first), its main contact,
+ * the venue and the event's dates. Rentman lists it under Project requests; accepting it there makes the project, which is then
+ * linked back to the event (see checkEventRequest). Sending again updates the open request.
+ */
+export async function pushEventRequest(c: PoolClient, tid: string, token: string, eventId: string) {
+  const ev = (await c.query(
+    `SELECT e.*, t.timezone,
+            (SELECT min(s.starts_at) FROM shifts s WHERE s.event_id = e.id) AS first_shift,
+            (SELECT max(s.ends_at) FROM shifts s WHERE s.event_id = e.id) AS last_shift,
+            ((e.start_date + time '08:00') AT TIME ZONE t.timezone) AS day_start,
+            ((e.end_date + time '23:00') AT TIME ZONE t.timezone) AS day_end
+       FROM events e JOIN tenants t ON t.id = e.tenant_id WHERE e.id = $1`, [eventId])).rows[0];
+  if (!ev) throw new RentmanError('Event not found', 404);
+  if (ev.rentman_project_id) throw new RentmanError('This event is already linked to a Rentman project.', 409);
+  if (ev.rentman_request_id && ev.rentman_request_status && ev.rentman_request_status !== 'open')
+    throw new RentmanError(`Rentman already ${ev.rentman_request_status} the request for this event.`, 409);
+
+  let contactId: number | null = null;
+  let person: { name: string | null; email: string | null; phone: string | null } = { name: null, email: null, phone: null };
+  let customerName: string | null = ev.client;
+  if (ev.customer_id) {
+    contactId = await pushCustomer(c, token, ev.customer_id);
+    const cu = (await c.query(
+      `SELECT cu.name, pc.name AS person, pc.email, pc.phone FROM customers cu
+         LEFT JOIN LATERAL (SELECT name, email, phone FROM customer_contacts WHERE customer_id = cu.id ORDER BY is_primary DESC, created_at LIMIT 1) pc ON true
+        WHERE cu.id = $1`, [ev.customer_id])).rows[0];
+    customerName = cu?.name ?? customerName;
+    person = { name: cu?.person ?? null, email: cu?.email ?? null, phone: cu?.phone ?? null };
+  }
+  const iso = (d: Date | string) => new Date(d).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const start = iso(ev.first_shift ?? ev.day_start), end = iso(ev.last_shift ?? ev.day_end);
+  const body: Record<string, unknown> = {
+    name: ev.name,
+    planperiod_start: start,
+    planperiod_end: end,
+    usageperiod_start: start,
+    usageperiod_end: end,
+    is_paid: false,
+    remark: [ev.notes, 'Sent from LaborOps.'].filter(Boolean).join('\n\n').slice(0, 4000),
+  };
+  if (contactId) body.linked_contact = `/contacts/${contactId}`;
+  if (customerName) body.contact_name = customerName;
+  if (person.phone) body.contact_phone = person.phone;
+  if (person.email) body.contact_person_email = person.email;
+  if (person.name && person.name !== customerName) Object.assign(body, splitName(person.name));
+  if (ev.venue) body.location_name = ev.venue;
+  if (ev.address) body.location_mailing_street = ev.address;
+
+  let rid: number | null = ev.rentman_request_id;
+  if (rid) await send(token, 'PUT', `/projectrequests/${rid}`, body, 'the project request');
+  else {
+    const j = await send(token, 'POST', '/projectrequests', body, 'the project request');
+    rid = Number(j?.data?.id);
+    if (!rid) throw new RentmanError('Rentman did not return the new project request.');
+  }
+  await c.query(
+    "UPDATE events SET rentman_request_id = $2, rentman_request_status = 'open', rentman_pushed_at = now(), rentman_checked_at = now() WHERE id = $1",
+    [eventId, rid],
+  );
+  return { requestId: rid, contactId };
+}
+
+/**
+ * Look up the event's project request. When Rentman has turned it into a project, cache that project, link it to the event and
+ * pull its equipment. Returns the request status.
+ */
+export async function checkEventRequest(c: PoolClient, tid: string, token: string, eventId: string) {
+  const ev = (await c.query('SELECT rentman_request_id, rentman_project_id FROM events WHERE id = $1', [eventId])).rows[0];
+  if (!ev?.rentman_request_id) return null;
+  const r = (await get(token, `/projectrequests/${ev.rentman_request_id}`))?.data ?? {};
+  const status = ['open', 'accepted', 'declined'].includes(r.status) ? r.status : 'open';
+  const projectId = refId(r.linked_project);
+  await c.query('UPDATE events SET rentman_request_status = $2, rentman_checked_at = now() WHERE id = $1', [eventId, status]);
+  if (projectId && !ev.rentman_project_id) {
+    const p = (await get(token, `/projects/${projectId}`))?.data;
+    if (p) {
+      const names = async (v: unknown) => {
+        const id = refId(v);
+        return id === null ? null : (await c.query('SELECT name FROM rentman_contacts WHERE id = $1', [id])).rows[0]?.name ?? null;
+      };
+      const [cust, loc] = [await names(p.customer), await names(p.location)];
+      await upsertProject(c, tid, p, (v) => (v === p.customer ? cust : v === p.location ? loc : null));
+      await c.query('UPDATE events SET rentman_project_id = $2 WHERE id = $1', [eventId, projectId]);
+      await syncEquipment(c, tid, token, projectId).catch(() => undefined);
+    }
+  }
+  return { status, projectId };
+}
+
+/** Check every open request (used by the Rentman sync). */
+export async function checkOpenRequests(c: PoolClient, tid: string, token: string) {
+  const open = (await c.query("SELECT id FROM events WHERE rentman_request_id IS NOT NULL AND rentman_project_id IS NULL AND COALESCE(rentman_request_status, 'open') = 'open'")).rows;
+  let linked = 0;
+  for (const e of open) {
+    const r = await checkEventRequest(c, tid, token, e.id).catch(() => null);
+    if (r?.projectId) linked++;
+  }
+  return linked;
 }

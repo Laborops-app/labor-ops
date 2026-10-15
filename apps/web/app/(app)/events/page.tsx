@@ -8,7 +8,7 @@ import TopbarAction, { PlusIcon, EditIcon, SearchIcon } from '@/components/Topba
 import { Banner, Empty } from '@/components/ui';
 import { api, fmtDate } from '@/lib/api';
 import RentmanPicker from '@/components/RentmanPicker';
-import CustomerSelect from '@/components/CustomerSelect';
+import CustomerPicker, { customerBody, RentmanSend, useCustomerList, useRentmanSend, type CustomerChoice } from '@/components/CustomerPicker';
 import LocationPick from '@/components/LocationPick';
 
 type Ev = { id: string; name: string; client: string | null; venue: string | null; start_date: string; end_date: string; shift_count: number; slots: number; accepted: number; filled?: number; to_rate?: number };
@@ -48,7 +48,10 @@ function Body() {
   const [adding, setAdding] = useState(false);
   const [f, setF] = useState({ name: '', client: '', venue: '', address: '', startDate: today(), endDate: today() });
   const [rm, setRm] = useState<number | null>(null);
-  const [cust, setCust] = useState<string | null>(null);
+  const [cust, setCust] = useState<CustomerChoice>({ mode: 'existing', customerId: null, client: '' });
+  const customers = useCustomerList();
+  const rmSend = useRentmanSend();
+  const [made, setMade] = useState<{ id: string; warning: string } | null>(null);
 
   useEffect(() => {
     api<{ events: Ev[] }>('/api/events')
@@ -60,8 +63,12 @@ function Body() {
     e.preventDefault();
     setError('');
     try {
-      const r = await api<{ event: { id: string } }>('/api/events', { body: { ...f, client: f.client || null, venue: f.venue || null, address: f.address || null, rentmanProjectId: rm, customerId: cust || undefined } });
-      router.push(`/events/${r.event.id}`);
+      const r = await api<{ event: { id: string }; warning?: string }>('/api/events', {
+        body: { ...f, ...customerBody(cust), venue: f.venue || null, address: f.address || null, rentmanProjectId: rm, pushToRentman: !rm && rmSend.on ? true : undefined },
+      });
+      // Rentman trouble does not stop the event; say so before moving on.
+      if (r.warning) setMade({ id: r.event.id, warning: r.warning });
+      else router.push(`/events/${r.event.id}`);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -172,7 +179,14 @@ function Body() {
         </div>
       )}
 
-      {adding && (
+      {made && (
+        <Modal title="Event created" onClose={() => router.push(`/events/${made.id}`)}>
+          <Banner kind="info">{made.warning}</Banner>
+          <p className="muted small">You can send it to Rentman again from the event page once the problem is fixed.</p>
+          <div className="acts"><button className="btn primary" onClick={() => router.push(`/events/${made.id}`)}>Open the event</button></div>
+        </Modal>
+      )}
+      {adding && !made && (
         <Modal title="Add New Event" onClose={() => setAdding(false)}>
           <form onSubmit={add}>
             <RentmanPicker
@@ -181,11 +195,10 @@ function Body() {
                 setRm(p ? p.id : null);
                 if (p) {
                   // Picking a project fills in everything it knows: name, customer, client, venue, street address and dates.
-                  setCust(p.customer_local_id ?? null);
+                  setCust({ mode: 'existing', customerId: p.customer_local_id ?? null, client: p.customer ?? '' });
                   setF((x) => ({
                     ...x,
                     name: p.name || x.name,
-                    client: p.customer || x.client,
                     venue: p.location || x.venue,
                     address: p.location_address || x.address,
                     startDate: p.planperiod_start ? p.planperiod_start.slice(0, 10) : x.startDate,
@@ -199,14 +212,8 @@ function Body() {
               Event name
               <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required autoFocus />
             </label>
-            <div className="two">
-              <CustomerSelect value={cust} onPick={(c) => { setCust(c?.id ?? null); if (c) setF({ ...f, client: c.name }); }} />
-              <label>
-                Client name
-                <input value={f.client} onChange={(e) => { setCust(null); setF({ ...f, client: e.target.value }); }} />
-              </label>
-            </div>
-            <LocationPick customerId={cust} onPick={(l) => setF((x) => ({ ...x, venue: l.venue, address: l.address }))} />
+            <CustomerPicker value={cust} onChange={setCust} list={customers} />
+            <LocationPick customerId={cust.mode === 'existing' ? cust.customerId : null} onPick={(l) => setF((x) => ({ ...x, venue: l.venue, address: l.address }))} />
             <div className="two">
               <label>
                 Venue
@@ -225,6 +232,7 @@ function Body() {
                 <input type="date" value={f.endDate} min={f.startDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} required />
               </label>
             </div>
+            <RentmanSend state={rmSend} disabled={!!rm} note="This event is already linked to the Rentman project picked above." />
             <div className="acts">
               <button type="button" className="btn" onClick={() => setAdding(false)}>Cancel</button>
               <button className="btn primary">Create Event</button>

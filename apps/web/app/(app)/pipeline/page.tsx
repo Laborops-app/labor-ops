@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Shell from '@/components/Shell';
 import Modal from '@/components/Modal';
 import CustomerSelect from '@/components/CustomerSelect';
+import CustomerPicker, { customerBody, RentmanSend, useCustomerList, useRentmanSend, type CustomerChoice } from '@/components/CustomerPicker';
 import TopbarAction, { PlusIcon, SearchIcon, avClass, initialsOf } from '@/components/TopbarAction';
 import { Banner } from '@/components/ui';
 import { api, Me, roleLabel } from '@/lib/api';
@@ -170,18 +171,21 @@ function CardView({ c, onMove, onPriority, onDragStart, onDragEnd, dragging }: {
 }
 
 /* ---------- new event ---------- */
-function NewEvent({ status, onClose, onCreated }: { status: PipelineStatus; onClose: () => void; onCreated: (id: string) => void }) {
-  const [f, setF] = useState({ name: '', startDate: '', endDate: '', venue: '', customerId: null as string | null, client: '', status, priority: 'medium' as Priority });
+function NewEvent({ status, onClose, onCreated }: { status: PipelineStatus; onClose: () => void; onCreated: (id: string, warning?: string) => void }) {
+  const [f, setF] = useState({ name: '', startDate: '', endDate: '', venue: '', status, priority: 'medium' as Priority });
+  const [cust, setCust] = useState<CustomerChoice>({ mode: 'existing', customerId: null, client: '' });
+  const customers = useCustomerList();
+  const rmSend = useRentmanSend();
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     try {
-      const r = await api<{ event: { id: string } }>('/api/events', {
-        body: { name: f.name, startDate: f.startDate, endDate: f.endDate || f.startDate, venue: f.venue || null, customerId: f.customerId, client: f.customerId ? null : f.client || null, status: f.status, priority: f.priority },
+      const r = await api<{ event: { id: string }; warning?: string }>('/api/events', {
+        body: { name: f.name, startDate: f.startDate, endDate: f.endDate || f.startDate, venue: f.venue || null, ...customerBody(cust), status: f.status, priority: f.priority, pushToRentman: rmSend.on || undefined },
       });
-      onCreated(r.event.id);
+      onCreated(r.event.id, r.warning);
     } catch (x: any) {
       setErr(x.message);
       setBusy(false);
@@ -196,8 +200,7 @@ function NewEvent({ status, onClose, onCreated }: { status: PipelineStatus; onCl
           <label>Starts<input type="date" value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value, endDate: f.endDate && f.endDate >= e.target.value ? f.endDate : e.target.value })} required /></label>
           <label>Ends<input type="date" value={f.endDate} min={f.startDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} /></label>
         </div>
-        <CustomerSelect value={f.customerId} onPick={(c) => setF({ ...f, customerId: c?.id ?? null })} />
-        {!f.customerId && <label>Client name <span className="muted small">(optional)</span><input value={f.client} onChange={(e) => setF({ ...f, client: e.target.value })} maxLength={200} /></label>}
+        <CustomerPicker value={cust} onChange={setCust} list={customers} />
         <label>Venue <span className="muted small">(optional)</span><input value={f.venue} onChange={(e) => setF({ ...f, venue: e.target.value })} maxLength={200} /></label>
         <div className="two">
           <label>Stage
@@ -211,6 +214,7 @@ function NewEvent({ status, onClose, onCreated }: { status: PipelineStatus; onCl
             </select>
           </label>
         </div>
+        <RentmanSend state={rmSend} />
         <div className="acts">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
           <button className="btn primary" disabled={busy}>{busy ? 'Creating…' : 'Create event'}</button>
@@ -482,7 +486,7 @@ function Body({ me }: { me: Me }) {
           {!cards.length && <div className="muted" style={{ padding: 16 }}>No events match.</div>}
         </div>
       )}
-      {creating && <NewEvent status={creating} onClose={() => setCreating(null)} onCreated={(id) => { setCreating(null); load(); setNote('Event created. Open it to add shifts and crew.'); router.prefetch(`/events/${id}`); }} />}
+      {creating && <NewEvent status={creating} onClose={() => setCreating(null)} onCreated={(id, warning) => { setCreating(null); load(); if (warning) setErr(warning); else setNote('Event created. Open it to add shifts and crew.'); router.prefetch(`/events/${id}`); }} />}
     </div>
   );
 }

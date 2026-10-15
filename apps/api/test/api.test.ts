@@ -1675,6 +1675,91 @@ test('pipeline: board columns, moving and ordering cards, priority, auto start, 
   assert.ok((await call(a, 'GET', '/api/pipeline?range=all')).json.events.some((e: any) => e.id === old.id));
 });
 
+test('new event: create a customer or a division on the spot, send it to Rentman as a project request, link the project once accepted', async () => {
+  const a = await register('rmreq');
+  const parent = (await call(a, 'POST', '/api/customers', { name: 'University of Utah', contactName: 'Pat Ute', email: 'pat@utah.example', phone: '555-0101', address: '201 Presidents Cir' })).json.customer;
+  // a division takes the parent's name in front, and borrows its contact and address when none are given
+  const div = await call(a, 'POST', '/api/customers', { name: 'Athletics', parentId: parent.id });
+  assert.equal(div.status, 201, div.text);
+  assert.equal(div.json.customer.name, 'University of Utah – Athletics');
+  assert.equal(div.json.customer.parent_name, 'University of Utah');
+  assert.equal(div.json.customer.email, 'pat@utah.example');
+  assert.equal((await call(a, 'POST', '/api/customers', { name: 'Athletics', parentId: parent.id })).status, 409);
+  assert.equal((await call(a, 'GET', `/api/customers/${parent.id}`)).json.divisions.length, 1);
+  assert.equal((await call(a, 'PATCH', `/api/customers/${parent.id}`, { parentId: div.json.customer.id })).status, 400); // no loops
+  assert.equal((await call(a, 'PATCH', `/api/customers/${parent.id}`, { parentId: parent.id })).status, 400);
+
+  const posted: any[] = [];
+  let accepted = false;
+  const real = globalThis.fetch;
+  const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: { 'content-type': 'application/json' } });
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = String(input);
+    if (!url.startsWith('https://api.rentman.net')) return real(input, init);
+    if (init?.method === 'POST' && url.endsWith('/contacts')) { posted.push({ url, body: JSON.parse(init.body) }); return json({ data: { id: 701 } }); }
+    if (init?.method === 'PUT' && url.endsWith('/contacts/701')) return json({ data: { id: 701 } });
+    if (init?.method === 'POST' && url.endsWith('/projectrequests')) { posted.push({ url, body: JSON.parse(init.body) }); return json({ data: { id: 88 } }); }
+    if (init?.method === 'PUT' && url.endsWith('/projectrequests/88')) { posted.push({ url, body: JSON.parse(init.body) }); return json({ data: { id: 88 } }); }
+    if (url.includes('/projectrequests/88')) return json({ data: accepted ? { id: 88, status: 'accepted', linked_project: '/projects/300' } : { id: 88, status: 'open', linked_project: null } });
+    if (url.includes('/projects/300/projectequipmentgroup')) return json({ data: [] });
+    if (url.includes('/projects/300/projectequipment')) return json({ data: [{ id: 1, displayname: 'Stage deck', quantity_total: 20 }] });
+    if (url.includes('/projects/300')) return json({ data: { id: 300, number: 3001, displayname: 'Rivalry Week', customer: '/contacts/701', planperiod_start: '2030-09-01T14:00:00Z' } });
+    if (url.includes('/projects')) return json({ data: [] });
+    return json({ error: 'unexpected' }, 404);
+  }) as typeof fetch;
+  try {
+    // without Rentman connected the event is still created, with a warning
+    const off = await call(a, 'POST', '/api/events', { name: 'Off', startDate: '2030-09-01', endDate: '2030-09-01', pushToRentman: true });
+    assert.equal(off.status, 201);
+    assert.match(off.json.warning, /not connected/);
+    assert.equal((await call(a, 'PUT', '/api/rentman/settings', { token: 'good-token-123456' })).status, 200);
+
+    // a brand-new division made from the event form, sent straight to Rentman
+    const ev = await call(a, 'POST', '/api/events', {
+      name: 'Rivalry Week', startDate: '2030-09-01', endDate: '2030-09-02', venue: 'Rice-Eccles Stadium',
+      newCustomer: { name: 'Football Ops', parentId: parent.id, contactName: 'Dana Lee', email: 'dana@utah.example', phone: '555-0199' },
+      pushToRentman: true,
+    });
+    assert.equal(ev.status, 201, ev.text);
+    assert.equal(ev.json.event.client, 'University of Utah – Football Ops');
+    assert.equal(ev.json.event.new_customer.name, 'University of Utah – Football Ops');
+    assert.equal(ev.json.rentman.requestId, 88);
+    assert.equal(ev.json.warning, undefined);
+    const contact = posted.find((p) => p.url.endsWith('/contacts'))!.body;
+    assert.equal(contact.name, 'University of Utah – Football Ops');
+    assert.equal(contact.email_1, 'dana@utah.example');
+    const req = posted.find((p) => p.url.endsWith('/projectrequests'))!.body;
+    assert.equal(req.name, 'Rivalry Week');
+    assert.equal(req.linked_contact, '/contacts/701');
+    assert.equal(req.contact_name, 'University of Utah – Football Ops');
+    assert.equal(req.contact_person_first_name, 'Dana');
+    assert.equal(req.contact_person_lastname, 'Lee');
+    assert.equal(req.contact_person_email, 'dana@utah.example');
+    assert.equal(req.location_name, 'Rice-Eccles Stadium');
+    assert.match(req.planperiod_start, /^2030-09-01T\d\d:00:00Z$/);
+    assert.match(req.planperiod_end, /^2030-09-0[23]T\d\d:00:00Z$/);
+    const id = ev.json.event.id;
+    let v = (await call(a, 'GET', `/api/events/${id}/rentman`)).json;
+    assert.equal(v.linked, false);
+    assert.equal(v.request.id, 88);
+    assert.equal(v.request.status, 'open');
+    // sending again updates the same request
+    assert.equal((await call(a, 'POST', `/api/events/${id}/rentman/push`)).status, 200);
+    assert.ok(posted.some((p) => p.url.endsWith('/projectrequests/88')));
+    // accepted in Rentman: the project links itself and its equipment comes over
+    accepted = true;
+    v = (await call(a, 'POST', `/api/events/${id}/rentman/check`)).json;
+    assert.equal(v.linked, true);
+    assert.equal(v.project.id, 300);
+    assert.equal(v.request.status, 'accepted');
+    assert.equal(v.equipment.length, 1);
+    assert.equal((await call(a, 'POST', `/api/events/${id}/rentman/push`)).status, 409); // already linked
+    assert.equal((await call(a, 'POST', '/api/events', { name: 'Both', startDate: '2030-09-01', endDate: '2030-09-01', customerId: parent.id, newCustomer: { name: 'X' } })).status, 400);
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
 test('clocking: geofence, coordinator mode and on-site check-in', async () => {
   const a = await register('geo');
   const c1 = await mkCrew(a, 'geo1');

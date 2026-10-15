@@ -1313,3 +1313,17 @@ select.pm-stage.prio.blue { background-color: rgba(80, 48, 229, 0.1); color: #50
   .pm-form .two { grid-template-columns: 1fr; }
 }
 @media (hover: none) { .pm-card { cursor: pointer; } }
+
+/* ---- new customer / division on the event form, Rentman send ---- */
+fieldset.cp { border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px 6px; margin: 10px 0; min-width: 0; }
+fieldset.cp legend { padding: 0 6px; font-weight: 700; font-size: 14px; }
+.cp-tabs { margin: 2px 0 10px; flex-wrap: wrap; }
+.cp-note { margin: 4px 0 8px; }
+label.check.cp-rm { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; margin: 10px 0; border-radius: 12px; background: var(--surface-2); font-weight: 400; cursor: pointer; }
+label.check.cp-rm input { margin-top: 3px; flex: none; }
+label.check.cp-rm > span { display: grid; gap: 2px; }
+.rm-send { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; padding: 14px 16px; margin: 10px 0 14px; border-radius: 12px; background: var(--primary-soft); }
+.rm-send > div { flex: 1 1 280px; min-width: 0; }
+.rm-send p { margin: 4px 0 0; }
+.rm-send.open { background: color-mix(in srgb, #ffa500 14%, var(--surface)); }
+.rm-send.declined { background: var(--bad-bg); }

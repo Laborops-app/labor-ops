@@ -310,6 +310,7 @@ export function Clocking({ ev, onSaved, onError }: { ev: EventFull; onSaved: () 
 
 export type RmView = {
   linked: boolean; connected: boolean; warning?: string;
+  request?: { id: number; status: 'open' | 'accepted' | 'declined'; pushedAt: string | null } | null;
   project?: { id: number; number: number | null; name: string; customer: string | null; location: string | null; reference: string | null; project_type: string | null; tags: string | null; planperiod_start: string | null; planperiod_end: string | null; usageperiod_start: string | null; usageperiod_end: string | null; synced_at: string } | null;
   equipment?: { item_id: number; name: string; quantity: string | null; unit_price?: string | null; is_option: boolean; period_start: string | null; period_end: string | null; remark: string | null; group_id: number | null; group_name: string | null; group_sort: number | null; parent_id: number | null }[];
 };
@@ -347,7 +348,7 @@ export function RentmanCard({ eventId, isAdmin, onError, onView }: { eventId: st
     <section className="card">
       <div className="row space">
         <span className="muted small">
-          {v.linked && p ? `${p.number ? `#${p.number} · ` : ''}${p.name} · ${v.equipment?.length ?? 0} equipment item${v.equipment?.length === 1 ? '' : 's'}` : v.linked ? 'Linked project' : 'Not linked to a Rentman project yet'}
+          {v.linked && p ? `${p.number ? `#${p.number} · ` : ''}${p.name} · ${v.equipment?.length ?? 0} equipment item${v.equipment?.length === 1 ? '' : 's'}` : v.linked ? 'Linked project' : v.request?.status === 'open' ? 'Waiting for Rentman to accept the request' : 'Not linked to a Rentman project yet'}
         </span>
         {v.linked && (
           <span className="row">
@@ -356,9 +357,40 @@ export function RentmanCard({ eventId, isAdmin, onError, onView }: { eventId: st
           </span>
         )}
       </div>
+      {!v.linked && v.connected && (
+        <div className={`rm-send ${v.request?.status ?? ''}`}>
+          {!v.request ? (
+            <>
+              <div>
+                <b>Create this event in Rentman</b>
+                <p className="muted small">Sends it as a project request with the customer, contact person, venue and dates. The customer is created in Rentman if it is not there yet. Once someone accepts the request in Rentman, the new project links back here with its equipment.</p>
+              </div>
+              <button className="btn primary" disabled={busy} onClick={() => run(() => api<RmView>(`/api/events/${eventId}/rentman/push`, { body: {} }))}>{busy ? 'Sending…' : 'Send to Rentman'}</button>
+            </>
+          ) : v.request.status === 'declined' ? (
+            <div>
+              <b>Rentman declined project request #{v.request.id}</b>
+              <p className="muted small">Link an existing project below instead, or change the event and ask in Rentman.</p>
+            </div>
+          ) : (
+            <>
+              <div>
+                <b>Sent to Rentman · request #{v.request.id}</b>
+                <p className="muted small">
+                  {v.request.pushedAt ? `Sent ${new Date(v.request.pushedAt).toLocaleString()}. ` : ''}Waiting for it to be accepted under Project requests in Rentman; the project links here automatically after that.
+                </p>
+              </div>
+              <span className="row">
+                <button className="btn small" disabled={busy} onClick={() => run(() => api<RmView>(`/api/events/${eventId}/rentman/check`, { body: {} }))}>Check now</button>
+                <button className="btn ghost small" disabled={busy} title="Send the event's current details again" onClick={() => run(() => api<RmView>(`/api/events/${eventId}/rentman/push`, { body: {} }))}>Send updates</button>
+              </span>
+            </>
+          )}
+        </div>
+      )}
       {!v.linked && (
         <>
-          <RentmanPicker value={pick?.id ?? null} onPick={setPick} label="Link a Rentman project" />
+          <RentmanPicker value={pick?.id ?? null} onPick={setPick} label="Or link an existing Rentman project" />
           <button className="btn primary" disabled={!pick || busy} onClick={() => pick && run(() => api<RmView>(`/api/events/${eventId}/rentman`, { method: 'PUT', body: { projectId: pick.id } }))}>Link project</button>
         </>
       )}
