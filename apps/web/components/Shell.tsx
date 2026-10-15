@@ -52,6 +52,17 @@ const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; icon: 
     ),
   },
   {
+    href: '/pipeline',
+    label: 'Pipeline',
+    roles: ['admin', 'manager'],
+    icon: icon(
+      <>
+        <rect x="3" y="3" width="18" height="18" rx="3" />
+        <path d="M9 3v18M15 3v18M5.5 7h1M11.5 7h1M17.5 7h1M11.5 11h1M17.5 11h1M17.5 15h1" />
+      </>,
+    ),
+  },
+  {
     href: '/customers',
     label: 'Customers',
     roles: ['admin', 'manager'],

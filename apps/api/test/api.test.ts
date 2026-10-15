@@ -1620,6 +1620,61 @@ test('flags: No-show and Do not rehire reviews make the coordinator confirm, and
   assert.ok(cand.skipped.some((x: any) => x.user_id === c2.id && /Do not rehire/.test(x.reason)));
 });
 
+test('pipeline: board columns, moving and ordering cards, priority, auto start, crew progress and history', async () => {
+  const a = await register('pipe');
+  const c1 = await mkCrew(a, 'pp1');
+  const today = new Date().toISOString().slice(0, 10);
+  const mk = async (name: string, body: Record<string, unknown> = {}) =>
+    (await call(a, 'POST', '/api/events', { name, startDate: '2030-05-01', endDate: '2030-05-02', ...body })).json.event;
+  const e1 = await mk('Expo');
+  assert.equal(e1.pipeline_status, 'pending');
+  assert.equal(e1.priority, 'medium');
+  const e2 = await mk('Gala', { status: 'confirmed', priority: 'high' });
+  const e3 = await mk('Concert', { status: 'confirmed' });
+  const live = await mk('Game day', { status: 'confirmed', startDate: today, endDate: today });
+  assert.equal((await call(a, 'POST', '/api/events', { name: 'Bad', startDate: '2030-05-01', endDate: '2030-05-02', status: 'nope' })).status, 400);
+  assert.equal((await call(c1.session, 'GET', '/api/pipeline')).status, 403);
+
+  // crew progress on the card
+  const sh = (await call(a, 'POST', `/api/events/${e2.id}/shifts`, { roleName: 'Audio', startsAt: start(600), endsAt: start(606), headcount: 3 })).json.shift.id;
+  const asg = (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id })).json.assignment.id;
+  const b0 = await call(a, 'GET', '/api/pipeline');
+  assert.equal(b0.status, 200, b0.text);
+  let board = b0.json;
+  const card = board.events.find((e: any) => e.id === e2.id);
+  assert.equal(card.slots, 3);
+  assert.equal(card.filled, 1);
+  assert.equal(card.waiting, 1);
+  assert.equal(card.accepted, 0);
+  assert.equal(card.crew[0].name, 'Crew pp1');
+  await call(c1.session, 'POST', `/api/assignments/${asg}/respond`, { response: 'accepted' });
+  board = (await call(a, 'GET', '/api/pipeline')).json;
+  assert.equal(board.events.find((e: any) => e.id === e2.id).accepted, 1);
+  assert.ok(board.team.some((t: any) => t.role === 'admin'));
+  // a confirmed event whose day has come is moved to In progress, and the move is logged
+  assert.equal(board.events.find((e: any) => e.id === live.id).status, 'in_progress');
+  assert.equal((await call(a, 'GET', `/api/events/${live.id}/pipeline-log`)).json.log[0].reason, 'Event started');
+
+  // drag Expo into Confirmed between Gala and Concert, then raise its priority
+  const mv = await call(a, 'PATCH', `/api/events/${e1.id}/pipeline`, { status: 'confirmed', order: [e2.id, e1.id, e3.id] });
+  assert.equal(mv.status, 200, mv.text);
+  assert.equal(mv.json.status, 'confirmed');
+  board = (await call(a, 'GET', '/api/pipeline')).json;
+  assert.deepEqual(board.events.filter((e: any) => e.status === 'confirmed').map((e: any) => e.id), [e2.id, e1.id, e3.id]);
+  assert.equal((await call(a, 'PATCH', `/api/events/${e1.id}/pipeline`, { priority: 'low' })).json.priority, 'low');
+  assert.equal((await call(a, 'PATCH', `/api/events/${e1.id}/pipeline`, { order: [e2.id, e3.id] })).status, 400);
+  assert.equal((await call(a, 'PATCH', `/api/events/${crypto.randomUUID()}/pipeline`, { status: 'quote' })).status, 404);
+  const log = (await call(a, 'GET', `/api/events/${e1.id}/pipeline-log`)).json.log;
+  assert.equal(log[0].from_status, 'pending');
+  assert.equal(log[0].to_status, 'confirmed');
+  assert.ok(log[0].changed_by_name);
+
+  // canceled events drop off "upcoming" once they are over, but stay under "all"
+  const old = await mk('Old show', { startDate: '2020-01-01', endDate: '2020-01-02', status: 'canceled' });
+  assert.ok(!(await call(a, 'GET', '/api/pipeline')).json.events.some((e: any) => e.id === old.id));
+  assert.ok((await call(a, 'GET', '/api/pipeline?range=all')).json.events.some((e: any) => e.id === old.id));
+});
+
 test('clocking: geofence, coordinator mode and on-site check-in', async () => {
   const a = await register('geo');
   const c1 = await mkCrew(a, 'geo1');
@@ -1972,6 +2027,7 @@ test('quotes: lines from an event, totals, send, customer accepts without signin
   await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Audio A1', startsAt: '2030-05-10T15:00:00Z', endsAt: '2030-05-10T23:00:00Z', headcount: 2 });
 
   const q = await call(a, 'POST', '/api/quotes', { eventId: ev, taxPct: 10, discount: 100 });
+  assert.equal((await call(a, 'GET', `/api/events/${ev}`)).json.event.pipeline_status, 'quote'); // a quote moves it out of Pending
   assert.equal(q.status, 201, q.text);
   assert.equal(q.json.quote.number, 1001);
   assert.equal(q.json.quote.customer_id, cu);
@@ -2006,6 +2062,7 @@ test('quotes: lines from an event, totals, send, customer accepts without signin
   assert.equal((await call(a, 'POST', `/api/quotes/${id}/send`)).status, 200);
 
   assert.equal((await call(null, 'POST', '/api/quote/respond', { t, response: 'accepted', note: 'Go ahead' })).json.status, 'accepted');
+  assert.equal((await call(a, 'GET', `/api/events/${ev}`)).json.event.pipeline_status, 'confirmed'); // accepted quote confirms the event
   assert.equal((await call(null, 'POST', '/api/quote/respond', { t, response: 'declined' })).status, 409);
   const after = (await call(a, 'GET', `/api/quotes/${id}`)).json.quote;
   assert.equal(after.status, 'accepted');

@@ -7,6 +7,7 @@ import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { roleKey } from '@/components/Stars';
 import { EventRatings } from '@/components/Rating';
+import { PRIORITY, STATUS, STATUS_ORDER, type PipelineStatus, type Priority } from '@/lib/pipeline';
 import FillFromGroup from '@/components/FillFromGroup';
 import CrewPick, { PickOption } from '@/components/CrewPick';
 import InvoicePanel from '@/components/InvoicePanel';
@@ -596,6 +597,29 @@ function Body({ me }: { me: Me }) {
               const cls = filled >= slots ? 'staff-good' : filled > 0 ? 'staff-warn' : 'staff-bad';
               return <span className={`pill ${cls}`} title="Seats with crew on them (offered, pending or accepted)">{filled >= slots ? 'Fully staffed' : filled > 0 ? 'Partly staffed' : 'No crew yet'} · {filled}/{slots}</span>;
             })()}
+            {ev.pipeline_status && (
+              <select
+                className="pm-stage"
+                value={ev.pipeline_status}
+                style={{ ['--c' as string]: STATUS[ev.pipeline_status as PipelineStatus]?.color }}
+                title="Where this event is in the pipeline"
+                aria-label="Pipeline stage"
+                onChange={(e) => api(`/api/events/${id}/pipeline`, { method: 'PATCH', body: { status: e.target.value } }).then(() => { setNote(`Moved to ${STATUS[e.target.value as PipelineStatus].label}.`); load(); }).catch((x) => setError(x.message))}
+              >
+                {STATUS_ORDER.map((s) => <option key={s} value={s}>{STATUS[s].label}</option>)}
+              </select>
+            )}
+            {ev.priority && (
+              <select
+                className={`pm-stage prio ${PRIORITY[ev.priority as Priority]?.tone}`}
+                value={ev.priority}
+                aria-label="Priority"
+                onChange={(e) => api(`/api/events/${id}/pipeline`, { method: 'PATCH', body: { priority: e.target.value } }).then(load).catch((x) => setError(x.message))}
+              >
+                {(['low', 'medium', 'high'] as Priority[]).map((p) => <option key={p} value={p}>{PRIORITY[p].label} priority</option>)}
+              </select>
+            )}
+            <Link href="/pipeline" className="chip" style={{ textDecoration: 'none' }}>View pipeline</Link>
             <button type="button" className="chip" style={{ border: 0, cursor: 'pointer' }} onClick={() => setSettings('clock')}>
               {ev.clock_mode === 'coordinator' ? 'Coordinator clocks crew in' : 'Crew clock themselves in'}
               {ev.geofence_m ? ` · within ${ev.geofence_m} m` : ''}

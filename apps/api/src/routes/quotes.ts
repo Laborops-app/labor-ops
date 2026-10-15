@@ -3,6 +3,7 @@ import type { PoolClient } from 'pg';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
+import { onQuote } from '../pipeline';
 import { guard } from '../auth';
 import { config } from '../config';
 import { canAdjustRates } from '../rates';
@@ -195,6 +196,7 @@ export async function quoteRoutes(app: FastifyInstance) {
         [req.user.tid, num, customerId, b.eventId ?? null, title, b.validUntil ?? null, b.intro ?? null, b.terms ?? null, b.taxPct ?? 0, allowed ? b.discount ?? 0 : 0, req.user.sub])).rows[0];
       await writeLines(c, req.user.tid, q.id, lines);
       await audit(c, req.user.tid, req.user.sub, 'quote.create', 'quote', q.id, { number: num });
+      await onQuote(c, req.user.tid, b.eventId ?? null, 'draft', req.user.sub);
       return { code: 201, ...(await load(c, q.id)) };
     });
     const { code, ...rest } = out as { code: number; [k: string]: unknown };
@@ -242,6 +244,7 @@ export async function quoteRoutes(app: FastifyInstance) {
          has('intro') ? b.intro || null : cur.intro, has('terms') ? b.terms || null : cur.terms, b.taxPct ?? cur.tax_pct, b.discount ?? cur.discount, reopen, has('layoutId') ? b.layoutId : cur.layout_id]);
       if (b.lines) await writeLines(c, req.user.tid, id, b.lines);
       await audit(c, req.user.tid, req.user.sub, 'quote.update', 'quote', id, { reopen });
+      if (has('eventId') && b.eventId && b.eventId !== cur.event_id) await onQuote(c, req.user.tid, b.eventId, 'draft', req.user.sub);
       return { code: 200, ...(await load(c, id)) };
     });
     const { code, ...rest } = out as { code: number; [k: string]: unknown };
@@ -305,6 +308,7 @@ export async function quoteRoutes(app: FastifyInstance) {
         [req.user.tid, req.user.sub, to, subject, m.text, m.html]);
       await c.query("UPDATE quotes SET status='sent', sent_at=now(), sent_to=$2, responded_at=NULL, response_note=NULL, updated_at=now() WHERE id=$1", [id, to]);
       await audit(c, req.user.tid, req.user.sub, 'quote.send', 'quote', id, { to });
+      await onQuote(c, req.user.tid, (await c.query('SELECT event_id FROM quotes WHERE id = $1', [id])).rows[0]?.event_id ?? null, 'sent', req.user.sub);
       return { code: 200, sentTo: to, link: view };
     });
     const { code, ...rest } = out as { code: number; [k: string]: unknown };
@@ -461,6 +465,7 @@ export async function quoteRoutes(app: FastifyInstance) {
         body: `${q.title} was ${b.response} by the customer.${b.note ? ` They wrote: "${b.note}"` : ''}`, link: `/quotes/${q.id}`,
       });
       await audit(c, tok.tid, null, 'quote.respond', 'quote', q.id, { response: b.response });
+      await onQuote(c, tok.tid, (await c.query('SELECT event_id FROM quotes WHERE id = $1', [q.id])).rows[0]?.event_id ?? null, b.response, null);
       return { code: 200, status: b.response };
     });
     const { code, ...rest } = out as { code: number; [k: string]: unknown };

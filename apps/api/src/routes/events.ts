@@ -7,6 +7,7 @@ import { respondLinks } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
+import { STATUSES } from '../pipeline';
 import { flagText, reviewFlags } from '../reviews';
 import { guard } from '../auth';
 import { evaluateShift } from '../eligibility';
@@ -23,6 +24,9 @@ const eventBody = z.object({
   notes: z.string().max(5000).optional().nullable(),
   rentmanProjectId: z.number().int().optional().nullable(),
   customerId: z.string().uuid().optional().nullable(),
+  // Pipeline column and priority for a new event (the board's "+" buttons); changed later with PATCH /api/events/:id/pipeline.
+  status: z.enum(STATUSES).optional(),
+  priority: z.enum(['low', 'medium', 'high']).optional(),
 });
 const shiftBody = z.object({
   roleName: z.string().trim().min(1).max(100),
@@ -231,9 +235,9 @@ export async function eventRoutes(app: FastifyInstance) {
       b.venue = b.venue || rmp?.loc_name || undefined;
       b.address = b.address || rmp?.loc_address || undefined;
       const r = await c.query(
-        `INSERT INTO events (tenant_id, name, client, venue, address, start_date, end_date, notes, created_by, rentman_project_id, customer_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-        [req.user.tid, b.name, clientName || null, b.venue || null, b.address || null, b.startDate, b.endDate, b.notes ?? null, req.user.sub, rentmanId, custId],
+        `INSERT INTO events (tenant_id, name, client, venue, address, start_date, end_date, notes, created_by, rentman_project_id, customer_id, pipeline_status, priority, board_position)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, (SELECT COALESCE(min(board_position), 1) - 1 FROM events WHERE pipeline_status = $12)) RETURNING *`,
+        [req.user.tid, b.name, clientName || null, b.venue || null, b.address || null, b.startDate, b.endDate, b.notes ?? null, req.user.sub, rentmanId, custId, b.status ?? 'pending', b.priority ?? 'medium'],
       );
       if (rentmanId) {
         // Pull the equipment list now (best effort; the project must already be synced).
