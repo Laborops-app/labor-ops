@@ -7,18 +7,17 @@ import Modal from '@/components/Modal';
 import TopbarAction, { PlusIcon, EditIcon, SearchIcon, avClass, initialsOf } from '@/components/TopbarAction';
 import { Banner, Empty } from '@/components/ui';
 import { api, fmtDate } from '@/lib/api';
-import { STAGES, cityOf, stageLabel, type Stage } from '@/lib/crm';
-import { ChevronUpIcon, KanbanIcon, ListIcon, PinIcon, PlusLineIcon } from '@/components/crm/icons';
+import { cityOf } from '@/lib/crm';
+import { GridIcon, ListIcon, PinIcon } from '@/components/crm/icons';
 
 type Cust = {
-  id: string; name: string; stage: Stage; board_position: number; parent_id?: string | null; parent_name?: string | null; division_count?: number;
+  id: string; name: string; parent_id?: string | null; parent_name?: string | null; division_count?: number;
   contact_name: string | null; email: string | null; phone: string | null; address: string | null; event_count: number; quote_count: number; last_event: string | null; created_at: string;
 };
-type Sort = 'board' | 'name' | 'created' | 'recent' | 'events';
-type View = 'kanban' | 'list';
+type Sort = 'name' | 'created' | 'recent' | 'events';
+type View = 'grid' | 'list';
 const PAGE = 25;
 const VIEW_KEY = 'lo_customers_view';
-const FOLD_KEY = 'lo_customers_folded';
 
 const store = {
   get: (k: string) => { try { return localStorage.getItem(k); } catch { return null; } },
@@ -29,49 +28,32 @@ function Body() {
   const router = useRouter();
   const [list, setList] = useState<Cust[] | null>(null);
   const [q, setQ] = useState('');
-  const [view, setView] = useState<View>('kanban');
-  const [sort, setSort] = useState<Sort>('board');
-  const [folded, setFolded] = useState<Stage[]>([]);
+  const [view, setView] = useState<View>('grid');
+  const [sort, setSort] = useState<Sort>('name');
   const [shown, setShown] = useState(PAGE);
-  const [adding, setAdding] = useState<Stage | null>(null);
+  const [adding, setAdding] = useState(false);
   const [f, setF] = useState({ name: '', contactName: '', email: '', phone: '' });
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
-  const [drag, setDrag] = useState<string | null>(null);
-  const [over, setOver] = useState<{ col: Stage; index: number } | null>(null);
 
   const load = () => api<{ customers: Cust[] }>('/api/customers').then((r) => setList(r.customers)).catch((e) => setError(e.message));
   useEffect(() => {
     load();
     const v = store.get(VIEW_KEY);
-    if (v === 'list' || v === 'kanban') {
-      setView(v);
-      if (v === 'list') setSort('name');
-    }
-    try {
-      setFolded(JSON.parse(store.get(FOLD_KEY) ?? '[]'));
-    } catch {
-      /* ignore */
-    }
+    if (v === 'list' || v === 'grid') setView(v);
   }, []);
   const pickView = (v: View) => {
     setView(v);
     store.set(VIEW_KEY, v);
-    if (v === 'list' && sort === 'board') setSort('name');
-  };
-  const fold = (s: Stage) => {
-    const next = folded.includes(s) ? folded.filter((x) => x !== s) : [...folded, s];
-    setFolded(next);
-    store.set(FOLD_KEY, JSON.stringify(next));
   };
 
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     try {
-      const r = await api<{ customer: { id: string } }>('/api/customers', { body: { name: f.name, contactName: f.contactName || null, email: f.email || null, phone: f.phone || null, stage: adding ?? 'lead' } });
+      const r = await api<{ customer: { id: string } }>('/api/customers', { body: { name: f.name, contactName: f.contactName || null, email: f.email || null, phone: f.phone || null } });
       setF({ name: '', contactName: '', email: '', phone: '' });
-      setAdding(null);
+      setAdding(false);
       router.push(`/customers/${r.customer.id}`);
     } catch (x) {
       setError((x as Error).message);
@@ -94,8 +76,7 @@ function Body() {
       (list ?? [])
         .filter((c) => !needle || `${c.name} ${c.contact_name ?? ''} ${c.email ?? ''} ${c.phone ?? ''} ${c.address ?? ''}`.toLowerCase().includes(needle))
         .sort((a, b) =>
-          sort === 'board' ? a.board_position - b.board_position || a.name.localeCompare(b.name)
-          : sort === 'created' ? +new Date(b.created_at) - +new Date(a.created_at)
+          sort === 'created' ? +new Date(b.created_at) - +new Date(a.created_at)
           : sort === 'recent' ? String(b.last_event ?? '').localeCompare(String(a.last_event ?? ''))
           : sort === 'events' ? b.event_count - a.event_count
           : a.name.localeCompare(b.name),
@@ -103,58 +84,8 @@ function Body() {
     [list, needle, sort],
   );
 
-  // Moving a card: change its stage, and (in board order) put it where it was dropped.
-  const move = async (c: Cust, to: Stage, index: number) => {
-    const target = rows.filter((x) => x.stage === to && x.id !== c.id);
-    let position: number | undefined;
-    if (sort === 'board') {
-      const prev = target[index - 1]?.board_position, next = target[index]?.board_position;
-      position = prev == null && next == null ? 0 : prev == null ? next! - 1 : next == null ? prev + 1 : (prev + next) / 2;
-    }
-    if (c.stage === to && position === undefined) return;
-    const before = list;
-    setList((l) => l && l.map((x) => (x.id === c.id ? { ...x, stage: to, board_position: position ?? x.board_position } : x)));
-    if (c.stage !== to) setNote(`Moved ${c.name} to ${stageLabel(to)}.`);
-    try {
-      await api(`/api/customers/${c.id}`, { method: 'PATCH', body: { stage: to, ...(position !== undefined ? { position } : {}) } });
-    } catch (x) {
-      setList(before);
-      setError((x as Error).message);
-    }
-  };
-  const onDragStart = (e: React.DragEvent, c: Cust) => {
-    setDrag(c.id);
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', c.id);
-  };
-  const onDragOver = (e: React.DragEvent, s: Stage) => {
-    if (!drag) return;
-    e.preventDefault();
-    const cards = (e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('.co-card:not(.dragging)');
-    let index = cards.length;
-    for (let i = 0; i < cards.length; i++) {
-      const r = cards[i].getBoundingClientRect();
-      if (e.clientY < r.top + r.height / 2) { index = i; break; }
-    }
-    if (!over || over.col !== s || over.index !== index) setOver({ col: s, index });
-  };
-  const onDrop = (e: React.DragEvent, s: Stage) => {
-    e.preventDefault();
-    const c = list?.find((x) => x.id === drag);
-    if (c && over) move(c, s, over.index);
-    setDrag(null);
-    setOver(null);
-  };
-
   const card = (c: Cust) => (
-    <Link
-      key={c.id}
-      href={`/customers/${c.id}`}
-      className={`co-card${drag === c.id ? ' dragging' : ''}`}
-      draggable
-      onDragStart={(e) => onDragStart(e, c)}
-      onDragEnd={() => { setDrag(null); setOver(null); }}
-    >
+    <Link key={c.id} href={`/customers/${c.id}`} className="co-card">
       <span className={`${avClass(c.name)} co-logo`} aria-hidden="true">{initialsOf(c.name)}</span>
       <b className="co-name">{c.name}</b>
       <span className="co-sub">{c.parent_name ? `Division of ${c.parent_name}` : c.contact_name ?? (c.division_count ? `${c.division_count} division${c.division_count === 1 ? '' : 's'}` : 'No contact yet')}</span>
@@ -171,7 +102,7 @@ function Body() {
   return (
     <>
       <TopbarAction>
-        <button className="btn primary" onClick={() => setAdding('lead')}>
+        <button className="btn primary" onClick={() => setAdding(true)}>
           Add New Customer
           <PlusIcon />
         </button>
@@ -180,7 +111,7 @@ function Body() {
         <h1>Customers</h1>
         <div className="co-views" role="tablist" aria-label="View">
           <button role="tab" aria-selected={view === 'list'} className={view === 'list' ? 'on' : ''} onClick={() => pickView('list')}><ListIcon /> List</button>
-          <button role="tab" aria-selected={view === 'kanban'} className={view === 'kanban' ? 'on' : ''} onClick={() => pickView('kanban')}><KanbanIcon /> Kanban</button>
+          <button role="tab" aria-selected={view === 'grid'} className={view === 'grid' ? 'on' : ''} onClick={() => pickView('grid')}><GridIcon /> Grid</button>
         </div>
         <span className="spacer" />
         <span className="pill-input">
@@ -189,7 +120,6 @@ function Body() {
         </span>
         <span className="pill-input">
           <select value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sort customers">
-            {view === 'kanban' && <option value="board">Sort by: Board order</option>}
             <option value="name">Sort by: Name</option>
             <option value="created">Sort by: Date added</option>
             <option value="recent">Sort by: Latest event</option>
@@ -205,43 +135,17 @@ function Body() {
         <div className="muted">Loading…</div>
       ) : list.length === 0 ? (
         <Empty>No customers yet. Add one, or import the client names already on your events.</Empty>
-      ) : view === 'kanban' ? (
-        <div className="co-board">
-          {STAGES.map((s) => {
-            const items = rows.filter((c) => c.stage === s.key);
-            const isFolded = folded.includes(s.key);
-            return (
-              <section
-                key={s.key}
-                className={`co-col${isFolded ? ' folded' : ''}${over?.col === s.key ? ' over' : ''}`}
-                aria-label={`${s.label}: ${items.length}`}
-                onDragOver={(e) => onDragOver(e, s.key)}
-                onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver((o) => (o?.col === s.key ? null : o)); }}
-                onDrop={(e) => onDrop(e, s.key)}
-              >
-                <header className="co-col-head">
-                  <button className="co-fold" onClick={() => fold(s.key)} aria-expanded={!isFolded} aria-label={`${isFolded ? 'Show' : 'Hide'} ${s.label}`}><ChevronUpIcon /></button>
-                  <span className={`co-stage ${s.key}`} title={s.hint}><i aria-hidden="true" />{s.label}</span>
-                  <span className="co-count">{items.length}</span>
-                  <span className="spacer" />
-                  <button className="co-add" onClick={() => setAdding(s.key)} aria-label={`Add a customer to ${s.label}`} title={`Add a customer to ${s.label}`}><PlusLineIcon size={22} /></button>
-                </header>
-                {!isFolded && (
-                  <div className="co-cards">
-                    {items.map((c, i) => (
-                      <div key={c.id} style={{ display: 'contents' }}>
-                        {over?.col === s.key && over.index === i && drag !== c.id && <div className="co-slot" aria-hidden="true" />}
-                        {card(c)}
-                      </div>
-                    ))}
-                    {over?.col === s.key && over.index >= items.filter((c) => c.id !== drag).length && <div className="co-slot" aria-hidden="true" />}
-                    {!items.length && over?.col !== s.key && <p className="co-empty">{needle ? 'No matches' : s.hint}</p>}
-                  </div>
-                )}
-              </section>
-            );
-          })}
-        </div>
+      ) : rows.length === 0 ? (
+        <Empty>No customers match that search.</Empty>
+      ) : view === 'grid' ? (
+        <>
+          <div className="co-grid">{rows.slice(0, shown).map(card)}</div>
+          {rows.length > shown && (
+            <div className="load-more">
+              <button className="btn" onClick={() => setShown(shown + PAGE)}>Load More</button>
+            </div>
+          )}
+        </>
       ) : rows.length === 0 ? (
         <Empty>No customers match that search.</Empty>
       ) : (
@@ -251,7 +155,6 @@ function Body() {
               <tr>
                 <th className="av-col" aria-label="Avatar" />
                 <th>Name</th>
-                <th>Stage</th>
                 <th>Main contact</th>
                 <th className="hide-sm">Email</th>
                 <th className="hide-sm">Phone</th>
@@ -270,7 +173,6 @@ function Body() {
                     {!!c.division_count && <span className="sub">{c.division_count} division{c.division_count === 1 ? '' : 's'}</span>}
                     {c.last_event && <span className="sub">Last event {fmtDate(String(c.last_event).slice(0, 10))}</span>}
                   </td>
-                  <td><span className={`co-stage ${c.stage}`}><i aria-hidden="true" />{stageLabel(c.stage)}</span></td>
                   <td>{c.contact_name ?? <span className="muted">—</span>}</td>
                   <td className="hide-sm">{c.email ?? <span className="muted">—</span>}</td>
                   <td className="hide-sm">{c.phone ?? <span className="muted">—</span>}</td>
@@ -297,7 +199,7 @@ function Body() {
       )}
 
       {adding && (
-        <Modal title="Add New Customer" onClose={() => setAdding(null)}>
+        <Modal title="Add New Customer" onClose={() => setAdding(false)}>
           <form onSubmit={add}>
             <label>
               Company or customer name
@@ -313,20 +215,12 @@ function Body() {
                 <input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} maxLength={50} />
               </label>
             </div>
-            <div className="two">
-              <label>
-                Email
-                <input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} maxLength={200} />
-              </label>
-              <label>
-                Stage
-                <select value={adding} onChange={(e) => setAdding(e.target.value as Stage)}>
-                  {STAGES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
-                </select>
-              </label>
-            </div>
+            <label>
+              Email
+              <input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} maxLength={200} />
+            </label>
             <div className="acts">
-              <button type="button" className="btn" onClick={() => setAdding(null)}>Cancel</button>
+              <button type="button" className="btn" onClick={() => setAdding(false)}>Cancel</button>
               <button className="btn primary">Save Customer</button>
             </div>
           </form>

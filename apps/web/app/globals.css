@@ -1521,6 +1521,8 @@ a.cs-co:hover b { color: var(--primary); }
 .co-views button { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); font: inherit; font-size: 15px; font-weight: 500; cursor: pointer; }
 .co-views button.on { color: var(--text); border-bottom-color: var(--text); }
 .co-views button:hover:not(.on) { color: var(--text); }
+.co-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 20px; }
+.co-grid .co-card { cursor: pointer; }
 .co-board { display: flex; gap: 24px; align-items: flex-start; overflow-x: auto; padding-bottom: 12px; scroll-snap-type: x proximity; }
 .co-col { flex: 0 0 340px; display: flex; flex-direction: column; gap: 16px; padding: 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); scroll-snap-align: start; transition: box-shadow 0.12s; }
 .co-col.folded { flex-basis: 260px; }

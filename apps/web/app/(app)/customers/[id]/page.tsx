@@ -9,9 +9,8 @@ import CopyEvent from '@/components/CopyEvent';
 import TopbarAction, { PlusIcon, TrashIcon, avClass, initialsOf } from '@/components/TopbarAction';
 import { api, fmtDate, money } from '@/lib/api';
 import { ContactDetails, ContactGrid, type Contact } from '@/components/crm/ContactCards';
-import { STAGES, type Stage } from '@/lib/crm';
 
-type Cust = { id: string; name: string; stage: Stage; notes: string | null; rentman_contact_id: number | null; parent_id?: string | null; parent_name?: string | null };
+type Cust = { id: string; name: string; notes: string | null; rentman_contact_id: number | null; parent_id?: string | null; parent_name?: string | null };
 type Loc = { id: string; label: string; venue: string | null; address: string | null; notes: string | null; is_default: boolean };
 type Ev = { id: string; name: string; venue: string | null; start_date: string; end_date: string; shift_count: number; slots: number };
 type Qt = { id: string; number: number; title: string; status: string; total: number; created_at: string };
@@ -101,12 +100,6 @@ function Body() {
           <label>
             Customer name
             <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required maxLength={150} />
-          </label>
-          <label>
-            Stage
-            <select value={c.stage} onChange={(e) => run(api(`/api/customers/${id}`, { method: 'PATCH', body: { stage: e.target.value } }), `Moved to ${STAGES.find((x) => x.key === e.target.value)?.label}.`)}>
-              {STAGES.map((st) => <option key={st.key} value={st.key}>{st.label} · {st.hint}</option>)}
-            </select>
           </label>
           <label>
             Notes

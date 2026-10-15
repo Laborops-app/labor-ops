@@ -21,3 +21,4 @@ export const ListIcon = (p: { size?: number }) => <I {...p}><rect x="3.5" y="5" 
 export const KanbanIcon = (p: { size?: number }) => <I {...p}><rect x="4" y="4" width="5" height="16" rx="1" /><rect x="15" y="4" width="5" height="10" rx="1" /></I>;
 export const CloseIcon = (p: { size?: number }) => <I {...p}><path d="M6 6l12 12M18 6 6 18" /></I>;
 export const SortIcon = (p: { size?: number }) => <I {...p}><path d="M4 7h16M7 12h10M10 17h4" /></I>;
+export const GridIcon = (p: { size?: number }) => <I {...p}><rect x="4" y="4" width="7" height="7" rx="1" /><rect x="13" y="4" width="7" height="7" rx="1" /><rect x="4" y="13" width="7" height="7" rx="1" /><rect x="13" y="13" width="7" height="7" rx="1" /></I>;
