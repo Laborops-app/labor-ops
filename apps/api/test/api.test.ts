@@ -1447,8 +1447,14 @@ test('accounting: event billing (time + schedule, per-job OT, day rates), QuickB
     if (url.includes('/invoice?')) return ok({ Invoice: { Id: '130', DocNumber: '1037', TotalAmt: 1025 } });
     if (url.includes('/timeactivity?')) {
       const b = JSON.parse(init.body);
+      const row = { TxnDate: b.TxnDate, Hours: b.Hours, Minutes: b.Minutes, Description: b.Description, CostRate: b.CostRate, EmployeeRef: b.EmployeeRef };
+      if (b.Id) {
+        const t = tas.find((x) => x.Id === b.Id);
+        Object.assign(t, row, { SyncToken: String(Number(t.SyncToken) + 1) });
+        return ok({ TimeActivity: { Id: b.Id } });
+      }
       const Id = String(taSeq++);
-      tas.push({ Id, SyncToken: '0', TxnDate: b.TxnDate, Hours: b.Hours, Minutes: b.Minutes, Description: b.Description, EmployeeRef: b.EmployeeRef });
+      tas.push({ Id, SyncToken: '0', ...row });
       return ok({ TimeActivity: { Id } });
     }
     if (url.includes('/employee?')) return ok({ Employee: { Id: '77', DisplayName: JSON.parse(init.body).DisplayName } });
@@ -1561,8 +1567,20 @@ test('accounting: event billing (time + schedule, per-job OT, day rates), QuickB
     const relink = await call(a, 'POST', '/api/payroll/quickbooks', { from: '2030-03-04', to: '2030-03-10', includeExported: true });
     assert.equal(relink.json.activities, 0);
     assert.equal(relink.json.alreadyInQbo, inQbo);
-    // Overtime split is written in the note
-    assert.ok(tas.some((t) => / \(\d+(\.\d+)? h: [\d.]+ reg \+ [\d.]+ OT/.test(t.Description)), JSON.stringify(tas.map((t) => t.Description)));
+    // The hourly rate goes along as the cost rate, and the note shows it with the overtime split
+    assert.ok(tas.every((t) => t.CostRate > 0), JSON.stringify(tas));
+    assert.ok(tas.some((t) => / \(\d+(\.\d+)? h @ \$[\d.]+\/h: [\d.]+ reg \+ [\d.]+ OT/.test(t.Description)), JSON.stringify(tas.map((t) => t.Description)));
+    // Entries sent before rates were included are brought up to date on the next send, not copied
+    for (const t of tas) {
+      delete t.CostRate;
+      t.Description = t.Description.replace(/ @ \$[\d.]+\/h/, '');
+    }
+    const upd = await call(a, 'POST', '/api/payroll/quickbooks', { from: '2030-03-04', to: '2030-03-10' });
+    assert.equal(upd.json.activities, 0);
+    assert.equal(upd.json.updated, inQbo);
+    assert.equal(tas.length, inQbo);
+    assert.ok(tas.every((t) => t.CostRate > 0 && / @ \$/.test(t.Description)));
+    assert.equal((await call(a, 'POST', '/api/payroll/quickbooks', { from: '2030-03-04', to: '2030-03-10' })).json.updated, 0);
     // Clean up copies made by an earlier double send
     tas.push({ ...tas[0], Id: '999' }, { ...tas[1], Id: '998' });
     const dd = await call(a, 'POST', '/api/payroll/quickbooks/dedupe', { from: '2030-03-04', to: '2030-03-10' });

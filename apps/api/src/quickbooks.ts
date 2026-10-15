@@ -195,12 +195,13 @@ export class Qbo {
 
   /** Time entries in QuickBooks between two dates (inclusive), for matching and cleaning up what LaborOps sent. */
   async timeActivities(from: string, to: string) {
-    const rows = await this.query<{ Id: string; SyncToken: string; TxnDate: string; Hours?: number; Minutes?: number; Description?: string; EmployeeRef?: { value: string } }>(
+    const rows = await this.query<{ Id: string; SyncToken: string; TxnDate: string; Hours?: number; Minutes?: number; Description?: string; CostRate?: number; EmployeeRef?: { value: string } }>(
       'TimeActivity', `TxnDate >= '${from}' AND TxnDate <= '${to}'`,
     );
     return rows.map((a) => ({
       id: String(a.Id), syncToken: String(a.SyncToken), date: a.TxnDate, employeeId: a.EmployeeRef?.value ? String(a.EmployeeRef.value) : null,
       hours: Math.round(((a.Hours ?? 0) + (a.Minutes ?? 0) / 60) * 100) / 100, description: a.Description ?? '',
+      costRate: Number(a.CostRate) > 0 ? Number(a.CostRate) : null,
     }));
   }
 
@@ -208,10 +209,14 @@ export class Qbo {
     await this.call('POST', 'timeactivity?operation=delete', { Id: id, SyncToken: syncToken });
   }
 
-  async createTimeActivity(t: { employeeId: string; date: string; hours: number; description: string; customerId?: string | null; itemId?: string | null }) {
+  /**
+   * A worked entry as a QuickBooks time activity. `costRate` is the person's hourly pay for it (a day rate is
+   * divided by the hours worked); QuickBooks shows it as the entry's cost rate.
+   */
+  private timeActivityBody(t: TimeActivityIn) {
     const whole = Math.floor(t.hours);
     const minutes = Math.round((t.hours - whole) * 60);
-    const j = await this.call('POST', 'timeactivity', {
+    return {
       NameOf: 'Employee',
       EmployeeRef: { value: t.employeeId },
       TxnDate: t.date,
@@ -220,11 +225,23 @@ export class Qbo {
       Description: t.description.slice(0, 4000),
       ...(t.customerId ? { CustomerRef: { value: t.customerId } } : {}),
       ...(t.itemId ? { ItemRef: { value: t.itemId } } : {}),
+      ...(t.costRate ? { CostRate: Math.round(t.costRate * 100) / 100 } : {}),
       BillableStatus: 'NotBillable',
-    });
+    };
+  }
+
+  async createTimeActivity(t: TimeActivityIn) {
+    const j = await this.call('POST', 'timeactivity', this.timeActivityBody(t));
     return String(j.TimeActivity.Id);
   }
+
+  /** Rewrite a time activity LaborOps sent earlier (full update: every field comes from LaborOps). */
+  async updateTimeActivity(id: string, syncToken: string, t: TimeActivityIn) {
+    await this.call('POST', 'timeactivity', { Id: id, SyncToken: syncToken, ...this.timeActivityBody(t) });
+  }
 }
+
+type TimeActivityIn = { employeeId: string; date: string; hours: number; description: string; costRate?: number | null; customerId?: string | null; itemId?: string | null };
 
 /** A ready QuickBooks session for this company, or an error explaining what is missing. */
 export async function qboSession(c: PoolClient, tid: string): Promise<Qbo> {

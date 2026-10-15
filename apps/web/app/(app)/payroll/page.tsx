@@ -5,7 +5,7 @@ import { Banner, Empty } from '@/components/ui';
 import { api, money } from '@/lib/api';
 
 type Provider = 'adp' | 'gusto' | 'quickbooks';
-type Entry = { id: string; date: string; event: string; role: string; hours: number; reg: number; ot: number; dt: number; pay: number | null; day: boolean; exported: boolean };
+type Entry = { id: string; date: string; event: string; role: string; hours: number; reg: number; ot: number; dt: number; pay: number | null; rate: number | null; day: boolean; exported: boolean };
 type Person = { userId: string; name: string; email: string; payrollIds: Record<string, string>; regular: number; overtime: number; double: number; hours: number; days: number; dayPay: number; gross: number | null; entries: Entry[] };
 type Data = {
   from: string; to: string; people: Person[]; warnings: string[]; totals: { people: number; hours: number; gross: number };
@@ -112,7 +112,7 @@ function Body() {
                         setBusy(true);
                         setError('');
                         try {
-                          type R = { people: number; activities: number; alreadyExported: number; alreadyInQbo: number; skipped: string[]; created: string[]; linked: string[] };
+                          type R = { people: number; activities: number; updated: number; alreadyExported: number; alreadyInQbo: number; skipped: string[]; created: string[]; linked: string[] };
                           let r = await api<R>('/api/payroll/quickbooks', { body: period });
                           const people = [
                             r.created.length ? ` Added as new QuickBooks employees: ${r.created.join(', ')} (finish their pay and tax setup in QuickBooks Payroll before paying them).` : '',
@@ -127,8 +127,9 @@ function Body() {
                             }
                             r = await api<R>('/api/payroll/quickbooks', { body: { ...period, includeExported: true } });
                           }
+                          const upd = r.updated ? ` Updated ${r.updated} entr${r.updated === 1 ? 'y' : 'ies'} already in QuickBooks with the hourly rate and current hours.` : '';
                           if (!r.activities && !r.alreadyExported && r.alreadyInQbo) {
-                            setOk(`Nothing new to send: all ${r.alreadyInQbo} entries in this period are already in QuickBooks.${people}`);
+                            setOk(`Nothing new to send: all ${r.alreadyInQbo} entries in this period are already in QuickBooks.${upd}${people}`);
                             await load();
                             return;
                           }
@@ -136,8 +137,9 @@ function Body() {
                             `Sent ${r.activities} time entr${r.activities === 1 ? 'y' : 'ies'} for ${r.people} ${r.people === 1 ? 'person' : 'people'} to QuickBooks. Find them under Time (or Reports → Time Activities by Employee Detail).` +
                               people +
                               (r.alreadyInQbo ? ` ${r.alreadyInQbo} already in QuickBooks were not sent again.` : '') +
+                              upd +
                               (r.alreadyExported && r.activities ? ` ${r.alreadyExported} entries exported before were left out.` : '') +
-                              ' QuickBooks Payroll works out overtime from the week\'s hours; each entry\'s note shows the overtime LaborOps calculated.' +
+                              ' Each entry carries the hourly rate as its cost rate (day rates divided by the hours worked). QuickBooks Payroll works out overtime from the week\'s hours; each entry\'s note shows the rate and the overtime LaborOps calculated.' +
                               (r.skipped.length ? ` Not sent: ${r.skipped.join(', ')}.` : ''),
                           );
                           await load();
@@ -228,7 +230,8 @@ function Body() {
                                       <td>{e.date}</td>
                                       <td>{e.event}</td>
                                       <td>{e.role}</td>
-                                      <td>{e.day ? 'day rate' : `${e.hours.toFixed(2)} h${e.ot ? ` · ${e.ot} OT` : ''}${e.dt ? ` · ${e.dt} DT` : ''}`}</td>
+                                      <td>{e.day ? `day rate · ${e.hours.toFixed(2)} h` : `${e.hours.toFixed(2)} h${e.ot ? ` · ${e.ot} OT` : ''}${e.dt ? ` · ${e.dt} DT` : ''}`}</td>
+                                      <td className="muted">{e.rate ? `${money(e.rate)}/h` : ''}</td>
                                       <td>{e.pay === null ? '—' : money(e.pay)}</td>
                                       <td>{e.exported && <span className="chip warn">exported</span>}</td>
                                     </tr>

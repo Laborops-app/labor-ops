@@ -4,7 +4,9 @@ import { localDate, baseRole, type AcctSettings, type PayrollProvider } from './
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
-export type PayEntry = { id: string; date: string; event: string; eventId: string; role: string; hours: number; reg: number; ot: number; dt: number; premium: number; pay: number | null; day: boolean; exported: boolean };
+export type PayEntry = { id: string; date: string; event: string; eventId: string; role: string; hours: number; reg: number; ot: number; dt: number; premium: number; pay: number | null;
+  /** Base hourly rate; for a day-rate shift, the day rate divided by the hours worked. */
+  rate: number | null; day: boolean; exported: boolean };
 export type PayPerson = {
   userId: string; name: string; email: string; payrollIds: Record<string, string>;
   regular: number; overtime: number; double: number; hours: number; days: number; dayPay: number; gross: number | null; missingRate: boolean;
@@ -80,7 +82,7 @@ export async function payrollSummary(c: PoolClient, from: string, to: string) {
       if (!(amt > 0)) p.missingRate = true;
       p.days += 1;
       p.dayPay = r2(p.dayPay + amt);
-      p.entries.push({ id: r.id, date, event: r.event_name, eventId: r.event_id, role: r.role_name, hours, reg: 0, ot: 0, dt: 0, premium: 0, pay: amt || null, day: true, exported: !!r.payroll_exported_at });
+      p.entries.push({ id: r.id, date, event: r.event_name, eventId: r.event_id, role: r.role_name, hours, reg: 0, ot: 0, dt: 0, premium: 0, pay: amt || null, rate: amt > 0 && hours > 0 ? r2(amt / hours) : null, day: true, exported: !!r.payroll_exported_at });
       continue;
     }
     const stKey = r.event_id;
@@ -100,7 +102,7 @@ export async function payrollSummary(c: PoolClient, from: string, to: string) {
     p.overtime = r2(p.overtime + priced.otHours);
     p.double = r2(p.double + priced.dtHours);
     p.hours = r2(p.hours + priced.hours);
-    p.entries.push({ id: r.id, date, event: r.event_name, eventId: r.event_id, role: r.role_name, hours: priced.hours, reg, ot: priced.otHours, dt: priced.dtHours, premium: priced.premiumHours, pay, day: false, exported: !!r.payroll_exported_at });
+    p.entries.push({ id: r.id, date, event: r.event_name, eventId: r.event_id, role: r.role_name, hours: priced.hours, reg, ot: priced.otHours, dt: priced.dtHours, premium: priced.premiumHours, pay, rate: rate || null, day: false, exported: !!r.payroll_exported_at });
   }
   const list = [...people.values()].sort((a, b) => a.name.localeCompare(b.name));
   for (const p of list) p.gross = p.missingRate ? null : r2(p.entries.reduce((s, e) => s + (e.pay ?? 0), 0));

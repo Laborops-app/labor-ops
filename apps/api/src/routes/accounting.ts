@@ -301,12 +301,17 @@ export async function accountingRoutes(app: FastifyInstance) {
 
   // What a worked entry is called in QuickBooks. The hours split at the end is extra detail, not part of what identifies it.
   const qbBase = (e: { event: string; role: string; day: boolean }) => `${e.event} · ${baseRole(e.role)}${e.day ? ' · day rate' : ''}`;
-  const qbNote = (e: { event: string; role: string; day: boolean; hours: number; reg: number; ot: number; dt: number }) => {
+  // The detail in brackets at the end: hours, the hourly rate (a day rate divided by the hours) and the overtime split.
+  const qbNote = (e: { event: string; role: string; day: boolean; hours: number; reg: number; ot: number; dt: number; rate: number | null; pay: number | null }) => {
     const h = (n: number) => String(Math.round(n * 100) / 100);
-    const split = e.ot || e.dt ? ` (${h(e.hours)} h: ${h(e.reg)} reg + ${h(e.ot)} OT${e.dt ? ` + ${h(e.dt)} DT` : ''})` : '';
-    return qbBase(e) + split;
+    const $ = (n: number) => `$${(Math.round(n * 100) / 100).toFixed(2).replace(/\.00$/, '')}`;
+    const at = e.rate ? ` @ ${$(e.rate)}/h` : '';
+    const detail = e.day
+      ? `${h(e.hours)} h${at}${e.pay ? ` = ${$(e.pay)} day rate` : ''}`
+      : `${h(e.hours)} h${at}${e.ot || e.dt ? `: ${h(e.reg)} reg + ${h(e.ot)} OT${e.dt ? ` + ${h(e.dt)} DT` : ''}` : ''}`;
+    return `${qbBase(e)} (${detail})`;
   };
-  const qbKey = (emp: string | null, date: string, hours: number, desc: string) => `${emp}|${date}|${hours.toFixed(2)}|${desc.replace(/ \([\d.]+ h: [^)]*\)$/, '')}`;
+  const qbKey = (emp: string | null, date: string, hours: number, desc: string) => `${emp}|${date}|${hours.toFixed(2)}|${desc.replace(/ \([\d.]+ h\b[^)]*\)$/, '')}`;
 
   // QuickBooks Payroll: send each worked entry as a time activity on the employee. QuickBooks Payroll works out
   // overtime itself from the week's hours; the split LaborOps calculated is written in the note.
@@ -328,10 +333,13 @@ export async function accountingRoutes(app: FastifyInstance) {
         let activities = 0;
         let alreadyExported = 0;
         let alreadyInQbo = 0;
+        let updated = 0;
         const peopleSent = new Set<string>();
         // What is already in QuickBooks for this period: an identical entry is linked, not sent again.
         const inQbo = new Map<string, string[]>();
+        const qbById = new Map<string, Awaited<ReturnType<typeof qb.timeActivities>>[number]>();
         for (const a of await qb.timeActivities(p.from, p.to)) {
+          qbById.set(a.id, a);
           const k = qbKey(a.employeeId, a.date, a.hours, a.description);
           inQbo.set(k, [...(inQbo.get(k) ?? []), a.id]);
         }
@@ -364,7 +372,18 @@ export async function accountingRoutes(app: FastifyInstance) {
             person.payrollIds.quickbooks = empId;
           }
           for (const e of person.entries) {
-            if (sentIds.get(e.id)) {
+            const want = { employeeId: empId, date: e.date, hours: e.hours, description: qbNote(e), costRate: e.rate };
+            // Already in QuickBooks: bring its hours, rate and note up to date (for example entries sent before rates were included).
+            const refresh = async (taId: string) => {
+              const cur = qbById.get(taId);
+              if (!cur) return;
+              if (cur.description === want.description && cur.costRate === (e.rate ? Math.round(e.rate * 100) / 100 : null) && cur.hours === Math.round(e.hours * 100) / 100 && cur.employeeId === empId) return;
+              await qb.updateTimeActivity(cur.id, cur.syncToken, want);
+              updated++;
+            };
+            const saved = sentIds.get(e.id);
+            if (saved) {
+              await refresh(saved);
               alreadyInQbo++;
               continue;
             }
@@ -373,6 +392,7 @@ export async function accountingRoutes(app: FastifyInstance) {
               // Sent before this was tracked: remember it instead of sending a copy.
               used.add(twin);
               await c.query('UPDATE time_entries SET qbo_time_activity_id = $2 WHERE id = $1', [e.id, twin]);
+              await refresh(twin);
               alreadyInQbo++;
               continue;
             }
@@ -380,7 +400,7 @@ export async function accountingRoutes(app: FastifyInstance) {
               alreadyExported++;
               continue;
             }
-            const taId = await qb.createTimeActivity({ employeeId: empId, date: e.date, hours: e.hours, description: qbNote(e) });
+            const taId = await qb.createTimeActivity(want);
             await c.query('UPDATE time_entries SET qbo_time_activity_id = $2 WHERE id = $1', [e.id, taId]);
             activities++;
             peopleSent.add(person.userId);
@@ -389,7 +409,7 @@ export async function accountingRoutes(app: FastifyInstance) {
         }
         if (sent.length) await markExported(c, req.user.tid, req.user.sub, 'quickbooks', p, sent);
         if (created.length || linked.length) await audit(c, req.user.tid, req.user.sub, 'payroll.quickbooks_employees', 'tenant', req.user.tid, { created, linked });
-        return { code: 200, people: peopleSent.size, activities, alreadyExported, alreadyInQbo, skipped, created, linked };
+        return { code: 200, people: peopleSent.size, activities, updated, alreadyExported, alreadyInQbo, skipped, created, linked };
       });
       const { code, ...body } = out as any;
       return reply.code(code).send(body);
