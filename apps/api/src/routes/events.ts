@@ -390,14 +390,38 @@ export async function eventRoutes(app: FastifyInstance) {
   // Edit the event's details. While phases exist the overall dates follow them.
   app.patch('/api/events/:id', { preHandler: mgr }, async (req, reply) => {
     const { id: eventId } = id.parse(req.params);
-    const b = eventBody.partial().parse(req.body);
+    // moveShifts: when the start date moves, the event's shifts move by the same number of days (default yes).
+    const b = eventBody.partial().extend({ moveShifts: z.boolean().optional() }).parse(req.body);
     const row = await withTenant(req.user.tid, async (c) => {
       const cur = (await c.query("SELECT *, to_char(start_date,'YYYY-MM-DD') AS sd, to_char(end_date,'YYYY-MM-DD') AS ed FROM events WHERE id = $1", [eventId])).rows[0];
       if (!cur) return null;
-      const hasPhases = !!(await c.query('SELECT 1 FROM event_phases WHERE event_id = $1', [eventId])).rowCount;
-      const startDate: string = hasPhases ? cur.sd : b.startDate ?? cur.sd;
-      const endDate: string = hasPhases ? cur.ed : b.endDate ?? cur.ed;
+      const phases = (await c.query("SELECT id, to_char(starts_on,'YYYY-MM-DD') AS s, to_char(ends_on,'YYYY-MM-DD') AS e FROM event_phases WHERE event_id = $1 ORDER BY ends_on, starts_on", [eventId])).rows as { id: string; s: string; e: string }[];
+      const startDate: string = b.startDate ?? cur.sd;
+      const endDate: string = b.endDate ?? cur.ed;
       if (endDate < startDate) return { error: 'End date is before the start date' };
+      const shiftDay = (d: string, n: number) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86400_000).toISOString().slice(0, 10);
+      const dayMove = Math.round((Date.parse(`${startDate}T12:00:00Z`) - Date.parse(`${cur.sd}T12:00:00Z`)) / 86400_000);
+      if (phases.length) {
+        const last = phases[phases.length - 1];
+        if (endDate !== shiftDay(cur.ed, dayMove) && endDate < shiftDay(last.s, dayMove))
+          return { error: `The event can't end before its last phase (${last.s === last.e ? 'on' : 'starting'} ${shiftDay(last.s, dayMove)}) starts. Change or remove that phase first.` };
+      }
+      // Moving the start moves the whole event: its phases always, its shifts unless told not to (times of day stay).
+      const days = Math.round((Date.parse(`${startDate}T12:00:00Z`) - Date.parse(`${cur.sd}T12:00:00Z`)) / 86400_000);
+      if (days) {
+        if (phases.length) await c.query('UPDATE event_phases SET starts_on = starts_on + $2::int, ends_on = ends_on + $2::int WHERE event_id = $1', [eventId, days]);
+        if (b.moveShifts !== false) {
+          const m = await c.query('UPDATE shifts SET starts_at = starts_at + make_interval(days => $2), ends_at = ends_at + make_interval(days => $2) WHERE event_id = $1 RETURNING id', [eventId, days]);
+          for (const x of m.rows) await tellTimeChange(c, req.user.tid, x.id);
+        }
+      }
+      // A new end date stretches (or shortens) the last phase.
+      if (phases.length) {
+        const last = phases[phases.length - 1];
+        const lastStart = new Date(Date.parse(`${last.s}T12:00:00Z`) + days * 86400_000).toISOString().slice(0, 10);
+        const movedEnd = new Date(Date.parse(`${cur.ed}T12:00:00Z`) + days * 86400_000).toISOString().slice(0, 10);
+        if (endDate !== movedEnd) await c.query('UPDATE event_phases SET ends_on = $2 WHERE id = $1', [last.id, endDate]);
+      }
       const pick = <T>(v: T | undefined, old: T) => (v === undefined ? old : v);
       const cust = b.customerId === undefined ? undefined : b.customerId ? (await c.query('SELECT id, name FROM customers WHERE id = $1', [b.customerId])).rows[0] ?? null : null;
       if (b.customerId && !cust) return { error: 'Customer not found' };
@@ -405,8 +429,9 @@ export async function eventRoutes(app: FastifyInstance) {
         `UPDATE events SET name = $2, client = $3, venue = $4, address = $5, start_date = $6, end_date = $7, notes = $8, customer_id = $9 WHERE id = $1 RETURNING *`,
         [eventId, b.name ?? cur.name, (cust ? cust.name : pick(b.client, cur.client)) || null, pick(b.venue, cur.venue) || null, pick(b.address, cur.address) || null, startDate, endDate, pick(b.notes, cur.notes), cust === undefined ? cur.customer_id : cust?.id ?? null],
       );
-      await audit(c, req.user.tid, req.user.sub, 'event.update', 'event', eventId, b);
-      return r.rows[0];
+      if (phases.length) await syncRange(c, eventId);
+      await audit(c, req.user.tid, req.user.sub, 'event.update', 'event', eventId, { ...b, movedDays: days || undefined });
+      return (await c.query('SELECT * FROM events WHERE id = $1', [eventId])).rows[0] ?? r.rows[0];
     });
     if (!row) return reply.code(404).send({ error: 'Event not found' });
     if ((row as any).error) return reply.code(400).send(row);

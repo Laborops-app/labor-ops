@@ -13,17 +13,19 @@ const d10 = (s: string) => s.slice(0, 10);
 const range = (a: string, b: string) => (d10(a) === d10(b) ? fmtDate(d10(a)) : `${fmtDate(d10(a))} – ${fmtDate(d10(b))}`);
 
 /** Event name, client, venue and address, with an edit form. */
-export function EventDetails({ ev, hasPhases, onSaved, onError }: { ev: EventFull; hasPhases: boolean; onSaved: () => void; onError: (m: string) => void }) {
+export function EventDetails({ ev, hasPhases, shiftCount = 0, onSaved, onError }: { ev: EventFull; hasPhases: boolean; shiftCount?: number; onSaved: () => void; onError: (m: string) => void }) {
+  const [moveShifts, setMoveShifts] = useState(true);
   const [editing, setEditing] = useState(false);
   const [f, setF] = useState<{ name: string; client: string; venue: string; address: string; notes: string; startDate: string; endDate: string; customerId: string | null }>({ name: '', client: '', venue: '', address: '', notes: '', startDate: '', endDate: '', customerId: null });
   const open = () => {
     setF({ name: ev.name, client: ev.client ?? '', venue: ev.venue ?? '', address: ev.address ?? '', notes: ev.notes ?? '', startDate: d10(ev.start_date), endDate: d10(ev.end_date), customerId: ev.customer_id ?? null });
+    setMoveShifts(true);
     setEditing(true);
   };
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await api(`/api/events/${ev.id}`, { method: 'PATCH', body: { ...f, ...(hasPhases ? { startDate: undefined, endDate: undefined } : {}) } });
+      await api(`/api/events/${ev.id}`, { method: 'PATCH', body: { ...f, moveShifts } });
       setEditing(false);
       onSaved();
     } catch (err) {
@@ -106,18 +108,38 @@ export function EventDetails({ ev, hasPhases, onSaved, onError }: { ev: EventFul
         </label>
         <label>
           Starts
-          <input type="date" value={f.startDate} disabled={hasPhases} onChange={(e) => setF({ ...f, startDate: e.target.value })} required />
+          <input
+            type="date"
+            value={f.startDate}
+            onChange={(e) => {
+              // Moving the start keeps the event's length: the end moves with it.
+              const v = e.target.value;
+              const len = Date.parse(f.endDate) - Date.parse(f.startDate);
+              const end = v && len >= 0 && !isNaN(len) ? new Date(Date.parse(v) + len).toISOString().slice(0, 10) : f.endDate;
+              setF({ ...f, startDate: v, endDate: end < v ? v : end });
+            }}
+            required
+          />
         </label>
         <label>
           Ends
-          <input type="date" value={f.endDate} min={f.startDate} disabled={hasPhases} onChange={(e) => setF({ ...f, endDate: e.target.value })} required />
+          <input type="date" value={f.endDate} min={f.startDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} required />
         </label>
         <label style={{ gridColumn: '1 / -1' }}>
           Notes
           <textarea value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} rows={3} maxLength={5000} />
         </label>
       </div>
-      {hasPhases && <p className="muted small">The overall dates follow the dated phases below, so change them there.</p>}
+      {f.startDate !== d10(ev.start_date) && (shiftCount > 0 || hasPhases) && (
+        <label className="check" style={{ marginTop: 8 }}>
+          <input type="checkbox" checked={moveShifts} onChange={(e) => setMoveShifts(e.target.checked)} />
+          <span>
+            Move the {shiftCount > 0 ? `${shiftCount} shift${shiftCount === 1 ? '' : 's'}` : 'shifts'} with the event (same times, crew are told)
+            {hasPhases && <span className="muted small" style={{ display: 'block' }}>Phases always move with the event.</span>}
+          </span>
+        </label>
+      )}
+      {hasPhases && <p className="muted small">Changing the start moves the whole event, phases included. Changing the end stretches or shortens the last phase.</p>}
       <div className="form-actions">
         <button className="btn primary">Save</button>
         <button type="button" className="btn ghost" onClick={() => setEditing(false)}>

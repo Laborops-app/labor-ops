@@ -2952,3 +2952,35 @@ test('crew picker: shows who is already booked that day, also for a shift not cr
   assert.deepEqual(k1.missing_certs, ['Forklift']);
   assert.equal((await call(c1.session, 'GET', `/api/events/${ev}/candidates?startsAt=${encodeURIComponent('2032-05-03T19:00:00Z')}&endsAt=${encodeURIComponent('2032-05-03T23:00:00Z')}`)).status, 403);
 });
+
+test('event dates: changing the start moves phases and shifts; changing the end stretches the last phase', async () => {
+  const a = await register('evmove');
+  const c1 = await mkCrew(a, 'em1');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Arena', startDate: '2033-10-16', endDate: '2033-10-17' })).json.event.id as string;
+  const p1 = (await call(a, 'POST', `/api/events/${ev}/phases`, { label: 'Load in', startDate: '2033-10-16', endDate: '2033-10-16' })).json.phase.id;
+  const p2 = (await call(a, 'POST', `/api/events/${ev}/phases`, { label: 'Show', startDate: '2033-10-17', endDate: '2033-10-17' })).json.phase.id;
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Loader', startsAt: '2033-10-16T13:00:00Z', endsAt: '2033-10-16T21:00:00Z', headcount: 1, phaseId: p1 })).json.shift.id;
+  await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, confirmed: true });
+  const r = await call(a, 'PATCH', `/api/events/${ev}`, { startDate: '2033-10-19', endDate: '2033-10-20' });
+  assert.equal(r.status, 200, r.text);
+  const det = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  assert.equal(det.event.start_date.slice(0, 10), '2033-10-19');
+  assert.equal(det.event.end_date.slice(0, 10), '2033-10-20');
+  assert.deepEqual(det.phases.map((p: any) => [p.id, p.starts_on.slice(0, 10), p.ends_on.slice(0, 10)]), [[p1, '2033-10-19', '2033-10-19'], [p2, '2033-10-20', '2033-10-20']]);
+  assert.equal(new Date(det.shifts[0].starts_at).toISOString(), '2033-10-19T13:00:00.000Z');
+  assert.ok(JSON.stringify((await call(c1.session, 'GET', '/api/notifications')).json).includes('Time changed'));
+  // Longer: the last phase stretches
+  await call(a, 'PATCH', `/api/events/${ev}`, { endDate: '2033-10-22' });
+  const d2 = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  assert.equal(d2.phases.find((p: any) => p.id === p2).ends_on.slice(0, 10), '2033-10-22');
+  assert.equal(d2.event.end_date.slice(0, 10), '2033-10-22');
+  // Ending before the last phase starts is refused, and nothing moves
+  const bad = await call(a, 'PATCH', `/api/events/${ev}`, { startDate: '2033-10-19', endDate: '2033-10-19' });
+  assert.equal(bad.status, 400);
+  assert.equal((await call(a, 'GET', `/api/events/${ev}`)).json.event.end_date.slice(0, 10), '2033-10-22');
+  // Without phases, shifts can be left where they are
+  const ev2 = (await call(a, 'POST', '/api/events', { name: 'Solo', startDate: '2033-11-01', endDate: '2033-11-01' })).json.event.id as string;
+  const s2 = (await call(a, 'POST', `/api/events/${ev2}/shifts`, { roleName: 'Loader', startsAt: '2033-11-01T13:00:00Z', endsAt: '2033-11-01T21:00:00Z', headcount: 1 })).json.shift.id;
+  await call(a, 'PATCH', `/api/events/${ev2}`, { startDate: '2033-11-03', endDate: '2033-11-03', moveShifts: false });
+  assert.equal(new Date((await call(a, 'GET', `/api/events/${ev2}`)).json.shifts.find((s: any) => s.id === s2).starts_at).toISOString(), '2033-11-01T13:00:00.000Z');
+});

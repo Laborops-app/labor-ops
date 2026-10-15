@@ -838,7 +838,7 @@ function Body({ me }: { me: Me }) {
         </Banner>
       )}
 
-      <EventDetails ev={ev} hasPhases={d.phases.length > 0} onSaved={load} onError={setError} />
+      <EventDetails ev={ev} hasPhases={d.phases.length > 0} shiftCount={d.shifts.length} onSaved={load} onError={setError} />
       {(
         <>{groups.map((g) => groupSection(g))}</>      )}
       </div>
