@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 export type PickOption = { id: string; name: string; sub?: string; stars?: number; kind?: 'ok' | 'soft' | 'blocked'; note?: string; flag?: string };
 
 /** Search-as-you-type crew list. Click a name to pick it; the list stays open so several people can be added in a row. */
-export default function CrewPick({ options, onPick, onClose, title = 'Add crew', busy }: { options: PickOption[]; onPick: (o: PickOption) => void; onClose: () => void; title?: string; busy?: boolean }) {
+export default function CrewPick({ options, onPick, onClose, title = 'Add crew', busy, extra }: { options: PickOption[]; onPick: (o: PickOption) => void; onClose: () => void; title?: string; busy?: boolean; extra?: React.ReactNode }) {
   const [q, setQ] = useState('');
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -22,6 +22,7 @@ export default function CrewPick({ options, onPick, onClose, title = 'Add crew',
         <button type="button" className="chip-x" aria-label="Close" onClick={onClose}>✕</button>
       </div>
       <input autoFocus placeholder="Search name or skill…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search crew" />
+      {extra}
       <div className="crew-pick-list">
         {shown.length === 0 && <div className="muted small" style={{ padding: 8 }}>No one matches.</div>}
         {groups.map(([k, label]) => {

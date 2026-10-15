@@ -18,7 +18,7 @@ import { api, ApiError, Me, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/a
 import { EventDetails, Phases, Clocking, RentmanCard, EventFull, Phase, RmView } from '@/components/EventInfo';
 import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 
-type Assignment = { id: string; user_id: string; user_name: string; status: string; clocked_in_at?: string | null; last_clock_out?: string | null; pay_type?: 'hourly' | 'day'; rate?: number | null; estimated_pay?: number | null };
+type Assignment = { id: string; user_id: string; user_name: string; status: string; is_lead?: boolean; clocked_in_at?: string | null; last_clock_out?: string | null; pay_type?: 'hourly' | 'day'; rate?: number | null; estimated_pay?: number | null };
 type CrewRate = { user_id: string; user_name: string; pay_type: 'hourly' | 'day'; rate: number; note: string | null };
 type Elig = { user_id: string; missing_certs: string[]; time_off: boolean; outside_availability: boolean };
 type Shift = {
@@ -80,6 +80,8 @@ function Body({ me }: { me: Me }) {
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
   const [adding, setAdding] = useState<string | null>(null); // shift id whose crew picker is open ('new' = the add-shift form)
+  // "Add as lead" in the open crew picker: on for lead roles ("Audio Lead"), off otherwise.
+  const [asLead, setAsLead] = useState(false);
   const [busyAdd, setBusyAdd] = useState(false);
   const [payEdit, setPayEdit] = useState<{ id: string; value: string } | null>(null);
   // "Confirm automatically": crew are put straight on the shift instead of being asked to accept. Remembered on this device.
@@ -277,16 +279,16 @@ function Body({ me }: { me: Me }) {
   };
 
   /** Put one person on a shift. Returns an error message, or null when they were added. Rule breaks ask before overriding when `ask` is set. */
-  const assignUser = async (shiftId: string, userId: string, override = false, ask = true, acceptFlags = false): Promise<string | null> => {
+  const assignUser = async (shiftId: string, userId: string, override = false, ask = true, acceptFlags = false, lead?: boolean): Promise<string | null> => {
     try {
-      const r = await api<{ warnings?: string[] }>(`/api/shifts/${shiftId}/assign`, { body: { userId, override: override || undefined, confirmed: autoConfirm || undefined, acceptFlags: acceptFlags || undefined } });
+      const r = await api<{ warnings?: string[] }>(`/api/shifts/${shiftId}/assign`, { body: { userId, override: override || undefined, confirmed: autoConfirm || undefined, acceptFlags: acceptFlags || undefined, lead } });
       if (r.warnings?.length) setNote(r.warnings.join(' '));
       return null;
     } catch (err) {
-      if (ask && err instanceof ApiError && err.reason === 'rules' && !override && confirm(`${err.message}\n\nAssign anyway?`)) return assignUser(shiftId, userId, true, ask, acceptFlags);
+      if (ask && err instanceof ApiError && err.reason === 'rules' && !override && confirm(`${err.message}\n\nAssign anyway?`)) return assignUser(shiftId, userId, true, ask, acceptFlags, lead);
       // Flagged in past reviews (No-show / Do not rehire): always ask, even when adding several people at once.
       if (err instanceof ApiError && err.reason === 'flagged' && !acceptFlags) {
-        if (confirm(`⚠ ${err.message}\n\nAdd them to this shift anyway?`)) return assignUser(shiftId, userId, override, ask, true);
+        if (confirm(`⚠ ${err.message}\n\nAdd them to this shift anyway?`)) return assignUser(shiftId, userId, override, ask, true, lead);
         return 'Not added. ' + err.message;
       }
       return (err as Error).message;
@@ -294,13 +296,13 @@ function Body({ me }: { me: Me }) {
   };
 
   /** "+" on a shift: adds the person, and when every spot is taken adds a spot first. */
-  const addCrew = async (s: Shift, userId: string, override: boolean, full: boolean) => {
+  const addCrew = async (s: Shift, userId: string, override: boolean, full: boolean, lead?: boolean) => {
     setError('');
     setNote('');
     setBusyAdd(true);
     try {
       if (full) await api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { headcount: s.headcount + 1 } });
-      const err = await assignUser(s.id, userId, override);
+      const err = await assignUser(s.id, userId, override, true, false, lead);
       if (err) {
         if (full) await api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { headcount: s.headcount } }).catch(() => undefined);
         setError(err);
@@ -312,6 +314,13 @@ function Body({ me }: { me: Me }) {
       setBusyAdd(false);
     }
   };
+
+  // Opening a shift's picker: "Add as lead" starts on for lead roles ("Audio Lead", "Audio (Lead)").
+  useEffect(() => {
+    const sh = d?.shifts.find((x) => x.id === adding);
+    setAsLead(!!sh && /(\(\s*lead\s*\)|\blead)\s*$/i.test(sh.role_name));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adding]);
 
   useTabTitle(d?.event.name);
   if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
@@ -423,6 +432,7 @@ function Body({ me }: { me: Me }) {
                     <li key={a.id} className="row space">
                       <span>
                         {a.user_name} <Pill status={a.status} />
+                        {a.is_lead && a.status !== 'declined' && <span className="chip lead-chip" title="Leads their department on this event: checks the team in and out and rates them on the On site page">★ Lead</span>}
                         {a.rate != null && a.status !== 'declined' && (
                           <button type="button" className="chip" style={{ border: 0, cursor: 'pointer', marginLeft: 4 }} title="This person's own rate on this event" onClick={() => setSettings('pay')}>
                             {money(a.rate)}{a.pay_type === 'day' ? '/day' : '/hr'}
@@ -433,6 +443,15 @@ function Body({ me }: { me: Me }) {
                         {(a.status === 'offered' || a.status === 'pending') && (
                           <button className="btn small primary" onClick={() => run(() => api(`/api/assignments/${a.id}/confirm`, { body: {} }), `Confirmed ${a.user_name}.`)}>
                             Confirm
+                          </button>
+                        )}
+                        {a.status !== 'declined' && (
+                          <button
+                            className="btn ghost small"
+                            title={a.is_lead ? 'Stop this person being the lead on this event' : 'Make this person the lead of their department on this event'}
+                            onClick={() => run(() => api(`/api/assignments/${a.id}/lead`, { method: 'PUT', body: { lead: !a.is_lead } }), a.is_lead ? `${a.user_name} is no longer a lead.` : `${a.user_name} is now the lead on this event.`)}
+                          >
+                            {a.is_lead ? 'Remove lead' : 'Make lead'}
                           </button>
                         )}
                         {a.status === 'accepted' && !a.clocked_in_at && (
@@ -490,6 +509,12 @@ function Body({ me }: { me: Me }) {
                   <CrewPick
                     title={full ? `Add a spot on ${s.role_name}` : `Add crew to ${s.role_name} (${s.headcount - active.length} open)`}
                     busy={busyAdd}
+                    extra={
+                      <label className="check crew-pick-lead">
+                        <input type="checkbox" checked={asLead} onChange={(e) => setAsLead(e.target.checked)} />
+                        <span>Add as lead <span className="muted small">(checks in and rates their department on this event)</span></span>
+                      </label>
+                    }
                     onClose={() => setAdding(null)}
                     options={[
                       ...ok.map(({ m }) => ({ id: m.id, name: m.name, sub: m.skills.join(', '), stars: stars(m), kind: 'ok' as const, flag: flagOf(m) })),
@@ -498,7 +523,7 @@ function Body({ me }: { me: Me }) {
                     ]}
                     onPick={(o) => {
                       if (active.length + 1 >= s.headcount && !full) setAdding(null);
-                      addCrew(s, o.id, o.kind === 'soft', full);
+                      addCrew(s, o.id, o.kind === 'soft', full, asLead);
                     }}
                   />
                 )}

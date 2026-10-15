@@ -6,6 +6,7 @@ import { canAdjustRates } from '../rates';
 import { respondLinks } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { loadDepartments } from '../leads';
 import { withTenant, audit } from '../db';
 import { CustomerError, advanceStage, createCustomer } from '../crm';
 import { getToken, pushEventRequest, RentmanError } from '../rentman';
@@ -57,7 +58,7 @@ const shiftBody = z.object({
 const mgr = guard('admin', 'manager');
 
 /** Offer a shift to one crew member: checks, assignment, notification and chat message. Shared by the assign and fill-from-group routes. */
-export async function assignCrew(c: PoolClient, tid: string, actorId: string, shiftId: string, userId: string, override?: boolean, confirmed?: boolean, acceptFlags?: boolean): Promise<{ code: number; [k: string]: unknown }> {
+export async function assignCrew(c: PoolClient, tid: string, actorId: string, shiftId: string, userId: string, override?: boolean, confirmed?: boolean, acceptFlags?: boolean, lead?: boolean): Promise<{ code: number; [k: string]: unknown }> {
   const shift = (await c.query('SELECT * FROM shifts WHERE id = $1 FOR UPDATE', [shiftId])).rows[0];
   if (!shift) return { code: 404, error: 'Shift not found' };
   const user = (await c.query("SELECT id, name, active FROM users WHERE id = $1 AND role = 'crew'", [userId])).rows[0];
@@ -108,8 +109,9 @@ export async function assignCrew(c: PoolClient, tid: string, actorId: string, sh
 
   const a = (
     await c.query(
-      'INSERT INTO shift_assignments (tenant_id, shift_id, user_id, status) VALUES ($1,$2,$3,$4) RETURNING *',
-      [tid, shiftId, userId, confirmed ? 'accepted' : 'offered'],
+      'INSERT INTO shift_assignments (tenant_id, shift_id, user_id, status, is_lead) VALUES ($1,$2,$3,$4,$5) RETURNING *',
+      // On a lead role ("Audio Lead") the person is the lead unless told otherwise.
+      [tid, shiftId, userId, confirmed ? 'accepted' : 'offered', lead ?? (await loadDepartments(c)).isLeadRole(shift.role_name)],
     )
   ).rows[0];
   await audit(c, tid, actorId, 'assignment.create', 'assignment', a.id, { shiftId, userId });
@@ -303,7 +305,7 @@ export async function eventRoutes(app: FastifyInstance) {
       const shifts = (await c.query('SELECT * FROM shifts WHERE event_id = $1 ORDER BY starts_at, role_name', [eventId])).rows;
       const assigns = (
         await c.query(
-          `SELECT a.id, a.shift_id, a.user_id, a.status, u.name AS user_name,
+          `SELECT a.id, a.shift_id, a.user_id, a.status, a.is_lead, u.name AS user_name,
              (SELECT t.clock_in FROM time_entries t WHERE t.assignment_id = a.id AND t.clock_out IS NULL LIMIT 1) AS clocked_in_at,
              (SELECT max(t.clock_out) FROM time_entries t WHERE t.assignment_id = a.id) AS last_clock_out
            FROM shift_assignments a JOIN users u ON u.id = a.user_id
@@ -550,10 +552,31 @@ export async function eventRoutes(app: FastifyInstance) {
   // Assign crew to a shift. Blocks double-booking and over-filling.
   app.post('/api/shifts/:id/assign', { preHandler: mgr }, async (req, reply) => {
     const { id: shiftId } = id.parse(req.params);
-    const { userId, override, confirmed, acceptFlags } = z.object({ userId: z.string().uuid(), override: z.boolean().optional(), confirmed: z.boolean().optional(), acceptFlags: z.boolean().optional() }).parse(req.body);
-    const result = await withTenant(req.user.tid, (c) => assignCrew(c, req.user.tid, req.user.sub, shiftId, userId, override, confirmed, acceptFlags));
+    const { userId, override, confirmed, acceptFlags, lead } = z.object({ userId: z.string().uuid(), override: z.boolean().optional(), confirmed: z.boolean().optional(), acceptFlags: z.boolean().optional(), lead: z.boolean().optional() }).parse(req.body);
+    const result = await withTenant(req.user.tid, (c) => assignCrew(c, req.user.tid, req.user.sub, shiftId, userId, override, confirmed, acceptFlags, lead));
     const { code, ...body } = result as { code: number; [k: string]: unknown };
     return reply.code(code).send(body);
+  });
+
+  // Make someone the lead of their department on this event (or not). Leads check in and rate their team on the On site page.
+  app.put('/api/assignments/:id/lead', { preHandler: mgr }, async (req, reply) => {
+    const { id: aId } = id.parse(req.params);
+    const { lead } = z.object({ lead: z.boolean() }).parse(req.body);
+    const r = await withTenant(req.user.tid, async (c) => {
+      const a = (await c.query('UPDATE shift_assignments SET is_lead = $2 WHERE id = $1 RETURNING id, user_id, shift_id, is_lead', [aId, lead])).rows[0];
+      if (a) await audit(c, req.user.tid, req.user.sub, lead ? 'assignment.lead' : 'assignment.unlead', 'assignment', aId);
+      if (a && lead) {
+        const d = await describeShift(c, req.user.tid, a.shift_id, a.user_id);
+        if (d)
+          await notify(c, req.user.tid, {
+            userId: a.user_id, category: 'assignment', title: `You're the lead: ${d.role}`,
+            body: `${d.line}\n\nYou're the lead for your department on this event. Use the On site page to check your team in and out and rate them.`,
+            link: '/onsite', sms: `You're the lead: ${d.role}, ${d.event}, ${d.when}. Check your team in on the On site page.`,
+          });
+      }
+      return a;
+    });
+    return r ? { assignment: r } : reply.code(404).send({ error: 'Assignment not found' });
   });
 
   // Confirm someone on their behalf after the offer went out (they said yes by phone, in person, ...).

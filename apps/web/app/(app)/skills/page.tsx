@@ -4,7 +4,7 @@ import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, Me } from '@/lib/api';
 
-type Skill = { id: string; name: string; payRate: number; dayRate?: number; billRate?: number; dayBillRate?: number; active: boolean; groupId: string | null };
+type Skill = { id: string; name: string; payRate: number; dayRate?: number; billRate?: number; dayBillRate?: number; active: boolean; groupId: string | null; isLead?: boolean };
 type Group = { id: string; name: string };
 type Edit = { name: string; payRate: string; dayRate: string; billRate: string; dayBillRate: string };
 
@@ -336,6 +336,10 @@ function Body() {
                     <tr key={s.id} className={s.active ? '' : 'inactive'}>
                       <td>
                         <input value={e?.name ?? s.name} onChange={(ev) => set(s, { name: ev.target.value })} aria-label={`Name of ${s.name}`} maxLength={60} />
+                        <label className="check lead-role-check" title="Whoever is put on a shift with this role leads their department on that event">
+                          <input type="checkbox" checked={!!s.isLead} disabled={!!busy} onChange={(ev) => act(s.id, ev.target.checked ? `${s.name} is a lead role.` : `${s.name} is no longer a lead role.`, () => api(`/api/skills/${s.id}`, { method: 'PATCH', body: { isLead: ev.target.checked } }))} />
+                          Lead role
+                        </label>
                       </td>
                       <td>
                         <select value={s.groupId ?? ''} aria-label={`Group for ${s.name}`} disabled={!!busy} onChange={(ev) => act(s.id, `Moved ${s.name}.`, () => api(`/api/skills/${s.id}`, { method: 'PATCH', body: { groupId: ev.target.value || null } }))}>

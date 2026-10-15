@@ -29,7 +29,8 @@ const patchBody = z.object({
 });
 
 const COLS = 'id, name, email, role, phone, skills, field_roles, active, created_at, address, emergency_name, emergency_phone, bio, coordinator_notes, can_adjust_rates';
-export const FIELD_ROLES = ['onsite_coordinator', 'crew_lead'] as const;
+/** Leads are chosen per event (on the assignment), so the only permission kept on the person is this one. */
+export const FIELD_ROLES = ['onsite_coordinator'] as const;
 
 export async function crewRoutes(app: FastifyInstance) {
   app.get('/api/crew', { preHandler: guard('admin', 'manager') }, async (req) => {
@@ -218,10 +219,10 @@ export async function crewRoutes(app: FastifyInstance) {
     return { member: row };
   });
 
-  // Field permissions for a crew member: On-site Labor Coordinator and Crew Lead.
+  // Field permission for a crew member: On-site Labor Coordinator.
   app.put('/api/crew/:id/field-roles', { preHandler: guard('admin', 'manager') }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
-    const { fieldRoles } = z.object({ fieldRoles: z.array(z.enum(FIELD_ROLES)).max(2) }).parse(req.body);
+    const { fieldRoles } = z.object({ fieldRoles: z.array(z.enum(FIELD_ROLES)).max(1) }).parse(req.body);
     const row = await withTenant(req.user.tid, async (c) => {
       const r = await c.query(`UPDATE users SET field_roles = $2 WHERE id = $1 AND role = 'crew' RETURNING ${COLS}`, [id, [...new Set(fieldRoles)]]);
       if (r.rows[0]) await audit(c, req.user.tid, req.user.sub, 'user.field_roles', 'user', id, { fieldRoles });

@@ -45,7 +45,7 @@ export async function timeRoutes(app: FastifyInstance) {
       const rules = await loadRules(c);
       const rows = (
         await c.query(
-          `SELECT a.id AS assignment_id, a.status, s.id AS shift_id, s.role_name, s.starts_at, s.ends_at,
+          `SELECT a.id AS assignment_id, a.status, a.is_lead, s.id AS shift_id, s.event_id, s.role_name, s.starts_at, s.ends_at,
              e.name AS event_name, e.venue, e.clock_mode, e.geofence_m,
              (e.geo_lat IS NOT NULL AND e.geofence_m IS NOT NULL) AS needs_location,
              (SELECT w.status FROM shift_swaps w WHERE w.assignment_id = a.id AND w.status IN ('open','pending') LIMIT 1) AS swap_status,

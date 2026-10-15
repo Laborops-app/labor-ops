@@ -23,12 +23,11 @@ export async function api<T = any>(path: string, init: { method?: string; body?:
 
 export type Role = 'admin' | 'manager' | 'crew';
 export const roleLabel = (r: string) => (r === 'manager' ? 'Labor Coordinator' : r === 'admin' ? 'Admin' : r === 'crew' ? 'Crew' : r);
-export type FieldRole = 'onsite_coordinator' | 'crew_lead';
+export type FieldRole = 'onsite_coordinator';
 export const FIELD_ROLES: { key: FieldRole; label: string; help: string }[] = [
-  { key: 'onsite_coordinator', label: 'On-site Labor Coordinator', help: 'On events they work: sees all the crew, checks them in and out, and rates them.' },
-  { key: 'crew_lead', label: 'Crew Lead', help: 'On events they work: the same, but only for their own team (crew in the same position on their shift times).' },
+  { key: 'onsite_coordinator', label: 'On-site Labor Coordinator', help: 'On every event they work: sees all the crew, checks them in and out, and rates them.' },
 ];
-export type Me = { id: string; name: string; role: Role; company?: string; canAdjustRates?: boolean; fieldRoles?: FieldRole[] };
+export type Me = { id: string; name: string; role: Role; company?: string; canAdjustRates?: boolean; fieldRoles?: FieldRole[]; leads?: boolean };
 
 export const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 

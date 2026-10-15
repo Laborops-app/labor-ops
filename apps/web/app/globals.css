@@ -1661,3 +1661,10 @@ a.cs-co:hover b { color: var(--primary); }
 .access-check { align-items: flex-start; gap: 10px; }
 .access-check input { margin-top: 3px; }
 .chip.small-chip { font-size: 11px; padding: 1px 7px; margin-left: 4px; vertical-align: middle; }
+.chip.lead-chip { background: var(--warn-bg, #fff4dc); color: var(--warn, #9a6100); font-weight: 600; margin-left: 4px; }
+.crew-pick-lead { display: flex; gap: 8px; align-items: flex-start; margin: 8px 2px 4px; font-size: 14px; }
+.crew-pick-lead input { width: auto; margin-top: 3px; }
+.lead-role-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-top: 4px; font-weight: 500; }
+.lead-role-check input { width: auto; }
+.rates td:first-child { min-width: 170px; }
+.lead-role-check { white-space: nowrap; }

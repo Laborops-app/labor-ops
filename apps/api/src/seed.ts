@@ -288,8 +288,8 @@ export async function seedPayroll(c: import('pg').PoolClient, tenantId: string, 
 const ONSITE_NOTE = 'Sample event for the On site pages (crew lead and on-site labor coordinator).';
 
 /**
- * A sample event today, so the On site pages have something to show: Jordan (crew1) is Crew Lead on Audio,
- * Riley (crew5) is the On-site Labor Coordinator. Field permissions are only given the first time.
+ * A sample event today, so the On site pages have something to show: Jordan (crew1) is the Audio lead on this
+ * event (leads are chosen per event), Riley (crew5) is the On-site Labor Coordinator (given only the first time).
  */
 export async function seedOnsite(c: import('pg').PoolClient, tenantId: string, now = new Date()): Promise<void> {
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Denver', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
@@ -299,7 +299,6 @@ export async function seedOnsite(c: import('pg').PoolClient, tenantId: string, n
   const who = Object.fromEntries(people.map((p) => [p.k, p.id]));
   if (!who.crew1 || !who.crew5) return;
   if (first) {
-    await c.query("UPDATE users SET field_roles = '{crew_lead}' WHERE id = $1 AND field_roles = '{}'", [who.crew1]);
     await c.query("UPDATE users SET field_roles = '{onsite_coordinator}' WHERE id = $1 AND field_roles = '{}'", [who.crew5]);
   }
   const label = new Date(`${today}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
@@ -310,13 +309,14 @@ export async function seedOnsite(c: import('pg').PoolClient, tenantId: string, n
   )).rows[0].id as string;
   // 7:00-17:00 Denver (UTC-6 is close enough for a demo).
   const startMs = Date.parse(`${today}T13:00:00Z`);
-  const plan: [string, string[]][] = [['Audio (Lead)', ['crew1']], ['Audio', ['crew3']], ['Lighting', ['crew2']], ['Stagehand', ['crew4']], ['Security', ['crew5']]];
+  const plan: [string, string[]][] = [['Audio', ['crew1', 'crew3']], ['Lighting', ['crew2']], ['Stagehand', ['crew4']], ['Security', ['crew5']]];
+  const lead = new Set(['crew1']);
   for (const [role, crew] of plan) {
     const sid = (await c.query(
       'INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
       [tenantId, ev, role, new Date(startMs).toISOString(), new Date(startMs + 10 * 3600_000).toISOString(), crew.length],
     )).rows[0].id as string;
-    for (const k of crew) if (who[k]) await c.query("INSERT INTO shift_assignments (tenant_id, shift_id, user_id, status) VALUES ($1,$2,$3,'accepted')", [tenantId, sid, who[k]]);
+    for (const k of crew) if (who[k]) await c.query("INSERT INTO shift_assignments (tenant_id, shift_id, user_id, status, is_lead) VALUES ($1,$2,$3,'accepted',$4)", [tenantId, sid, who[k], lead.has(k)]);
   }
   console.log(`demo: added today's on-site sample event (${today})`);
 }

@@ -277,7 +277,7 @@ function Body({ me }: { me: Me }) {
           {isCrew && (
             <div className="access-field" role="group" aria-label="Field permissions">
               <span className="field-label">Field permissions</span>
-              <p className="muted small" style={{ margin: '0 0 6px' }}>Gives {m.name.split(' ')[0]} an <b>On site</b> page for the events they work. They never see anyone&apos;s average rating.</p>
+              <p className="muted small" style={{ margin: '0 0 6px' }}>Gives {m.name.split(' ')[0]} an <b>On site</b> page for the events they work. They never see anyone&apos;s average rating. Leads are chosen per event, on the event page.</p>
               {FIELD_ROLES.map((r) => (
                 <label key={r.key} className="check access-check">
                   <input

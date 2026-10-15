@@ -1,6 +1,7 @@
 import type { PoolClient } from 'pg';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { loadDepartments } from '../leads';
 import { withTenant, audit } from '../db';
 import { flagText, reviewFlags } from '../reviews';
 import { guard, authenticate } from '../auth';
@@ -51,8 +52,8 @@ export async function claimShift(c: PoolClient, tid: string, user: { id: string;
   const chk = await checkRules(c, await loadRules(c), user.id, id, s.starts_at, s.ends_at, 'You');
   if (chk.blocks.length) return { code: 409, error: chk.blocks.join('. ') + '. Ask your coordinator if this shift is needed.' };
   const a = (
-    await c.query("INSERT INTO shift_assignments (tenant_id, shift_id, user_id, status) VALUES ($1,$2,$3,'accepted') RETURNING id", [
-      tid, id, user.id,
+    await c.query("INSERT INTO shift_assignments (tenant_id, shift_id, user_id, status, is_lead) VALUES ($1,$2,$3,'accepted',$4) RETURNING id", [
+      tid, id, user.id, (await loadDepartments(c)).isLeadRole(s.role_name),
     ])
   ).rows[0];
   await audit(c, tid, user.id, 'claim.create', 'assignment', a.id, { shiftId: id });

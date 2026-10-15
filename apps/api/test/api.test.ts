@@ -1109,11 +1109,11 @@ test('role groups: create, assign roles, starter set with templates is idempoten
   // starter set
   assert.equal((await call(c1.session, 'POST', '/api/skills/starter')).status, 403);
   const first = await call(a, 'POST', '/api/skills/starter');
-  assert.deepEqual(first.json.added, { groups: 5, roles: 10, templates: 7 });
+  assert.deepEqual(first.json.added, { groups: 5, roles: 15, templates: 7 }); // 10 roles + a lead role per department
   assert.deepEqual((await call(a, 'POST', '/api/skills/starter')).json.added, { groups: 0, roles: 0, templates: 0 });
   const all = (await call(a, 'GET', '/api/skills')).json;
   const equip = all.groups.find((x: any) => x.name === 'Equipment Ops').id;
-  assert.deepEqual(all.skills.filter((s: any) => s.groupId === equip).map((s: any) => s.name).sort(), ['Boom Op', 'Fork Lift Op', 'High Lift Op', 'Lull Op', 'Scissor Lift Op']);
+  assert.deepEqual(all.skills.filter((s: any) => s.groupId === equip).map((s: any) => s.name).sort(), ['Boom Op', 'Equipment Ops Lead', 'Fork Lift Op', 'High Lift Op', 'Lull Op', 'Scissor Lift Op']);
   const tpls = (await call(a, 'GET', '/api/templates')).json.templates;
   assert.ok(tpls.find((t: any) => t.name === 'Load-in').items.some((i: any) => i.role === 'Fork Lift Op'));
 
@@ -2772,60 +2772,79 @@ test('admins: only admins add admins and change roles; role changes and deactiva
   assert.equal((await call(a, 'PUT', `/api/crew/${c.id}/role`, { role: 'crew' })).status, 200);
   assert.equal((await call(c.session, 'GET', '/api/crew')).status, 403);
   // Field permissions: set by staff, only on crew, shown in /me
-  assert.equal((await call(c.session, 'PUT', `/api/crew/${c.id}/field-roles`, { fieldRoles: ['crew_lead'] })).status, 403);
-  assert.equal((await call(m, 'PUT', `/api/crew/${c.id}/field-roles`, { fieldRoles: ['crew_lead', 'onsite_coordinator'] })).status, 200);
-  assert.equal((await call(m, 'PUT', `/api/crew/${c.id}/field-roles`, { fieldRoles: ['boss'] })).status, 400);
-  assert.equal((await call(a, 'PUT', `/api/crew/${a2.json.member.id}/field-roles`, { fieldRoles: ['crew_lead'] })).status, 404);
-  assert.deepEqual((await call(c.session, 'GET', '/api/auth/me')).json.user.fieldRoles.sort(), ['crew_lead', 'onsite_coordinator']);
+  assert.equal((await call(c.session, 'PUT', `/api/crew/${c.id}/field-roles`, { fieldRoles: ['onsite_coordinator'] })).status, 403);
+  assert.equal((await call(m, 'PUT', `/api/crew/${c.id}/field-roles`, { fieldRoles: ['onsite_coordinator'] })).status, 200);
+  assert.equal((await call(m, 'PUT', `/api/crew/${c.id}/field-roles`, { fieldRoles: ['crew_lead'] })).status, 400); // leads are per event now
+  assert.equal((await call(a, 'PUT', `/api/crew/${a2.json.member.id}/field-roles`, { fieldRoles: ['onsite_coordinator'] })).status, 404);
+  assert.deepEqual((await call(c.session, 'GET', '/api/auth/me')).json.user.fieldRoles, ['onsite_coordinator']);
   // Crew cannot give themselves field permissions through their profile skills
   await call(c.session, 'PATCH', '/api/my/profile', { skills: ['onsite_coordinator'] });
   assert.equal((await call(a, 'PUT', `/api/crew/${c.id}/field-roles`, { fieldRoles: [] })).status, 200);
   assert.deepEqual((await call(c.session, 'GET', '/api/auth/me')).json.user.fieldRoles, []);
   // Promoting to coordinator clears field permissions; deactivating signs them out
-  await call(a, 'PUT', `/api/crew/${c.id}/field-roles`, { fieldRoles: ['crew_lead'] });
+  await call(a, 'PUT', `/api/crew/${c.id}/field-roles`, { fieldRoles: ['onsite_coordinator'] });
   assert.deepEqual((await call(a, 'PUT', `/api/crew/${c.id}/role`, { role: 'manager' })).json.member.field_roles, []);
   assert.equal((await call(a, 'PATCH', `/api/crew/${me.id}`, { active: false })).status, 400);
   assert.equal((await call(a, 'PATCH', `/api/crew/${c.id}`, { active: false })).status, 200);
   assert.equal((await call(c.session, 'GET', '/api/auth/me')).status, 401);
 });
 
-test('on-site: labor coordinator covers the whole event, crew lead only their team; check in/out and rating without averages', async () => {
+test('on-site: labor coordinator covers the whole event, leads (chosen per event) their department; check in/out and rating without averages', async () => {
   const a = await register('onsite');
   const lead = await mkCrew(a, 'os-lead');
   const coord = await mkCrew(a, 'os-coord');
   const au = await mkCrew(a, 'os-audio');
   const au2 = await mkCrew(a, 'os-audio2');
   const li = await mkCrew(a, 'os-light');
+  // Departments: a new one gets its lead role; Audio has two positions
+  const g = (await call(a, 'POST', '/api/skill-groups', { name: 'Audio' })).json.group.id;
+  const roles = (await call(a, 'GET', '/api/skills')).json.skills;
+  const audioLead = roles.find((r: any) => r.name === 'Audio Lead');
+  assert.ok(audioLead && audioLead.isLead && audioLead.groupId === g, JSON.stringify(roles));
+  for (const name of ['Audio', 'A2']) assert.equal((await call(a, 'POST', '/api/skills', { name, groupId: g })).status, 201);
+  assert.equal((await call(a, 'POST', '/api/skills', { name: 'Lighting' })).status, 201);
   const ev = (await call(a, 'POST', '/api/events', { name: 'Expo', startDate: '2030-01-01', endDate: '2030-01-03' })).json.event.id as string;
   const shift = async (roleName: string, from: number, to: number) => (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName, startsAt: start(from), endsAt: start(to), headcount: 3 })).json.shift.id as string;
-  const sLead = await shift('Audio (Lead)', -1, 6);
-  const sAudio = await shift('Audio', -1, 6);
+  const sLead = await shift('Audio Lead', -1, 6);
+  const sAudio = await shift('A2', -1, 6);
   const sLight = await shift('Lighting', -1, 6);
   const sAudioLater = await shift('Audio', 30, 36);
-  const put = async (s: string, u: string) => {
-    const r = await call(a, 'POST', `/api/shifts/${s}/assign`, { userId: u, confirmed: true, override: true });
+  const put = async (s: string, u: string, extra: Record<string, unknown> = {}) => {
+    const r = await call(a, 'POST', `/api/shifts/${s}/assign`, { userId: u, confirmed: true, override: true, ...extra });
     assert.ok(r.status === 201 || r.status === 200, r.text);
-    return r.json.assignment.id as string;
+    return r.json.assignment as { id: string; is_lead: boolean };
   };
-  await put(sLead, lead.id);
+  // Put on with "not lead" first: no on-site access
+  const leadAsg = await put(sLead, lead.id, { lead: false });
+  assert.equal(leadAsg.is_lead, false);
   await put(sLight, coord.id);
-  const aAudio = await put(sAudio, au.id);
-  const aLight = await put(sLight, li.id);
-  const aLater = await put(sAudioLater, au2.id);
+  const aAudio = (await put(sAudio, au.id)).id;
+  assert.equal((await call(a, 'GET', `/api/events/${ev}`)).json.shifts.find((x: any) => x.id === sAudio).assignments[0].is_lead, false);
+  const aLight = (await put(sLight, li.id)).id;
+  const aLater = (await put(sAudioLater, au2.id)).id;
 
-  // No field permission: no access
   assert.equal((await call(lead.session, 'GET', `/api/onsite/events/${ev}`)).status, 404);
   assert.equal((await call(lead.session, 'POST', `/api/onsite/assignments/${aAudio}/check-in`)).status, 404);
-  await call(a, 'PUT', `/api/crew/${lead.id}/field-roles`, { fieldRoles: ['crew_lead'] });
+  assert.equal((await call(lead.session, 'GET', '/api/auth/me')).json.user.leads, false);
+  // Make them the lead on this event (crew cannot)
+  assert.equal((await call(lead.session, 'PUT', `/api/assignments/${leadAsg.id}/lead`, { lead: true })).status, 403);
+  assert.equal((await call(a, 'PUT', `/api/assignments/${leadAsg.id}/lead`, { lead: true })).json.assignment.is_lead, true);
+  assert.equal((await call(lead.session, 'GET', '/api/auth/me')).json.user.leads, true);
   await call(a, 'PUT', `/api/crew/${coord.id}/field-roles`, { fieldRoles: ['onsite_coordinator'] });
+  // On a lead role the person is the lead automatically
+  const auto = await mkCrew(a, 'os-auto');
+  assert.equal((await put(sLead, auto.id)).is_lead, true);
+  await call(a, 'DELETE', `/api/assignments/${(await call(a, 'GET', `/api/events/${ev}`)).json.shifts.find((x: any) => x.id === sLead).assignments.find((x: any) => x.user_id === auto.id).id}`);
 
-  // Crew lead: their audio team on their shift times (and themselves), not lighting, not tomorrow's audio
+  // The lead covers the Audio department on their shift times (any Audio position), not Lighting, not tomorrow
   const lv = await call(lead.session, 'GET', `/api/onsite/events/${ev}`);
   assert.equal(lv.status, 200, lv.text);
   assert.equal(lv.json.kind, 'lead');
+  assert.deepEqual(lv.json.teams, ['Audio']);
   const names = (v: any) => v.shifts.flatMap((s: any) => s.crew.map((x: any) => x.name)).sort();
   assert.deepEqual(names(lv.json), ['Crew os-audio', 'Crew os-lead']);
   assert.equal((await call(lead.session, 'GET', '/api/onsite/events')).json.events.length, 1);
+  assert.equal((await call(au.session, 'GET', '/api/onsite/events')).json.events.length, 0);
   assert.equal((await call(lead.session, 'POST', `/api/onsite/assignments/${aAudio}/check-in`)).status, 201);
   assert.equal((await call(lead.session, 'POST', `/api/onsite/assignments/${aAudio}/check-in`)).status, 409);
   assert.equal((await call(lead.session, 'POST', `/api/onsite/assignments/${aLight}/check-in`)).status, 404);
@@ -2862,4 +2881,10 @@ test('on-site: labor coordinator covers the whole event, crew lead only their te
   assert.equal((await call(li.session, 'GET', `/api/onsite/events/${ev}/reviews`)).status, 404);
   assert.equal((await call(li.session, 'GET', '/api/onsite/events')).json.events.length, 0);
   assert.equal((await call(lead.session, 'GET', '/api/crew')).status, 403);
+  // Not the lead any more: no access to this event
+  await call(a, 'PUT', `/api/assignments/${leadAsg.id}/lead`, { lead: false });
+  assert.equal((await call(lead.session, 'GET', `/api/onsite/events/${ev}`)).status, 404);
+  // Renaming a department renames its lead role
+  await call(a, 'PATCH', `/api/skill-groups/${g}`, { name: 'Sound' });
+  assert.ok((await call(a, 'GET', '/api/skills')).json.skills.some((r: any) => r.name === 'Sound Lead' && r.isLead));
 });

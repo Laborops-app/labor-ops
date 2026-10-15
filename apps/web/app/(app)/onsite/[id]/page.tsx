@@ -14,6 +14,7 @@ type Shift = { id: string; role_name: string; starts_at: string; ends_at: string
 type Data = {
   event: { id: string; name: string; venue: string | null; address: string | null; start_date: string; end_date: string; clock_mode: 'self' | 'coordinator' };
   kind: 'coordinator' | 'lead';
+  teams: string[];
   myShifts: { role_name: string }[];
   shifts: Shift[];
 };
@@ -57,7 +58,7 @@ function Body() {
   const onSite = everyone.filter((p) => p.clocked_in_at).length;
   const done = everyone.filter((p) => !p.clocked_in_at && p.last_clock_out).length;
   const match = (p: Person) => !q || p.name.toLowerCase().includes(q.toLowerCase());
-  const teams = [...new Set(d.myShifts.map((s) => s.role_name.replace(/\s*\(.*\)\s*$/, '')))].join(', ');
+  const teams = d.teams.join(' and ');
 
   return (
     <>
@@ -68,7 +69,7 @@ function Body() {
             {fmtDate(d.event.start_date)}{d.event.end_date !== d.event.start_date ? ` – ${fmtDate(d.event.end_date)}` : ''}{d.event.venue ? ` · ${d.event.venue}` : ''}
           </div>
           <div style={{ marginTop: 8 }}>
-            <span className="chip">{d.kind === 'coordinator' ? 'On-site Labor Coordinator · all crew' : `Crew Lead · your ${teams} team`}</span>
+            <span className="chip">{d.kind === 'coordinator' ? 'On-site Labor Coordinator · all crew' : `★ Lead · your ${teams} team`}</span>
           </div>
         </div>
         <Link className="btn ghost" href={`/onsite/${id}/rate`}>★ Rate crew</Link>

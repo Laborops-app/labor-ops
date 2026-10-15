@@ -8,6 +8,8 @@ import { api, fmtDateTime, fmtTime, getPosition, money } from '@/lib/api';
 type MyShift = {
   assignment_id: string;
   status: string;
+  is_lead?: boolean;
+  event_id: string;
   role_name: string;
   starts_at: string;
   ends_at: string;
@@ -80,7 +82,7 @@ function Body() {
                     {s.role_name}
                   </Link>
                 </h2>
-                <div>{s.event_name}</div>
+                <div>{s.event_name}{s.is_lead && s.status === 'accepted' && <span className="chip lead-chip">★ Lead</span>}</div>
                 <div className="muted small">
                   {fmtDateTime(s.starts_at)} – {fmtTime(s.ends_at)}
                   {s.venue ? ` · ${s.venue}` : ''}
@@ -97,6 +99,11 @@ function Body() {
               <Link className="btn ghost small" href={`/my-shifts/${s.assignment_id}`}>
                 Details &amp; map
               </Link>
+              {s.is_lead && s.status === 'accepted' && (
+                <Link className="btn small" href={`/onsite/${s.event_id}`}>
+                  My team
+                </Link>
+              )}
               {s.status === 'offered' && (
                 <>
                   <button className="btn primary" disabled={!!busy} onClick={() => act(s.assignment_id, () => api(`/api/assignments/${s.assignment_id}/respond`, { body: { response: 'accepted' } }))}>

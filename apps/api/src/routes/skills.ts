@@ -18,13 +18,13 @@ export async function skillRoutes(app: FastifyInstance) {
       const seePay = await canAdjustRates(c, req.user);
       const rows = (
         await c.query(
-          `SELECT s.id, s.name, s.pay_rate, s.day_rate, s.bill_rate, s.day_bill_rate, s.active, s.group_id FROM skills s ${isAdmin ? '' : 'WHERE s.active'} ORDER BY lower(s.name)`,
+          `SELECT s.id, s.name, s.pay_rate, s.day_rate, s.bill_rate, s.day_bill_rate, s.active, s.group_id, s.is_lead FROM skills s ${isAdmin ? '' : 'WHERE s.active'} ORDER BY lower(s.name)`,
         )
       ).rows;
       const groups = (await c.query('SELECT id, name FROM skill_groups ORDER BY sort, lower(name)')).rows;
       return {
         groups,
-        skills: rows.map((r) => ({ id: r.id, name: r.name, active: r.active, groupId: r.group_id, ...(seePay ? { payRate: Number(r.pay_rate), dayRate: Number(r.day_rate) } : {}), ...(req.user.role !== 'crew' ? { billRate: Number(r.bill_rate), dayBillRate: Number(r.day_bill_rate) } : {}) })),
+        skills: rows.map((r) => ({ id: r.id, name: r.name, active: r.active, groupId: r.group_id, isLead: r.is_lead, ...(seePay ? { payRate: Number(r.pay_rate), dayRate: Number(r.day_rate) } : {}), ...(req.user.role !== 'crew' ? { billRate: Number(r.bill_rate), dayBillRate: Number(r.day_bill_rate) } : {}) })),
       };
     });
   });
@@ -37,6 +37,11 @@ export async function skillRoutes(app: FastifyInstance) {
       if ((await c.query('SELECT 1 FROM skill_groups WHERE lower(name) = lower($1)', [b.name])).rowCount) return null;
       const r = await c.query('INSERT INTO skill_groups (tenant_id, name, sort) VALUES ($1,$2,(SELECT COALESCE(max(sort),0)+1 FROM skill_groups)) RETURNING id, name', [req.user.tid, b.name]);
       await audit(c, req.user.tid, req.user.sub, 'skill_group.create', 'skill_group', r.rows[0].id, { name: b.name });
+      // Every department gets a lead role ("Audio Lead"); whoever is put on it leads the department on that event.
+      await c.query(
+        `INSERT INTO skills (tenant_id, name, group_id, is_lead) SELECT $1, $2, $3, true WHERE NOT EXISTS (SELECT 1 FROM skills WHERE lower(name) = lower($2))`,
+        [req.user.tid, `${b.name.slice(0, 55)} Lead`, r.rows[0].id],
+      );
       return r.rows[0];
     });
     return out ? reply.code(201).send({ group: out }) : reply.code(409).send({ error: 'A group with that name already exists' });
@@ -46,7 +51,17 @@ export async function skillRoutes(app: FastifyInstance) {
     const b = z.object({ name: groupName }).parse(req.body);
     const out = await withTenant(req.user.tid, async (c) => {
       if ((await c.query('SELECT 1 FROM skill_groups WHERE lower(name) = lower($1) AND id <> $2', [b.name, id])).rowCount) return 'dup';
+      const prev = (await c.query('SELECT name FROM skill_groups WHERE id = $1', [id])).rows[0];
       const r = await c.query('UPDATE skill_groups SET name = $2 WHERE id = $1 RETURNING id, name', [id, b.name]);
+      // Its lead role follows the new name ("Audio Lead" → "Sound Lead"), unless that name is taken.
+      if (prev && r.rows[0]) {
+        const lead = (await c.query('SELECT id, name FROM skills WHERE group_id = $1 AND is_lead AND lower(name) = lower($2)', [id, `${prev.name.slice(0, 55)} Lead`])).rows[0];
+        const next = `${b.name.slice(0, 55)} Lead`;
+        if (lead && !(await c.query('SELECT 1 FROM skills WHERE lower(name) = lower($1) AND id <> $2', [next, lead.id])).rowCount) {
+          await c.query('UPDATE skills SET name = $2 WHERE id = $1', [lead.id, next]);
+          await c.query('UPDATE users SET skills = array_replace(skills, $1, $2)', [lead.name, next]);
+        }
+      }
       return r.rows[0] ?? null;
     });
     if (out === 'dup') return reply.code(409).send({ error: 'A group with that name already exists' });
@@ -76,6 +91,10 @@ export async function skillRoutes(app: FastifyInstance) {
             added.roles++;
           } else if (!have.group_id) await c.query('UPDATE skills SET group_id = $2 WHERE id = $1', [have.id, gr.id]);
         }
+        if (!(await c.query('SELECT 1 FROM skills WHERE group_id = $1 AND is_lead', [gr.id])).rowCount && !(await c.query('SELECT 1 FROM skills WHERE lower(name) = lower($1)', [`${g.name} Lead`])).rowCount) {
+          await c.query('INSERT INTO skills (tenant_id, name, group_id, is_lead) VALUES ($1,$2,$3,true)', [req.user.tid, `${g.name} Lead`, gr.id]);
+          added.roles++;
+        }
       }
       for (const t of STARTER_TEMPLATES) {
         if ((await c.query('SELECT 1 FROM shift_templates WHERE lower(name) = lower($1)', [t.name])).rowCount) continue;
@@ -90,28 +109,28 @@ export async function skillRoutes(app: FastifyInstance) {
   );
 
   app.post('/api/skills', { preHandler: admin }, async (req, reply) => {
-    const b = z.object({ name, payRate: rate.default(0), dayRate: rate.default(0), billRate: rate.default(0), dayBillRate: rate.default(0), groupId: z.string().uuid().nullable().optional() }).parse(req.body);
+    const b = z.object({ name, payRate: rate.default(0), dayRate: rate.default(0), billRate: rate.default(0), dayBillRate: rate.default(0), groupId: z.string().uuid().nullable().optional(), isLead: z.boolean().default(false) }).parse(req.body);
     const row = await withTenant(req.user.tid, async (c) => {
-      const r = await c.query('INSERT INTO skills (tenant_id, name, pay_rate, bill_rate, group_id, day_rate, day_bill_rate) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, name, pay_rate, day_rate, bill_rate, day_bill_rate, active, group_id', [req.user.tid, b.name, b.payRate, b.billRate, b.groupId ?? null, b.dayRate, b.dayBillRate]);
+      const r = await c.query('INSERT INTO skills (tenant_id, name, pay_rate, bill_rate, group_id, day_rate, day_bill_rate, is_lead) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, name, pay_rate, day_rate, bill_rate, day_bill_rate, active, group_id, is_lead', [req.user.tid, b.name, b.payRate, b.billRate, b.groupId ?? null, b.dayRate, b.dayBillRate, b.isLead]);
       await audit(c, req.user.tid, req.user.sub, 'skill.create', 'skill', r.rows[0].id, { name: b.name, payRate: b.payRate });
       return r.rows[0];
     });
-    return reply.code(201).send({ skill: { id: row.id, name: row.name, active: row.active, groupId: row.group_id, payRate: Number(row.pay_rate), dayRate: Number(row.day_rate), billRate: Number(row.bill_rate), dayBillRate: Number(row.day_bill_rate) } });
+    return reply.code(201).send({ skill: { id: row.id, name: row.name, active: row.active, groupId: row.group_id, isLead: row.is_lead, payRate: Number(row.pay_rate), dayRate: Number(row.day_rate), billRate: Number(row.bill_rate), dayBillRate: Number(row.day_bill_rate) } });
   });
 
   // Admins edit everything; a coordinator who has been allowed to adjust rates may change only the two rates.
   app.patch('/api/skills/:id', { preHandler: guard('admin', 'manager') }, async (req, reply) => {
     const { id } = idParam.parse(req.params);
-    const b = z.object({ name: name.optional(), payRate: rate.optional(), dayRate: rate.optional(), billRate: rate.optional(), dayBillRate: rate.optional(), active: z.boolean().optional(), groupId: z.string().uuid().nullable().optional() }).parse(req.body);
+    const b = z.object({ name: name.optional(), payRate: rate.optional(), dayRate: rate.optional(), billRate: rate.optional(), dayBillRate: rate.optional(), active: z.boolean().optional(), groupId: z.string().uuid().nullable().optional(), isLead: z.boolean().optional() }).parse(req.body);
     const row = await withTenant(req.user.tid, async (c) => {
       if (req.user.role !== 'admin') {
-        if (!(await canAdjustRates(c, req.user)) || b.name !== undefined || b.active !== undefined || b.groupId !== undefined) return 'forbidden' as const;
+        if (!(await canAdjustRates(c, req.user)) || b.name !== undefined || b.active !== undefined || b.groupId !== undefined || b.isLead !== undefined) return 'forbidden' as const;
       }
       const old = (await c.query('SELECT name FROM skills WHERE id = $1', [id])).rows[0];
       if (!old) return null;
       const r = await c.query(
-        'UPDATE skills SET name = COALESCE($2, name), pay_rate = COALESCE($3, pay_rate), active = COALESCE($4, active), group_id = CASE WHEN $5::boolean THEN $6::uuid ELSE group_id END, bill_rate = COALESCE($7, bill_rate), day_rate = COALESCE($8, day_rate), day_bill_rate = COALESCE($9, day_bill_rate) WHERE id = $1 RETURNING id, name, pay_rate, day_rate, bill_rate, day_bill_rate, active, group_id',
-        [id, b.name ?? null, b.payRate ?? null, b.active ?? null, b.groupId !== undefined, b.groupId ?? null, b.billRate ?? null, b.dayRate ?? null, b.dayBillRate ?? null],
+        'UPDATE skills SET name = COALESCE($2, name), pay_rate = COALESCE($3, pay_rate), active = COALESCE($4, active), group_id = CASE WHEN $5::boolean THEN $6::uuid ELSE group_id END, bill_rate = COALESCE($7, bill_rate), day_rate = COALESCE($8, day_rate), day_bill_rate = COALESCE($9, day_bill_rate), is_lead = COALESCE($10, is_lead) WHERE id = $1 RETURNING id, name, pay_rate, day_rate, bill_rate, day_bill_rate, active, group_id, is_lead',
+        [id, b.name ?? null, b.payRate ?? null, b.active ?? null, b.groupId !== undefined, b.groupId ?? null, b.billRate ?? null, b.dayRate ?? null, b.dayBillRate ?? null, b.isLead ?? null],
       );
       // A rename carries over to the people who have the skill.
       if (b.name && b.name !== old.name) await c.query('UPDATE users SET skills = array_replace(skills, $1, $2)', [old.name, b.name]);
@@ -120,7 +139,7 @@ export async function skillRoutes(app: FastifyInstance) {
     });
     if (row === 'forbidden') return reply.code(403).send({ error: 'You are not allowed to change rates. Ask an admin.' });
     if (!row) return reply.code(404).send({ error: 'Not found' });
-    return { skill: { id: row.id, name: row.name, active: row.active, groupId: row.group_id, payRate: Number(row.pay_rate), dayRate: Number(row.day_rate), billRate: Number(row.bill_rate), dayBillRate: Number(row.day_bill_rate) } };
+    return { skill: { id: row.id, name: row.name, active: row.active, groupId: row.group_id, isLead: row.is_lead, payRate: Number(row.pay_rate), dayRate: Number(row.day_rate), billRate: Number(row.bill_rate), dayBillRate: Number(row.day_bill_rate) } };
   });
 
   app.delete('/api/skills/:id', { preHandler: admin }, async (req, reply) => {

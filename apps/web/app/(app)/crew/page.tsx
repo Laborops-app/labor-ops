@@ -184,7 +184,6 @@ function Body({ me }: { me: Me }) {
                     <td>
                       <span className={m.role === 'crew' ? 'pill past' : 'pill'}>{roleLabel(m.role)}</span>
                       {m.field_roles?.includes('onsite_coordinator') && <span className="chip small-chip" title="On-site Labor Coordinator">On-site LC</span>}
-                      {m.field_roles?.includes('crew_lead') && <span className="chip small-chip" title="Crew Lead">Lead</span>}
                     </td>
                     <td className="wrap" onClick={stop} style={{ cursor: 'default' }}>
                       {m.skills.length === 0 && <span className="muted">—</span>}

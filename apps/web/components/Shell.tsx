@@ -216,7 +216,7 @@ const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; field?
     href: '/onsite',
     label: 'On site',
     roles: ['crew'],
-    field: true, // crew leads and on-site labor coordinators
+    field: true, // on-site labor coordinators, and crew who are a lead on an event
     icon: icon(
       <>
         <path d="M9 11l3 3 7-7" />
@@ -340,7 +340,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     // A full reload, so nothing from this session's open tabs stays in memory.
     window.location.href = '/login';
   };
-  const items = NAV.filter((n) => n.roles.includes(me.role) && (!n.rates || me.role === 'admin' || me.canAdjustRates) && (!n.field || !!me.fieldRoles?.length));
+  const items = NAV.filter((n) => n.roles.includes(me.role) && (!n.rates || me.role === 'admin' || me.canAdjustRates) && (!n.field || !!me.fieldRoles?.length || !!me.leads));
 
   const current = items.find((n) => path.startsWith(n.href));
 
