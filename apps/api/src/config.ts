@@ -45,4 +45,32 @@ export const config = {
     from: process.env.TWILIO_FROM_NUMBER ?? '',
   },
   workers: process.env.NOTIFY_WORKERS !== 'false',
+  // S3-compatible object storage (RustFS on the same server by default). Unset = files stay in Postgres.
+  storage: {
+    endpoint: process.env.S3_ENDPOINT ?? '',
+    region: process.env.S3_REGION ?? 'us-east-1',
+    accessKey: process.env.S3_ACCESS_KEY ?? '',
+    secretKey: process.env.S3_SECRET_KEY ?? '',
+    forcePathStyle: process.env.S3_FORCE_PATH_STYLE !== 'false',
+    buckets: {
+      chat: process.env.S3_BUCKET_CHAT ?? 'laborops-chat',
+      documents: process.env.S3_BUCKET_DOCUMENTS ?? 'laborops-documents',
+      backups: process.env.S3_BUCKET_BACKUPS ?? 'laborops-backups',
+    },
+    // Backups can go to a different S3 server (another host or provider) so they survive losing this one.
+    backupEndpoint: process.env.BACKUP_S3_ENDPOINT ?? '',
+    backupAccessKey: process.env.BACKUP_S3_ACCESS_KEY ?? '',
+    backupSecretKey: process.env.BACKUP_S3_SECRET_KEY ?? '',
+    backupRegion: process.env.BACKUP_S3_REGION ?? '',
+  },
+  backups: {
+    enabled: process.env.BACKUPS_ENABLED !== 'false',
+    hourUtc: Number(process.env.BACKUP_HOUR_UTC ?? 9), // 9:00 UTC = 3 AM in Denver (2 AM in summer)
+    keepDaily: Number(process.env.BACKUP_KEEP_DAILY ?? 14),
+    keepWeekly: Number(process.env.BACKUP_KEEP_WEEKLY ?? 8),
+    keepMonthly: Number(process.env.BACKUP_KEEP_MONTHLY ?? 12),
+    pgDump: process.env.PG_DUMP_PATH ?? 'pg_dump',
+  },
+  // People who run the platform itself (not a company admin): they see storage and backup status.
+  platformAdmins: (process.env.PLATFORM_ADMINS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
 };

@@ -10,6 +10,8 @@ RUN npm run build -w apps/api && npm prune --omit=dev --workspace apps/api
 
 FROM node:22-alpine
 ENV NODE_ENV=production
+# pg_dump / pg_restore for the nightly database backups (must match the Postgres 16 server).
+RUN apk add --no-cache postgresql16-client
 WORKDIR /app
 COPY --from=build /repo/node_modules node_modules
 COPY --from=build /repo/apps/api/dist dist

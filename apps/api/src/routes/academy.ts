@@ -3,6 +3,7 @@ import type { PoolClient } from 'pg';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
+import { saveCertFile } from '../files';
 import { guard, authenticate } from '../auth';
 import { config } from '../config';
 import { notify } from '../notify';
@@ -47,13 +48,7 @@ async function attachPdf(c: PoolClient, tid: string, certId: string, userName: s
     code: row.code,
     verifyUrl: row.url,
   });
-  await c.query(
-    `INSERT INTO cert_files (tenant_id, cert_id, filename, content_type, size, data) VALUES ($1,$2,$3,'application/pdf',$4,$5)
-     ON CONFLICT (cert_id) DO UPDATE SET filename = EXCLUDED.filename, content_type = EXCLUDED.content_type,
-       size = EXCLUDED.size, data = EXCLUDED.data, uploaded_at = now()
-     WHERE cert_files.filename LIKE 'academy-%'`,
-    [tid, certId, `academy-${row.code}.pdf`, data.length, data],
-  );
+  await saveCertFile(c, tid, certId, `academy-${row.code}.pdf`, 'application/pdf', data, true);
 }
 
 /** Makes the PDF for a certificate that was already imported but has none yet (repeat deliveries, older imports). */

@@ -17,6 +17,42 @@ services:
       retries: 20
     # Not published to the host: only the api container can reach it.
 
+  # S3-compatible object storage for uploads and backups. Only the api container talks to it; the web console is
+  # reachable from the server itself (ssh -L 9001:localhost:9001 <server>, then open http://localhost:9001).
+  # Turned on by COMPOSE_PROFILES=storage in .env (with S3_ACCESS_KEY / S3_SECRET_KEY set).
+  storage-perms:
+    image: alpine:3.20
+    profiles: ["storage"]
+    user: root
+    volumes:
+      - rustfs_data:/data
+    command: ["sh", "-c", "chown -R 10001:10001 /data"]
+
+  rustfs:
+    image: ${RUSTFS_IMAGE:-rustfs/rustfs:latest}
+    profiles: ["storage"]
+    restart: unless-stopped
+    depends_on:
+      storage-perms:
+        condition: service_completed_successfully
+    environment:
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:-}
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_OBS_LOGGER_LEVEL: error
+    command: ["/data"]
+    volumes:
+      - rustfs_data:/data
+    ports:
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/health || wget -qO- http://localhost:9000/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+
   api:
     build:
       context: .
@@ -54,6 +90,27 @@ services:
       TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
       TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
       TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
+      # Object storage (RustFS above). A bucket each for chat files, documents and backups; created automatically.
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://rustfs:9000}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+      S3_BUCKET_CHAT: ${S3_BUCKET_CHAT:-laborops-chat}
+      S3_BUCKET_DOCUMENTS: ${S3_BUCKET_DOCUMENTS:-laborops-documents}
+      S3_BUCKET_BACKUPS: ${S3_BUCKET_BACKUPS:-laborops-backups}
+      # Optional: send backups to a different S3 server (another machine, or AWS S3 / Backblaze / Wasabi) so they
+      # survive losing this one. Blank = the RustFS above.
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
+      BACKUP_S3_REGION: ${BACKUP_S3_REGION:-}
+      BACKUP_S3_ACCESS_KEY: ${BACKUP_S3_ACCESS_KEY:-}
+      BACKUP_S3_SECRET_KEY: ${BACKUP_S3_SECRET_KEY:-}
+      BACKUPS_ENABLED: ${BACKUPS_ENABLED:-true}
+      BACKUP_HOUR_UTC: ${BACKUP_HOUR_UTC:-9}
+      BACKUP_KEEP_DAILY: ${BACKUP_KEEP_DAILY:-14}
+      BACKUP_KEEP_WEEKLY: ${BACKUP_KEEP_WEEKLY:-8}
+      BACKUP_KEEP_MONTHLY: ${BACKUP_KEEP_MONTHLY:-12}
+      # Comma-separated emails of company admins who may see storage and backup status (Integrations page).
+      PLATFORM_ADMINS: ${PLATFORM_ADMINS:-}
 
   web:
     build:
@@ -81,5 +138,6 @@ services:
 
 volumes:
   pgdata:
+  rustfs_data:
   caddy_data:
   caddy_config:

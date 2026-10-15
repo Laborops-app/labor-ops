@@ -10,6 +10,7 @@ import { authRoutes } from './routes/auth';
 import { crewRoutes } from './routes/crew';
 import { reviewRoutes } from './routes/reviews';
 import { pipelineRoutes } from './routes/pipeline';
+import { platformRoutes } from './routes/platform';
 import { eventRoutes } from './routes/events';
 import { timeRoutes } from './routes/time';
 import { skillRoutes } from './routes/skills';
@@ -70,6 +71,7 @@ export async function buildApp() {
   await app.register(crewRoutes);
   await app.register(reviewRoutes);
   await app.register(pipelineRoutes);
+  await app.register(platformRoutes);
   await app.register(eventRoutes);
   await app.register(timeRoutes);
   await app.register(schedulingRoutes);

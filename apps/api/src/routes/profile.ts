@@ -3,6 +3,8 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
 import { authenticate, guard } from '../auth';
+import { saveCertFile } from '../files';
+import { fileBody } from '../storage';
 
 const uuid = z.string().uuid();
 const idParam = z.object({ id: uuid });
@@ -129,12 +131,7 @@ export async function profileRoutes(app: FastifyInstance) {
     const ok = await withTenant(req.user.tid, async (c) => {
       const cert = (await c.query('SELECT verified FROM user_certs WHERE id = $1 AND user_id = $2', [id, req.user.sub])).rows[0];
       if (!cert) return false;
-      await c.query(
-        `INSERT INTO cert_files (tenant_id, cert_id, filename, content_type, size, data) VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (cert_id) DO UPDATE SET filename = EXCLUDED.filename, content_type = EXCLUDED.content_type,
-           size = EXCLUDED.size, data = EXCLUDED.data, uploaded_at = now()`,
-        [req.user.tid, id, safeName, type, body.length, body],
-      );
+      await saveCertFile(c, req.user.tid, id, safeName, type, body);
       // A new document means the manager should look at it again.
       await c.query('UPDATE user_certs SET verified = false WHERE id = $1', [id]);
       await audit(c, req.user.tid, req.user.sub, 'cert.upload', 'cert', id, { size: body.length, type });
@@ -153,12 +150,7 @@ export async function profileRoutes(app: FastifyInstance) {
     if (!type) return reply.code(400).send({ error: 'That file is not a PDF, PNG or JPG' });
     const ok = await withTenant(req.user.tid, async (c) => {
       if (!(await c.query('SELECT 1 FROM user_certs WHERE id = $1', [id])).rowCount) return false;
-      await c.query(
-        `INSERT INTO cert_files (tenant_id, cert_id, filename, content_type, size, data) VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (cert_id) DO UPDATE SET filename = EXCLUDED.filename, content_type = EXCLUDED.content_type,
-           size = EXCLUDED.size, data = EXCLUDED.data, uploaded_at = now()`,
-        [req.user.tid, id, filename.replace(/[\\/\r\n"]/g, '_'), type, body.length, body],
-      );
+      await saveCertFile(c, req.user.tid, id, filename.replace(/[\\/\r\n"]/g, '_'), type, body);
       await audit(c, req.user.tid, req.user.sub, 'cert.upload', 'cert', id, { size: body.length, type, by: 'coordinator' });
       return true;
     });
@@ -171,7 +163,7 @@ export async function profileRoutes(app: FastifyInstance) {
     const row = await withTenant(req.user.tid, async (c) => {
       const r = (
         await c.query(
-          `SELECT f.filename, f.content_type, f.data, k.user_id FROM cert_files f JOIN user_certs k ON k.id = f.cert_id WHERE k.id = $1`,
+          `SELECT f.filename, f.content_type, f.data, f.storage_key, k.user_id FROM cert_files f JOIN user_certs k ON k.id = f.cert_id WHERE k.id = $1`,
           [id],
         )
       ).rows[0];
@@ -186,6 +178,6 @@ export async function profileRoutes(app: FastifyInstance) {
       .header('x-content-type-options', 'nosniff')
       .header('content-security-policy', "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox")
       .header('cache-control', 'private, no-store')
-      .send(row.data);
+      .send(await fileBody('documents', row));
   });
 }

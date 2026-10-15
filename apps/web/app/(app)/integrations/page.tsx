@@ -4,6 +4,8 @@ import { useSearchParams } from 'next/navigation';
 import Shell from '@/components/Shell';
 import Panel from '@/components/Panel';
 import AccountingPanels from '@/components/AccountingPanels';
+import StoragePanel from '@/components/StoragePanel';
+import type { Me } from '@/lib/api';
 import { Banner } from '@/components/ui';
 import { api } from '@/lib/api';
 
@@ -128,7 +130,7 @@ function Academy() {
   );
 }
 
-function Body() {
+function Body({ me }: { me: Me }) {
   const params = useSearchParams();
   const [s, setS] = useState<St | null>(null);
   const [token, setToken] = useState('');
@@ -214,6 +216,12 @@ function Body() {
       </Panel>
       <Academy />
       <AccountingPanels qbo={params.get('qbo')} />
+      {me.platformAdmin && (
+        <>
+          <h2 className="panel-group-title">Platform</h2>
+          <StoragePanel />
+        </>
+      )}
     </>
   );
 }
@@ -221,9 +229,9 @@ function Body() {
 export default function Page() {
   return (
     <Shell roles={['admin']}>
-      {() => (
+      {(me) => (
         <Suspense fallback={<div className="muted">Loading…</div>}>
-          <Body />
+          <Body me={me} />
         </Suspense>
       )}
     </Shell>

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
+import { fileBody, storeFile } from '../storage';
 import { authenticate, guard } from '../auth';
 import { notify } from '../notify';
 
@@ -338,12 +339,14 @@ export async function chatRoutes(app: FastifyInstance) {
         const ch = await myChannel(c, id, req.user.sub);
         if (!ch) return null;
         const preview = q.caption || `📎 ${filename}`;
+        const type = img ?? 'application/octet-stream';
+        const stored = await storeFile('chat', req.user.tid, filename, type, data);
         const msg = await postMessage(c, req.user, ch, q.caption, preview);
         const f = (
           await c.query(
-            `INSERT INTO chat_attachments (tenant_id, channel_id, message_id, user_id, filename, content_type, kind, size, data)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, filename, kind, size, content_type`,
-            [req.user.tid, id, msg.id, req.user.sub, filename, img ?? 'application/octet-stream', img ? 'image' : 'file', data.length, data],
+            `INSERT INTO chat_attachments (tenant_id, channel_id, message_id, user_id, filename, content_type, kind, size, data, storage_key)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id, filename, kind, size, content_type`,
+            [req.user.tid, id, msg.id, req.user.sub, filename, type, img ? 'image' : 'file', data.length, stored.data, stored.key],
           )
         ).rows[0];
         return { message: { ...msg, user_id: req.user.sub, user_name: req.user.name, user_role: req.user.role, deleted: false, body: q.caption, files: [f] } };
@@ -359,7 +362,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const f = await withTenant(req.user.tid, async (c) => {
       const row = (
         await c.query(
-          `SELECT f.filename, f.content_type, f.kind, f.data, f.channel_id FROM chat_attachments f JOIN chat_messages x ON x.id = f.message_id
+          `SELECT f.filename, f.content_type, f.kind, f.data, f.storage_key, f.channel_id FROM chat_attachments f JOIN chat_messages x ON x.id = f.message_id
             WHERE f.id = $1 AND x.deleted_at IS NULL`,
           [id],
         )
@@ -374,7 +377,7 @@ export async function chatRoutes(app: FastifyInstance) {
     reply.header('x-content-type-options', 'nosniff');
     reply.header('content-security-policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox");
     reply.header('cache-control', 'private, max-age=86400');
-    return reply.send(f.data);
+    return reply.send(await fileBody('chat', f));
   });
 
   // The conversation's shared files, newest first (the details panel).
