@@ -231,15 +231,22 @@ export async function customerRoutes(app: FastifyInstance) {
         }
       }
       if (b.includeShifts) {
+        const shiftMap = new Map<string, string>();
+        const leadLinks: [string, string][] = [];
         for (const s of (await c.query('SELECT * FROM shifts WHERE event_id = $1 ORDER BY starts_at', [id])).rows) {
           // shift by calendar days in the company time zone so the wall-clock times survive daylight saving changes
-          await c.query(
+          const ns = await c.query(
             `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs, phase_id, pay_type)
-             VALUES ($1,$2,$3, (($4::timestamptz AT TIME ZONE $9) + make_interval(days => $10)) AT TIME ZONE $9, (($5::timestamptz AT TIME ZONE $9) + make_interval(days => $10)) AT TIME ZONE $9, $6,$7,$8, $11, $12)`,
+             VALUES ($1,$2,$3, (($4::timestamptz AT TIME ZONE $9) + make_interval(days => $10)) AT TIME ZONE $9, (($5::timestamptz AT TIME ZONE $9) + make_interval(days => $10)) AT TIME ZONE $9, $6,$7,$8, $11, $12) RETURNING id`,
             [req.user.tid, ev.id, s.role_name, s.starts_at, s.ends_at, s.headcount, false, s.required_certs, tz, off, s.phase_id ? phaseMap.get(s.phase_id) ?? null : null, s.pay_type],
           );
+          shiftMap.set(s.id, ns.rows[0].id);
+          if (s.lead_shift_id) leadLinks.push([s.id, s.lead_shift_id]);
           shifts++;
         }
+        // Keep which crew shifts each lead shift leads.
+        for (const [crewShift, leadShift] of leadLinks)
+          if (shiftMap.get(leadShift)) await c.query('UPDATE shifts SET lead_shift_id = $2 WHERE id = $1', [shiftMap.get(crewShift), shiftMap.get(leadShift)]);
       }
       if (phases) {
         // the event's dates follow its phases

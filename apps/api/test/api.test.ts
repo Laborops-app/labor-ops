@@ -1147,16 +1147,17 @@ test('events: client and address editing, phases (load-in, show, strike) drive t
   const st = (await call(a, 'POST', `/api/events/${ev.id}/phases`, { label: 'Strike', startDate: '2030-05-13', endDate: '2030-05-13' })).json.phase;
   assert.equal((await call(a, 'POST', `/api/events/${ev.id}/phases`, { label: 'Bad', startDate: '2030-05-13', endDate: '2030-05-12' })).status, 400);
   let d = (await call(a, 'GET', `/api/events/${ev.id}`)).json;
-  assert.deepEqual(d.phases.map((p: any) => p.label), ['Load in', 'Show days', 'Strike']);
+  // one phase per day
+  assert.deepEqual(d.phases.map((p: any) => p.label), ['Load in', 'Load in', 'Show days', 'Show days', 'Show days', 'Strike']);
   assert.equal(d.event.start_date.slice(0, 10), '2030-05-08');
   assert.equal(d.event.end_date.slice(0, 10), '2030-05-13');
-  // dates follow phases, direct date edits are ignored while phases exist
-  await call(a, 'PATCH', `/api/events/${ev.id}`, { startDate: '2030-01-01', endDate: '2030-01-02' });
-  assert.equal((await call(a, 'GET', `/api/events/${ev.id}`)).json.event.start_date.slice(0, 10), '2030-05-08');
-  await call(a, 'PATCH', `/api/event-phases/${st.id}`, { label: 'Strike', startDate: '2030-05-14', endDate: '2030-05-15' });
-  assert.equal((await call(a, 'GET', `/api/events/${ev.id}`)).json.event.end_date.slice(0, 10), '2030-05-15');
-  await call(a, 'DELETE', `/api/event-phases/${st.id}`);
-  assert.equal((await call(a, 'GET', `/api/events/${ev.id}`)).json.event.end_date.slice(0, 10), '2030-05-12');
+  // moving the start moves the phases too
+  await call(a, 'PATCH', `/api/events/${ev.id}`, { startDate: '2030-05-09', endDate: '2030-05-14' });
+  assert.equal((await call(a, 'GET', `/api/events/${ev.id}`)).json.event.start_date.slice(0, 10), '2030-05-09');
+  await call(a, 'PATCH', `/api/event-phases/${st.id}`, { label: 'Strike', startDate: '2030-05-15', endDate: '2030-05-16' });
+  assert.equal((await call(a, 'GET', `/api/events/${ev.id}`)).json.event.end_date.slice(0, 10), '2030-05-16');
+  for (const p of (await call(a, 'GET', `/api/events/${ev.id}`)).json.phases.filter((x: any) => x.label === 'Strike')) await call(a, 'DELETE', `/api/event-phases/${p.id}`);
+  assert.equal((await call(a, 'GET', `/api/events/${ev.id}`)).json.event.end_date.slice(0, 10), '2030-05-13');
 
   // other companies cannot touch them
   const b = await register('evpB');
@@ -2241,7 +2242,7 @@ test('copy event: dates shift, phases and shifts come along, crew do not', async
   const d = (await call(a, 'GET', `/api/events/${cp.json.event.id}`)).json;
   assert.equal(d.event.name, 'Gala 2031');
   assert.equal(d.event.venue, 'Hall');
-  assert.equal(d.phases.length, 1);
+  assert.equal(d.phases.length, 2); // a two-day phase is two day phases
   assert.equal(d.phases[0].starts_on.slice(0, 10), '2031-05-09');
   assert.equal(d.shifts.length, 1);
   assert.equal(d.shifts[0].role_name, 'Audio A1');
@@ -2953,7 +2954,7 @@ test('crew picker: shows who is already booked that day, also for a shift not cr
   assert.equal((await call(c1.session, 'GET', `/api/events/${ev}/candidates?startsAt=${encodeURIComponent('2032-05-03T19:00:00Z')}&endsAt=${encodeURIComponent('2032-05-03T23:00:00Z')}`)).status, 403);
 });
 
-test('event dates: changing the start moves phases and shifts; changing the end stretches the last phase', async () => {
+test('event dates: changing the start moves phases and shifts; changing the end adds or drops day phases', async () => {
   const a = await register('evmove');
   const c1 = await mkCrew(a, 'em1');
   const ev = (await call(a, 'POST', '/api/events', { name: 'Arena', startDate: '2033-10-16', endDate: '2033-10-17' })).json.event.id as string;
@@ -2969,18 +2970,72 @@ test('event dates: changing the start moves phases and shifts; changing the end 
   assert.deepEqual(det.phases.map((p: any) => [p.id, p.starts_on.slice(0, 10), p.ends_on.slice(0, 10)]), [[p1, '2033-10-19', '2033-10-19'], [p2, '2033-10-20', '2033-10-20']]);
   assert.equal(new Date(det.shifts[0].starts_at).toISOString(), '2033-10-19T13:00:00.000Z');
   assert.ok(JSON.stringify((await call(c1.session, 'GET', '/api/notifications')).json).includes('Time changed'));
-  // Longer: the last phase stretches
+  // Longer: a day phase per extra day, named like the last one
   await call(a, 'PATCH', `/api/events/${ev}`, { endDate: '2033-10-22' });
   const d2 = (await call(a, 'GET', `/api/events/${ev}`)).json;
-  assert.equal(d2.phases.find((p: any) => p.id === p2).ends_on.slice(0, 10), '2033-10-22');
+  assert.deepEqual(d2.phases.filter((p: any) => p.label === 'Show').map((p: any) => p.starts_on.slice(0, 10)), ['2033-10-20', '2033-10-21', '2033-10-22']);
   assert.equal(d2.event.end_date.slice(0, 10), '2033-10-22');
-  // Ending before the last phase starts is refused, and nothing moves
-  const bad = await call(a, 'PATCH', `/api/events/${ev}`, { startDate: '2033-10-19', endDate: '2033-10-19' });
+  // Ending before a day that has shifts is refused, and nothing moves
+  const day21 = d2.phases.find((p: any) => p.label === 'Show' && p.starts_on.slice(0, 10) === '2033-10-21').id;
+  await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Loader', startsAt: '2033-10-21T13:00:00Z', endsAt: '2033-10-21T21:00:00Z', headcount: 1, phaseId: day21 });
+  const bad = await call(a, 'PATCH', `/api/events/${ev}`, { startDate: '2033-10-18', endDate: '2033-10-19' });
   assert.equal(bad.status, 400);
-  assert.equal((await call(a, 'GET', `/api/events/${ev}`)).json.event.end_date.slice(0, 10), '2033-10-22');
+  assert.match(bad.json.error, /still has shifts/);
+  assert.equal((await call(a, 'GET', `/api/events/${ev}`)).json.event.start_date.slice(0, 10), '2033-10-19');
+  // Empty days at the end are dropped
+  await call(a, 'PATCH', `/api/events/${ev}`, { endDate: '2033-10-21' });
+  assert.equal((await call(a, 'GET', `/api/events/${ev}`)).json.phases.filter((p: any) => p.label === 'Show').length, 2);
   // Without phases, shifts can be left where they are
   const ev2 = (await call(a, 'POST', '/api/events', { name: 'Solo', startDate: '2033-11-01', endDate: '2033-11-01' })).json.event.id as string;
   const s2 = (await call(a, 'POST', `/api/events/${ev2}/shifts`, { roleName: 'Loader', startsAt: '2033-11-01T13:00:00Z', endsAt: '2033-11-01T21:00:00Z', headcount: 1 })).json.shift.id;
   await call(a, 'PATCH', `/api/events/${ev2}`, { startDate: '2033-11-03', endDate: '2033-11-03', moveShifts: false });
   assert.equal(new Date((await call(a, 'GET', `/api/events/${ev2}`)).json.shifts.find((s: any) => s.id === s2).starts_at).toISOString(), '2033-11-01T13:00:00.000Z');
+});
+
+test('phases are one day each; a lead shift can be linked to the crew shifts it leads', async () => {
+  const a = await register('daysplit');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Expo', startDate: '2034-03-01', endDate: '2034-03-01' })).json.event.id as string;
+  const made = await call(a, 'POST', `/api/events/${ev}/phases`, { label: 'Show days', startDate: '2034-03-01', endDate: '2034-03-03' });
+  assert.equal(made.status, 201, made.text);
+  assert.deepEqual(made.json.phases.map((p: any) => [p.label, p.starts_on, p.ends_on]), [['Show days', '2034-03-01', '2034-03-01'], ['Show days', '2034-03-02', '2034-03-02'], ['Show days', '2034-03-03', '2034-03-03']]);
+  // Editing a phase into two days: shifts on the second day go to the new day's phase
+  const lin = (await call(a, 'POST', `/api/events/${ev}/phases`, { label: 'Load in', startDate: '2034-02-27', endDate: '2034-02-27' })).json.phase.id;
+  const day2 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Loader', startsAt: '2034-02-28T15:00:00Z', endsAt: '2034-02-28T20:00:00Z', headcount: 1, phaseId: lin })).json.shift.id;
+  const ed = await call(a, 'PATCH', `/api/event-phases/${lin}`, { label: 'Load in', startDate: '2034-02-27', endDate: '2034-02-28' });
+  assert.equal(ed.json.phase.addedDays, 1);
+  let det = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  const lin2 = det.phases.find((p: any) => p.label === 'Load in' && p.starts_on.slice(0, 10) === '2034-02-28');
+  assert.ok(lin2);
+  assert.equal(det.shifts.find((s: any) => s.id === day2).phase_id, lin2.id);
+  // Extending the event adds a day phase named like the last; shortening drops empty ones
+  await call(a, 'PATCH', `/api/events/${ev}`, { endDate: '2034-03-04' });
+  det = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  assert.equal(det.phases.filter((p: any) => p.label === 'Show days').length, 4);
+  await call(a, 'PATCH', `/api/events/${ev}`, { endDate: '2034-03-02' });
+  det = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  assert.equal(det.phases.filter((p: any) => p.label === 'Show days').length, 2);
+  assert.ok(det.phases.every((p: any) => p.starts_on.slice(0, 10) === p.ends_on.slice(0, 10)));
+
+  // Lead links
+  const lead = await mkCrew(a, 'ds-lead'), pu = await mkCrew(a, 'ds-push'), lo = await mkCrew(a, 'ds-load'), other = await mkCrew(a, 'ds-other');
+  const ev2 = (await call(a, 'POST', '/api/events', { name: 'Load-out', startDate: '2030-01-01', endDate: '2030-01-03' })).json.event.id as string;
+  const mk = async (roleName: string) => (await call(a, 'POST', `/api/events/${ev2}/shifts`, { roleName, startsAt: start(-1), endsAt: start(6), headcount: 2 })).json.shift.id as string;
+  const sLead = await mk('Stage Hand Lead'), sPush = await mk('Pusher'), sLoad = await mk('Loader'), sAudio = await mk('Audio');
+  for (const [s, u] of [[sLead, lead], [sPush, pu], [sLoad, lo], [sAudio, other]] as const) await call(a, 'POST', `/api/shifts/${s}/assign`, { userId: u.id, confirmed: true, lead: s === sLead });
+  // Not linked and no department: the lead only has their own shift
+  const names = async () => (await call(lead.session, 'GET', `/api/onsite/events/${ev2}`)).json.shifts.flatMap((s: any) => s.crew.map((x: any) => x.name)).sort();
+  assert.deepEqual(await names(), ['Crew ds-lead']);
+  assert.equal((await call(lead.session, 'PUT', `/api/shifts/${sLead}/team`, { shiftIds: [sPush] })).status, 403);
+  const link = await call(a, 'PUT', `/api/shifts/${sLead}/team`, { shiftIds: [sPush, sLoad] });
+  assert.equal(link.status, 200, link.text);
+  assert.equal(link.json.linked, 2);
+  assert.deepEqual(await names(), ['Crew ds-lead', 'Crew ds-load', 'Crew ds-push']);
+  const det2 = (await call(a, 'GET', `/api/events/${ev2}`)).json;
+  assert.equal(det2.shifts.find((s: any) => s.id === sPush).lead_shift_id, sLead);
+  // Other events' shifts and chains are refused; unlinking narrows the team again
+  assert.equal((await call(a, 'PUT', `/api/shifts/${sLead}/team`, { shiftIds: [day2] })).status, 400);
+  assert.equal((await call(a, 'PUT', `/api/shifts/${sAudio}/team`, { shiftIds: [sLead] })).status, 400);
+  await call(a, 'PUT', `/api/shifts/${sLead}/team`, { shiftIds: [sPush] });
+  assert.deepEqual(await names(), ['Crew ds-lead', 'Crew ds-push']);
+  assert.equal((await call(lead.session, 'POST', `/api/onsite/assignments/${det2.shifts.find((s: any) => s.id === sLoad).assignments[0].id}/check-in`)).status, 404);
 });

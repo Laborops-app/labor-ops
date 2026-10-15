@@ -20,7 +20,7 @@ const note = z.string().trim().max(1000).nullable().optional().transform((s) => 
 const DAYS_AFTER = 14;
 
 type MyShift = { shift_id: string; role_name: string; starts_at: Date; ends_at: Date; is_lead: boolean };
-type ShiftRow = { id: string; role_name: string; starts_at: Date; ends_at: Date };
+type ShiftRow = { id: string; role_name: string; starts_at: Date; ends_at: Date; lead_shift_id?: string | null };
 type Scope = { kind: 'coordinator' | 'lead'; mine: MyShift[]; teams: string[]; covers: (s: ShiftRow) => boolean };
 
 /** Field permissions of an active crew member (null for staff or inactive people). */
@@ -45,11 +45,21 @@ async function scopeFor(c: PoolClient, uid: string, eventId: string): Promise<Sc
   const leads = mine.filter((m) => m.is_lead);
   if (!leads.length) return null;
   const dept = await loadDepartments(c);
+  // A lead shift with linked crew shifts leads exactly those; otherwise its department on overlapping times.
+  const links = (await c.query('SELECT id, lead_shift_id FROM shifts WHERE lead_shift_id = ANY($1::uuid[])', [leads.map((m) => m.shift_id)])).rows as { id: string; lead_shift_id: string }[];
+  const linked = new Map<string, Set<string>>();
+  for (const l of links) linked.set(l.lead_shift_id, (linked.get(l.lead_shift_id) ?? new Set()).add(l.id));
   return {
     kind: 'lead',
     mine,
     teams: [...new Set(leads.map((m) => dept.nameOf(m.role_name)))],
-    covers: (s) => leads.some((m) => dept.of(m.role_name) === dept.of(s.role_name) && +s.starts_at < +m.ends_at && +s.ends_at > +m.starts_at),
+    covers: (s) =>
+      leads.some((m) => {
+        if (s.id === m.shift_id) return true;
+        const team = linked.get(m.shift_id);
+        if (team) return team.has(s.id);
+        return dept.of(m.role_name) === dept.of(s.role_name) && +s.starts_at < +m.ends_at && +s.ends_at > +m.starts_at;
+      }),
   };
 }
 

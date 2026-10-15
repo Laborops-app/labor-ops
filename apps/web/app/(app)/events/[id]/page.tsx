@@ -38,6 +38,7 @@ const pickOption = (m: Member, e: Elig | undefined, stars: number, sub?: string,
 };
 type Shift = {
   id: string;
+  lead_shift_id?: string | null;
   role_name: string;
   starts_at: string;
   ends_at: string;
@@ -61,6 +62,7 @@ type Detail = { event: EventFull; shifts: Shift[]; phases: Phase[]; overtime?: O
 type Member = { id: string; name: string; role: string; skills: string[]; active: boolean; ratings?: Record<string, number>; no_show_count?: number; no_rehire_count?: number };
 const times = (n: number) => (n === 1 ? '' : ` ×${n}`);
 /** Short warning for the crew picker, from past reviews. */
+const LEAD_ROLE = /(\(\s*lead\s*\)|\blead)\s*$/i;
 const flagOf = (m: Member) => [m.no_rehire_count ? `Do not rehire${times(m.no_rehire_count)}` : '', m.no_show_count ? `No-show${times(m.no_show_count)}` : ''].filter(Boolean).join(' · ') || undefined;
 type TplItem = { role: string; section?: string; dayOffset: number; start: string; end: string; headcount: number; isOpen: boolean; requiredCerts: string[] };
 type Template = { id: string; name: string; items: TplItem[]; customer_id?: string | null };
@@ -103,6 +105,25 @@ function Body({ me }: { me: Me }) {
   const [timeEdit, setTimeEdit] = useState<{ id: string; role: string; start: string; end: string } | null>(null);
   const [phaseEdit, setPhaseEdit] = useState<{ id: string; label: string; start: string; end: string; move: boolean } | null>(null);
   const formDated = useRef(false);
+  // Collapsed phases on this event, remembered in this browser.
+  const [closed, setClosed] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    try {
+      setClosed(new Set(JSON.parse(localStorage.getItem(`lo_phase_closed:${id}`) ?? '[]')));
+    } catch {
+      /* storage blocked */
+    }
+  }, [id]);
+  const setClosedSaved = (next: Set<string>) => {
+    setClosed(next);
+    try {
+      localStorage.setItem(`lo_phase_closed:${id}`, JSON.stringify([...next]));
+    } catch {
+      /* storage blocked */
+    }
+  };
+  // Linking crew shifts to a lead shift: the shift being edited and the shifts ticked.
+  const [teamEdit, setTeamEdit] = useState<{ id: string; picked: Set<string> } | null>(null);
   // Who is free for the shift being added (checked against its date, time and certificates while the picker is open).
   const [newElig, setNewElig] = useState<Map<string, Elig> | null>(null);
   // "Confirm automatically": crew are put straight on the shift instead of being asked to accept. Remembered on this device.
@@ -401,6 +422,65 @@ function Body({ me }: { me: Me }) {
   if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
   const ev = d.event;
 
+  const shortWhen = (iso: string) => `${new Date(iso).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}, ${fmtTime(iso)}`;
+  const isLeadShift = (s: Shift) => LEAD_ROLE.test(s.role_name) || s.assignments.some((a) => a.is_lead) || d.shifts.some((x) => x.lead_shift_id === s.id);
+  /** Lead shifts: which crew shifts they lead (linked), with a picker to change it. */
+  const teamRow = (s: Shift) => {
+    if (!isLeadShift(s)) return null;
+    const team = d.shifts.filter((x) => x.lead_shift_id === s.id);
+    const open = () => {
+      let picked = new Set(team.map((t) => t.id));
+      if (!picked.size) {
+        // Suggest the shifts in the lead's department (Roles & rates group) that overlap the lead shift.
+        const base = s.role_name.replace(LEAD_ROLE, '').trim().toLowerCase();
+        const sec = skillSections.find((x) => x.roles.some((r) => r.toLowerCase() === s.role_name.toLowerCase()) || x.label.toLowerCase() === base);
+        const inDept = (role: string) => (sec ? sec.roles.some((r) => roleKey(r) === roleKey(role)) : roleKey(role) === base);
+        picked = new Set(d.shifts.filter((x) => x.id !== s.id && !LEAD_ROLE.test(x.role_name) && inDept(x.role_name) && new Date(x.starts_at) < new Date(s.ends_at) && new Date(x.ends_at) > new Date(s.starts_at)).map((x) => x.id));
+      }
+      setTeamEdit({ id: s.id, picked });
+    };
+    if (teamEdit?.id === s.id) {
+      const leadsOthers = new Set(d.shifts.map((x) => x.lead_shift_id).filter(Boolean) as string[]);
+      const day = s.starts_at.slice(0, 10);
+      const options = d.shifts
+        .filter((x) => x.id !== s.id && !leadsOthers.has(x.id))
+        .sort((a, b) => Number(b.starts_at.slice(0, 10) === day) - Number(a.starts_at.slice(0, 10) === day) || a.starts_at.localeCompare(b.starts_at) || a.role_name.localeCompare(b.role_name));
+      return (
+        <div className="team-edit">
+          <b className="small">Which crew shifts does this lead lead?</b>
+          <p className="muted small" style={{ margin: '2px 0 6px' }}>The lead checks in and rates exactly the crew on the shifts you tick. Leave all unticked to use their department on overlapping times.</p>
+          <div className="team-list">
+            {options.length === 0 && <span className="muted small">No other shifts on this event yet.</span>}
+            {options.map((x) => {
+              const other = x.lead_shift_id && x.lead_shift_id !== s.id ? d.shifts.find((y) => y.id === x.lead_shift_id) : null;
+              const on = teamEdit.picked.has(x.id);
+              return (
+                <label key={x.id} className="check team-opt">
+                  <input type="checkbox" checked={on} onChange={() => { const n = new Set(teamEdit.picked); if (on) n.delete(x.id); else n.add(x.id); setTeamEdit({ ...teamEdit, picked: n }); }} />
+                  <span>
+                    <b>{x.role_name}</b> <span className="muted small">{shortWhen(x.starts_at)}–{fmtTime(x.ends_at)} · {x.assignments.filter((a) => a.status !== 'declined').length}/{x.headcount}</span>
+                    {other && <span className="muted small"> · now led by {other.role_name}</span>}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          <div className="row" style={{ gap: 6, marginTop: 6 }}>
+            <button type="button" className="btn small primary" onClick={() => run(() => api(`/api/shifts/${s.id}/team`, { method: 'PUT', body: { shiftIds: [...teamEdit.picked] } }), teamEdit.picked.size ? `Linked ${teamEdit.picked.size} shift${teamEdit.picked.size === 1 ? '' : 's'} to ${s.role_name}.` : `${s.role_name} now leads its department.`).then((ok) => ok && setTeamEdit(null))}>Save</button>
+            <button type="button" className="btn ghost small" onClick={() => setTeamEdit(null)}>Cancel</button>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="team-row">
+        <span className="small"><b>Leads:</b></span>
+        {team.length ? team.map((t) => <span key={t.id} className="chip">{t.role_name} · {shortWhen(t.starts_at)}</span>) : <span className="muted small">its department, on overlapping times</span>}
+        <button type="button" className="btn ghost small" onClick={open}>{team.length ? 'Change team' : 'Link crew shifts'}</button>
+      </div>
+    );
+  };
+
   const renderShifts = (list: Shift[]) =>
     list.map((s) => {
           const active = s.assignments.filter((a) => a.status !== 'declined');
@@ -500,7 +580,12 @@ function Body({ me }: { me: Me }) {
                         {c}
                       </span>
                     ))}
+                    {s.lead_shift_id && (() => {
+                      const l = d.shifts.find((x) => x.id === s.lead_shift_id);
+                      return l ? <span className="chip lead-chip" title="The lead on that shift checks in and rates this shift's crew">Led by {l.role_name} · {shortWhen(l.starts_at)}</span> : null;
+                    })()}
                   </div>
+                  {teamRow(s)}
                 </div>
                 <div className="row">
                   <span className={`pill ${full ? 'accepted' : 'offered'}`}>
@@ -516,7 +601,7 @@ function Body({ me }: { me: Me }) {
                       <option value="">No phase</option>
                       {d.phases.map((p) => (
                         <option key={p.id} value={p.id}>
-                          {p.label}
+                          {p.label} · {fmtDate(p.starts_on.slice(0, 10))}
                         </option>
                       ))}
                     </select>
@@ -688,14 +773,27 @@ function Body({ me }: { me: Me }) {
             </form>
           ) : (
           <>
-          <div>
-            <h2>{g.phase ? g.phase.label : 'Not in a phase'}</h2>
-            {g.phase && (
+          <button
+            type="button"
+            className="phase-toggle"
+            aria-expanded={!closed.has(g.key)}
+            title={closed.has(g.key) ? 'Show the shifts in this phase' : 'Hide the shifts in this phase'}
+            onClick={() => { const n = new Set(closed); if (n.has(g.key)) n.delete(g.key); else n.add(g.key); setClosedSaved(n); }}
+          >
+            <svg className="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+            <span>
+              <h2>{g.phase ? g.phase.label : 'Not in a phase'}</h2>
               <span className="muted small">
-                {g.phase.starts_on.slice(0, 10) === g.phase.ends_on.slice(0, 10) ? fmtDate(g.phase.starts_on.slice(0, 10)) : `${fmtDate(g.phase.starts_on.slice(0, 10))} – ${fmtDate(g.phase.ends_on.slice(0, 10))}`} · {g.shifts.length} shift{g.shifts.length === 1 ? '' : 's'}
+                {g.phase && <>{g.phase.starts_on.slice(0, 10) === g.phase.ends_on.slice(0, 10) ? fmtDate(g.phase.starts_on.slice(0, 10)) : `${fmtDate(g.phase.starts_on.slice(0, 10))} – ${fmtDate(g.phase.ends_on.slice(0, 10))}`} · </>}
+                {g.shifts.length} shift{g.shifts.length === 1 ? '' : 's'}
+                {g.shifts.length > 0 && (() => {
+                  const need = g.shifts.reduce((n, x) => n + x.headcount, 0);
+                  const have = g.shifts.reduce((n, x) => n + Math.min(x.headcount, x.assignments.filter((a) => a.status !== 'declined').length), 0);
+                  return ` · ${have}/${need} filled`;
+                })()}
               </span>
-            )}
-          </div>
+            </span>
+          </button>
           {g.phase && (
             <div className="row" style={{ gap: 6 }}>
               <button className="btn small primary" onClick={() => addToPhase(g.phase!)}>
@@ -713,7 +811,7 @@ function Body({ me }: { me: Me }) {
           )}
         </div>
       )}
-      {g.shifts.length === 0 ? <Empty>{g.phase ? `No shifts in ${g.phase.label} yet.` : 'No shifts yet. Add the first one above.'}</Empty> : renderShifts(g.shifts)}
+      {closed.has(g.key) ? null : g.shifts.length === 0 ? <Empty>{g.phase ? `No shifts in ${g.phase.label} yet.` : 'No shifts yet. Add the first one above.'}</Empty> : renderShifts(g.shifts)}
     </div>
   );
 
@@ -839,8 +937,13 @@ function Body({ me }: { me: Me }) {
       )}
 
       <EventDetails ev={ev} hasPhases={d.phases.length > 0} shiftCount={d.shifts.length} onSaved={load} onError={setError} />
-      {(
-        <>{groups.map((g) => groupSection(g))}</>      )}
+      {groups.length > 1 && (
+        <div className="row phase-all">
+          <button type="button" className="btn ghost small" onClick={() => setClosedSaved(new Set())} disabled={closed.size === 0}>Expand all</button>
+          <button type="button" className="btn ghost small" onClick={() => setClosedSaved(new Set(groups.map((g) => g.key)))}>Collapse all</button>
+        </div>
+      )}
+      {groups.map((g) => groupSection(g))}
       </div>
       <aside className="split-aside">
       <section className="card aside-form" ref={shiftForm}>

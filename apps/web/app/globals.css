@@ -1690,3 +1690,16 @@ a.cs-co:hover b { color: var(--primary); }
 .crew-pick { width: min(400px, calc(100vw - 32px)); }
 .pick-unrated { color: var(--muted); font-size: 12px; margin-left: 4px; }
 .pick-more { margin-top: 6px; }
+/* collapsible phases */
+.phase-toggle { display: flex; align-items: flex-start; gap: 8px; appearance: none; border: 0; background: none; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.phase-toggle h2 { margin: 0; }
+.phase-toggle > span { display: flex; flex-direction: column; gap: 2px; }
+.phase-toggle .chev { margin-top: 6px; transition: transform .15s; color: var(--muted); flex-shrink: 0; }
+.phase-toggle[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.phase-all { justify-content: flex-end; gap: 4px; margin: 4px 0 -6px; }
+/* lead shift teams */
+.team-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.team-edit { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
+.team-list { display: grid; gap: 4px; max-height: 260px; overflow-y: auto; }
+.team-opt { display: flex; gap: 8px; align-items: flex-start; }
+.team-opt input { width: auto; margin-top: 3px; }

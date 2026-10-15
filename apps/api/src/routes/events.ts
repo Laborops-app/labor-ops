@@ -58,6 +58,26 @@ const shiftBody = z.object({
 
 const mgr = guard('admin', 'manager');
 
+// ---------- phases are one day each ----------
+/** YYYY-MM-DD plus n days. */
+export const addDays = (d: string, n: number) => new Date(Date.parse(`${d.slice(0, 10)}T12:00:00Z`) + n * 86400_000).toISOString().slice(0, 10);
+/** One phase per day from `from` to `to` (inclusive), all with the same name. Returns them in date order. */
+export async function addDayPhases(c: PoolClient, tid: string, eventId: string, label: string, from: string, to: string) {
+  const out: { id: string; label: string; starts_on: string; ends_on: string }[] = [];
+  for (let d = from; d <= to; d = addDays(d, 1)) {
+    out.push((await c.query("INSERT INTO event_phases (tenant_id, event_id, label, starts_on, ends_on) VALUES ($1,$2,$3,$4,$4) RETURNING id, label, to_char(starts_on,'YYYY-MM-DD') AS starts_on, to_char(ends_on,'YYYY-MM-DD') AS ends_on", [tid, eventId, label, d])).rows[0]);
+    if (out.length > 60) break; // a phase can't be longer than two months
+  }
+  return out;
+}
+/** Shifts in `fromPhase` that start on another day go to that day's phase (if it is in `days`). */
+async function spreadShifts(c: PoolClient, fromPhase: string, days: { id: string; starts_on: string }[]) {
+  if (!days.length) return;
+  const tz = (await c.query('SELECT timezone FROM tenants LIMIT 1')).rows[0]?.timezone ?? 'UTC';
+  for (const d of days)
+    await c.query('UPDATE shifts SET phase_id = $2 WHERE phase_id = $1 AND (starts_at AT TIME ZONE $4)::date = $3::date', [fromPhase, d.id, d.starts_on, tz]);
+}
+
 /** Offer a shift to one crew member: checks, assignment, notification and chat message. Shared by the assign and fill-from-group routes. */
 export async function assignCrew(c: PoolClient, tid: string, actorId: string, shiftId: string, userId: string, override?: boolean, confirmed?: boolean, acceptFlags?: boolean, lead?: boolean): Promise<{ code: number; [k: string]: unknown }> {
   const shift = (await c.query('SELECT * FROM shifts WHERE id = $1 FOR UPDATE', [shiftId])).rows[0];
@@ -395,19 +415,21 @@ export async function eventRoutes(app: FastifyInstance) {
     const row = await withTenant(req.user.tid, async (c) => {
       const cur = (await c.query("SELECT *, to_char(start_date,'YYYY-MM-DD') AS sd, to_char(end_date,'YYYY-MM-DD') AS ed FROM events WHERE id = $1", [eventId])).rows[0];
       if (!cur) return null;
-      const phases = (await c.query("SELECT id, to_char(starts_on,'YYYY-MM-DD') AS s, to_char(ends_on,'YYYY-MM-DD') AS e FROM event_phases WHERE event_id = $1 ORDER BY ends_on, starts_on", [eventId])).rows as { id: string; s: string; e: string }[];
+      const phases = (await c.query(
+        `SELECT p.id, p.label, to_char(p.starts_on,'YYYY-MM-DD') AS s, to_char(p.ends_on,'YYYY-MM-DD') AS e,
+                EXISTS (SELECT 1 FROM shifts x WHERE x.phase_id = p.id) AS has_shifts
+           FROM event_phases p WHERE p.event_id = $1 ORDER BY p.starts_on, p.created_at`, [eventId])).rows as { id: string; label: string; s: string; e: string; has_shifts: boolean }[];
       const startDate: string = b.startDate ?? cur.sd;
       const endDate: string = b.endDate ?? cur.ed;
       if (endDate < startDate) return { error: 'End date is before the start date' };
-      const shiftDay = (d: string, n: number) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86400_000).toISOString().slice(0, 10);
-      const dayMove = Math.round((Date.parse(`${startDate}T12:00:00Z`) - Date.parse(`${cur.sd}T12:00:00Z`)) / 86400_000);
-      if (phases.length) {
-        const last = phases[phases.length - 1];
-        if (endDate !== shiftDay(cur.ed, dayMove) && endDate < shiftDay(last.s, dayMove))
-          return { error: `The event can't end before its last phase (${last.s === last.e ? 'on' : 'starting'} ${shiftDay(last.s, dayMove)}) starts. Change or remove that phase first.` };
-      }
+      if (b.customerId && !(await c.query('SELECT 1 FROM customers WHERE id = $1', [b.customerId])).rowCount) return { error: 'Customer not found' };
       // Moving the start moves the whole event: its phases always, its shifts unless told not to (times of day stay).
       const days = Math.round((Date.parse(`${startDate}T12:00:00Z`) - Date.parse(`${cur.sd}T12:00:00Z`)) / 86400_000);
+      const moved = phases.map((p) => ({ ...p, s: addDays(p.s, days), e: addDays(p.e, days) }));
+      // A shorter event drops the day phases after the new end (only if nothing is planned in them).
+      const dropped = moved.filter((p) => p.s > endDate);
+      const busyDay = dropped.find((p) => p.has_shifts);
+      if (busyDay) return { error: `${busyDay.label} on ${busyDay.s} still has shifts. Move or delete them before ending the event earlier.` };
       if (days) {
         if (phases.length) await c.query('UPDATE event_phases SET starts_on = starts_on + $2::int, ends_on = ends_on + $2::int WHERE event_id = $1', [eventId, days]);
         if (b.moveShifts !== false) {
@@ -415,16 +437,17 @@ export async function eventRoutes(app: FastifyInstance) {
           for (const x of m.rows) await tellTimeChange(c, req.user.tid, x.id);
         }
       }
-      // A new end date stretches (or shortens) the last phase.
-      if (phases.length) {
-        const last = phases[phases.length - 1];
-        const lastStart = new Date(Date.parse(`${last.s}T12:00:00Z`) + days * 86400_000).toISOString().slice(0, 10);
-        const movedEnd = new Date(Date.parse(`${cur.ed}T12:00:00Z`) + days * 86400_000).toISOString().slice(0, 10);
-        if (endDate !== movedEnd) await c.query('UPDATE event_phases SET ends_on = $2 WHERE id = $1', [last.id, endDate]);
+      if (moved.length) {
+        if (dropped.length) await c.query('DELETE FROM event_phases WHERE id = ANY($1::uuid[])', [dropped.map((p) => p.id)]);
+        await c.query('UPDATE event_phases SET ends_on = $2 WHERE event_id = $1 AND ends_on > $2', [eventId, endDate]);
+        // A longer event gets one more phase per extra day, named like the last one.
+        const kept = moved.filter((p) => p.s <= endDate);
+        const last = kept[kept.length - 1];
+        const lastEnd = kept.reduce((m, p) => (p.e > m ? p.e : m), '');
+        if (last && endDate > lastEnd) await addDayPhases(c, req.user.tid, eventId, last.label, addDays(lastEnd, 1), endDate);
       }
       const pick = <T>(v: T | undefined, old: T) => (v === undefined ? old : v);
       const cust = b.customerId === undefined ? undefined : b.customerId ? (await c.query('SELECT id, name FROM customers WHERE id = $1', [b.customerId])).rows[0] ?? null : null;
-      if (b.customerId && !cust) return { error: 'Customer not found' };
       const r = await c.query(
         `UPDATE events SET name = $2, client = $3, venue = $4, address = $5, start_date = $6, end_date = $7, notes = $8, customer_id = $9 WHERE id = $1 RETURNING *`,
         [eventId, b.name ?? cur.name, (cust ? cust.name : pick(b.client, cur.client)) || null, pick(b.venue, cur.venue) || null, pick(b.address, cur.address) || null, startDate, endDate, pick(b.notes, cur.notes), cust === undefined ? cur.customer_id : cust?.id ?? null],
@@ -498,14 +521,15 @@ export async function eventRoutes(app: FastifyInstance) {
     const { id: eventId } = id.parse(req.params);
     const b = phaseBody.parse(req.body);
     if (b.endDate < b.startDate) return reply.code(400).send({ error: 'End date is before the start date' });
-    const row = await withTenant(req.user.tid, async (c) => {
+    // Longer than a day: one phase per day, with the same name.
+    const rows = await withTenant(req.user.tid, async (c) => {
       if (!(await c.query('SELECT 1 FROM events WHERE id = $1', [eventId])).rowCount) return null;
-      const r = await c.query('INSERT INTO event_phases (tenant_id, event_id, label, starts_on, ends_on) VALUES ($1,$2,$3,$4,$5) RETURNING id, label, starts_on, ends_on', [req.user.tid, eventId, b.label, b.startDate, b.endDate]);
+      const made = await addDayPhases(c, req.user.tid, eventId, b.label, b.startDate, b.endDate);
       await syncRange(c, eventId);
-      await audit(c, req.user.tid, req.user.sub, 'event.phase_add', 'event', eventId, b);
-      return r.rows[0];
+      await audit(c, req.user.tid, req.user.sub, 'event.phase_add', 'event', eventId, { ...b, days: made.length });
+      return made;
     });
-    return row ? reply.code(201).send({ phase: row }) : reply.code(404).send({ error: 'Event not found' });
+    return rows ? reply.code(201).send({ phase: rows[0], phases: rows }) : reply.code(404).send({ error: 'Event not found' });
   });
   app.patch('/api/event-phases/:id', { preHandler: mgr }, async (req, reply) => {
     const { id: phaseId } = id.parse(req.params);
@@ -515,7 +539,8 @@ export async function eventRoutes(app: FastifyInstance) {
     const row = await withTenant(req.user.tid, async (c) => {
       const prev = (await c.query('SELECT starts_on::text AS s FROM event_phases WHERE id = $1', [phaseId])).rows[0];
       if (!prev) return null;
-      const r = await c.query('UPDATE event_phases SET label = $2, starts_on = $3, ends_on = $4 WHERE id = $1 RETURNING id, event_id, label, starts_on, ends_on', [phaseId, b.label, b.startDate, b.endDate]);
+      // The phase keeps its first day; any further days become phases of their own.
+      const r = await c.query('UPDATE event_phases SET label = $2, starts_on = $3, ends_on = $3 WHERE id = $1 RETURNING id, event_id, label, starts_on, ends_on', [phaseId, b.label, b.startDate]);
       const days = Math.round((Date.parse(`${b.startDate}T12:00:00Z`) - Date.parse(`${prev.s.slice(0, 10)}T12:00:00Z`)) / 86400_000);
       let moved = 0;
       if (b.moveShifts && days) {
@@ -523,9 +548,11 @@ export async function eventRoutes(app: FastifyInstance) {
         moved = m.rowCount ?? 0;
         for (const x of m.rows) await tellTimeChange(c, req.user.tid, x.id);
       }
+      const extra = b.endDate > b.startDate ? await addDayPhases(c, req.user.tid, r.rows[0].event_id, b.label, addDays(b.startDate, 1), b.endDate) : [];
+      await spreadShifts(c, phaseId, extra);
       await syncRange(c, r.rows[0].event_id);
-      await audit(c, req.user.tid, req.user.sub, 'event.phase_update', 'event', r.rows[0].event_id, { ...b, movedShifts: moved, days });
-      return { ...r.rows[0], movedShifts: moved };
+      await audit(c, req.user.tid, req.user.sub, 'event.phase_update', 'event', r.rows[0].event_id, { ...b, movedShifts: moved, days, addedDays: extra.length });
+      return { ...r.rows[0], movedShifts: moved, addedDays: extra.length };
     });
     return row ? { phase: row } : reply.code(404).send({ error: 'Phase not found' });
   });

@@ -174,6 +174,30 @@ export async function schedulingRoutes(app: FastifyInstance) {
     return row;
   });
 
+  // Link crew shifts to a lead shift: its lead checks in and rates exactly the crew on those shifts.
+  app.put('/api/shifts/:id/team', { preHandler: mgr }, async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    const { shiftIds } = z.object({ shiftIds: z.array(z.string().uuid()).max(100) }).parse(req.body);
+    const out = await withTenant(req.user.tid, async (c) => {
+      const lead = (await c.query('SELECT id, event_id, lead_shift_id FROM shifts WHERE id = $1', [id])).rows[0];
+      if (!lead) return { code: 404, error: 'Shift not found' };
+      const ids = [...new Set(shiftIds)].filter((x) => x !== id);
+      if (ids.length) {
+        const ok = (await c.query('SELECT count(*)::int AS n FROM shifts WHERE id = ANY($1::uuid[]) AND event_id = $2', [ids, lead.event_id])).rows[0].n;
+        if (ok !== ids.length) return { code: 400, error: 'Only shifts on the same event can be linked' };
+        // A lead shift cannot itself be on someone else's team (no chains).
+        if ((await c.query('SELECT 1 FROM shifts WHERE lead_shift_id = ANY($1::uuid[]) LIMIT 1', [ids])).rowCount) return { code: 400, error: 'A shift that leads others cannot be on another team' };
+        if (lead.lead_shift_id) await c.query('UPDATE shifts SET lead_shift_id = NULL WHERE id = $1', [id]);
+      }
+      await c.query('UPDATE shifts SET lead_shift_id = NULL WHERE lead_shift_id = $1 AND NOT (id = ANY($2::uuid[]))', [id, ids]);
+      if (ids.length) await c.query('UPDATE shifts SET lead_shift_id = $1 WHERE id = ANY($2::uuid[])', [id, ids]);
+      await audit(c, req.user.tid, req.user.sub, 'shift.team', 'shift', id, { shiftIds: ids });
+      return { code: 200, linked: ids.length };
+    });
+    const { code, ...body } = out as { code: number; [k: string]: unknown };
+    return reply.code(code).send(body);
+  });
+
   // ---------- manager: requests (claims + swaps) ----------
   app.get('/api/requests', { preHandler: mgr }, async (req) =>
     withTenant(req.user.tid, async (c) => ({
