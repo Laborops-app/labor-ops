@@ -198,10 +198,12 @@ export async function seedPayroll(c: import('pg').PoolClient, tenantId: string, 
   // Sample roles must have a pay rate in this company's own skill list (it may have been renamed or replaced).
   const { loadRates, rateFor } = await import('./pay');
   const rates = await loadRates(c);
-  const rated = (await c.query('SELECT name FROM skills WHERE pay_rate > 0 ORDER BY pay_rate DESC, name')).rows.map((r) => r.name as string);
+  // Ordinary hourly rates only (a rate like $200 is usually a day rate typed into the hourly box), closest to $30 first.
+  const usable = (role: string) => { const r = rateFor(rates, role); return !!r && r <= 100; };
+  const rated = (await c.query('SELECT name FROM skills WHERE pay_rate > 0 AND pay_rate <= 100 ORDER BY abs(pay_rate - 30), name')).rows.map((r) => r.name as string);
   const taken = new Set<string>();
   const roleFor = (wanted: string) => {
-    if (rateFor(rates, wanted) || !rated.length) return wanted;
+    if (usable(wanted) || !rated.length) return wanted;
     const r = rated.find((x) => !taken.has(x)) ?? rated[taken.size % rated.length];
     taken.add(r);
     return r;
@@ -209,7 +211,7 @@ export async function seedPayroll(c: import('pg').PoolClient, tenantId: string, 
   // Earlier sample weeks with roles that have no rate are fixed in place.
   const stale = (await c.query(
     `SELECT DISTINCT s.role_name FROM shifts s JOIN events e ON e.id = s.event_id WHERE e.notes = $1`, [SAMPLE_NOTE],
-  )).rows.map((r) => r.role_name as string).filter((r) => !rateFor(rates, r));
+  )).rows.map((r) => r.role_name as string).filter((r) => !usable(r));
   for (const r of stale) {
     await c.query('UPDATE shifts s SET role_name = $2 FROM events e WHERE e.id = s.event_id AND e.notes = $3 AND s.role_name = $1', [r, roleFor(r), SAMPLE_NOTE]);
   }
