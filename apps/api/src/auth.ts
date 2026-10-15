@@ -30,6 +30,8 @@ export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
   } catch {
     return reply.code(401).send({ error: 'Not signed in' });
   }
+  // A platform console session is not a company session.
+  if (!req.user?.tid || (req.user as any).kind === 'platform') return reply.code(401).send({ error: 'Not signed in' });
   if (req.user?.tid && req.user?.sub) touchSeen(req.user.tid, req.user.sub);
   if (req.user?.tid && (await isSuspended(req.user.tid))) return reply.code(403).send({ error: 'This company account is suspended. Contact LaborOps support.', reason: 'suspended' });
 }

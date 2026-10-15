@@ -84,11 +84,20 @@ read, creates the buckets and moves any files still in Postgres. Storage, bucket
 schedule are changed on the **Platform** page (settings are saved encrypted in the database). `S3_*` / `BACKUP_S3_*` in `.env`
 still work as a fallback when nothing is saved on the page.
 
-## Platform admin
+## Platform console
 
-The Platform page (`/platform`) is for the people who run LaborOps itself, not for company admins: overview and health,
-every company (with suspend / lift), storage, backups and the list of platform admins. The first platform admin is the
-company admin whose email is in `PLATFORM_ADMINS` (set once in `.env`); after that, add and remove them on the page.
+The platform console runs on its own address (`PLATFORM_DOMAIN`, default `sysadmin.laborops.app`; point its DNS at the same
+server). It is for the people who run LaborOps itself and has its own accounts, separate from every company: a SaaS dashboard
+(growth, usage, health), every company (plan, notes, suspend / lift), storage, backups, platform admins and an activity log.
+The company app does not serve it, and `/platform` on the main address redirects there.
+
+Create the first platform admin on the server; it prints a one-time link (valid 72 hours) to choose a name and password:
+
+```
+docker compose exec api node dist/platformCli.js invite you@example.com
+```
+
+Add more admins from the console. The same command (or "New link" in the console) resets a forgotten password.
 
 Restore (on the server):
 

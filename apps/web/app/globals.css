@@ -1367,3 +1367,148 @@ label.check.cp-rm > span { display: grid; gap: 2px; }
 .pf-admin-main { flex: 1; min-width: 0; display: grid; }
 .chip.bad { background: var(--bad-bg); color: var(--bad); }
 @media (max-width: 700px) { .pf-health li { grid-template-columns: 14px minmax(0, 1fr); } .pf-health li > span, .pf-health li > button { grid-column: 2; } }
+
+/* ---------- Platform console (sysadmin subdomain): its own shell, separate from the company app ---------- */
+.cs { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 100vh; background: var(--bg); }
+.cs-side { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 6px; padding: 20px 14px; background: var(--navy); color: #dfe8f1; }
+:root[data-theme='dark'] .cs-side { background: #08131e; border-right: 1px solid var(--border); }
+.cs-brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; color: #fff; text-decoration: none; font-size: 18px; font-weight: 600; }
+.cs-brand b { font-weight: 800; }
+.cs-brand small { display: block; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #9fb4c8; margin-top: -2px; }
+.cs-nav { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.cs-nav a { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; color: #b8c9d9; text-decoration: none; font-weight: 600; font-size: 14px; }
+.cs-nav a:hover { background: rgba(255, 255, 255, 0.07); color: #fff; }
+.cs-nav a.on { background: var(--primary); color: #fff; }
+.cs-nav a:focus-visible, .cs-me-actions .btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.cs-me { display: flex; align-items: center; gap: 10px; padding: 12px 8px 4px; border-top: 1px solid rgba(255, 255, 255, 0.1); }
+.cs-me-main { display: grid; min-width: 0; color: #fff; }
+.cs-me-main b { font-size: 14px; }
+.cs-me-main .muted { color: #9fb4c8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-me-actions { display: flex; gap: 4px; padding: 0 2px; }
+.cs-me-actions .btn { color: #b8c9d9; }
+.cs-me-actions .btn:hover:not(:disabled), .cs-me-actions .btn.on { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.cs-main { min-width: 0; display: flex; flex-direction: column; }
+.cs-top { display: flex; align-items: center; gap: 12px; padding: 14px 32px; border-bottom: 1px solid var(--border); background: var(--surface); position: sticky; top: 0; z-index: 5; }
+.cs-top .spacer { flex: 1; }
+.cs-env { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.cs-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--good-bg); }
+.cs-page { padding: 28px 32px 48px; display: flex; flex-direction: column; gap: 20px; max-width: 1440px; width: 100%; }
+.cs-page .card { margin: 0; }
+.cs-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.cs-head h1 { margin: 0; }
+.cs-head p { margin: 2px 0 0; max-width: 70ch; }
+.cs-head-actions { display: flex; gap: 8px; align-items: center; }
+.cs-range { margin: 0; }
+.cs-range .tab { padding: 6px 14px; }
+.cs-card { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.cs-card h2 { margin: 0; font-size: 16px; }
+.cs-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.cs-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.cs-tile { display: flex; flex-direction: column; gap: 2px; padding: 20px 22px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); }
+.cs-tile b { font-size: 34px; line-height: 1.15; font-weight: 700; letter-spacing: -0.02em; margin: 4px 0 6px; font-variant-numeric: tabular-nums; }
+.cs-minis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.cs-minis > div { display: flex; flex-direction: column; gap: 1px; padding: 14px 20px; border-left: 1px solid var(--border); min-width: 0; }
+.cs-minis > div:first-child { border-left: 0; }
+.cs-minis b { font-size: 20px; font-variant-numeric: tabular-nums; }
+.cs-delta { font-weight: 600; color: var(--muted); }
+.cs-delta.up { color: var(--good); }
+.cs-delta.down { color: var(--bad); }
+.cs-delta .muted { font-weight: 400; }
+.cs-grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.cs-grid-main { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr); gap: 20px; align-items: start; }
+.cs-stack { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.cs-chart { position: relative; width: 100%; min-height: 120px; }
+.cs-chart svg { display: block; overflow: visible; }
+.cs-grid { stroke: var(--border); stroke-width: 1; }
+.cs-axis { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.cs-bar { fill: var(--primary); opacity: 0.85; }
+.cs-bar.on { opacity: 1; }
+.cs-line { fill: none; stroke: var(--primary); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.cs-area { fill: var(--primary); opacity: 0.12; stroke: none; }
+.cs-cross { stroke: var(--border-strong); stroke-width: 1; stroke-dasharray: 3 3; }
+.cs-dot-mark { fill: var(--primary); stroke: var(--surface); stroke-width: 2; }
+.cs-tip { position: absolute; transform: translateX(-50%); pointer-events: none; display: grid; padding: 6px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); box-shadow: 0 6px 18px rgba(9, 44, 76, 0.12); white-space: nowrap; line-height: 1.35; }
+.cs-tip b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.cs-spark { display: block; }
+.cs-share { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.cs-share li { display: grid; grid-template-columns: 90px minmax(0, 1fr) auto; align-items: center; gap: 12px; font-size: 14px; }
+.cs-share-label { font-weight: 600; }
+.cs-share-track { height: 8px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.cs-share-track span { display: block; height: 100%; border-radius: 4px; background: var(--primary); }
+.cs-share-val { font-variant-numeric: tabular-nums; text-align: right; min-width: 64px; }
+.cs-table td { vertical-align: middle; }
+.cs-table td, .cs-table th { white-space: nowrap; }
+.cs-co { display: inline-flex; align-items: center; gap: 10px; color: inherit; text-decoration: none; min-width: 0; }
+.cs-co > span:last-child { display: grid; min-width: 0; line-height: 1.35; }
+a.cs-co:hover b { color: var(--primary); }
+.cs-ellipsis { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.cs-list li { padding: 9px 0; border-bottom: 1px solid var(--border); }
+.cs-list li:last-child { border-bottom: 0; }
+.cs-feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.cs-feed li { display: flex; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.cs-feed li:last-child { border-bottom: 0; }
+.cs-feed-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 8px; flex: none; background: var(--border-strong); }
+.cs-feed-dot.new { background: var(--green); }
+.cs-feed-dot.bad { background: var(--danger-solid); }
+.cs-feed-main { display: grid; min-width: 0; line-height: 1.4; }
+.cs-health li { grid-template-columns: 14px 120px minmax(0, 1fr) auto; }
+.cs-filters { display: flex; gap: 10px; flex-wrap: wrap; }
+.cs-filters input { flex: 1 1 240px; max-width: 360px; }
+.cs-filters select { flex: 0 1 180px; }
+.cs-plan { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--surface-2); color: var(--text); margin-right: 6px; }
+.cs-plan.pro, .cs-plan.enterprise { background: var(--primary-soft); color: var(--primary); }
+.cs-plan.starter { background: var(--good-bg); color: var(--good); }
+.cs-plan.trial { background: var(--warn-bg); color: var(--warn); }
+.cs-back { color: var(--muted); text-decoration: none; font-weight: 600; margin-bottom: -10px; }
+.cs-back:hover { color: var(--primary); }
+.cs-co-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.cs-co-head h1 { margin: 0; line-height: 1.2; }
+.cs-co-head p { margin: 2px 0 0; }
+.cs-co-head .spacer { flex: 1; }
+.cs-inline { display: flex; align-items: center; gap: 8px; font-weight: 400; }
+.cs-inline select { width: auto; }
+.cs-card textarea { width: 100%; resize: vertical; }
+.cs-card > .btn { align-self: flex-start; }
+.cs-invite { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto; gap: 12px; align-items: end; }
+.cs-people { list-style: none; margin: 0; padding: 0; }
+.cs-people li { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.cs-people li:last-child { border-bottom: 0; }
+.cs-people-main { flex: 1; min-width: 200px; display: grid; }
+.cs-linkbox { display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; border-radius: 12px; border: 1px solid var(--primary); background: var(--primary-soft); }
+.cs-linkbox p { margin: 2px 0 0; }
+.cs-linkbox code { display: block; padding: 10px 12px; border-radius: 8px; background: var(--surface); font-size: 13px; overflow-wrap: anywhere; user-select: all; }
+.cs-check { display: flex; flex-direction: row; align-items: center; gap: 8px; font-weight: 400; }
+.cs-check input { width: 18px; height: 18px; accent-color: var(--primary); }
+.cs-auth-brand { display: flex; align-items: center; justify-content: center; gap: 12px; font-size: 22px; font-weight: 600; color: var(--text); }
+.cs-auth-brand b { font-weight: 800; }
+.cs-auth-brand small { display: block; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-top: -4px; }
+@media (max-width: 1200px) {
+  .cs-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cs-minis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cs-minis > div:nth-child(3) { border-left: 0; }
+  .cs-minis > div:nth-child(n + 3) { border-top: 1px solid var(--border); }
+  .cs-grid-main { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 860px) {
+  .cs { grid-template-columns: minmax(0, 1fr); }
+  .cs-side { position: static; height: auto; padding: 12px 16px; gap: 8px; }
+  .cs-brand { padding: 0; }
+  .cs-nav { flex-direction: row; overflow-x: auto; gap: 4px; margin: 0 -16px; padding: 0 16px; scrollbar-width: none; }
+  .cs-nav a { flex: none; padding: 8px 12px; }
+  .cs-nav a svg { display: none; }
+  .cs-me { display: none; }
+  .cs-me-actions { position: absolute; top: 12px; right: 16px; }
+  .cs-side { position: relative; }
+  .cs-top { padding: 10px 16px; position: static; }
+  .cs-page { padding: 18px 16px 40px; gap: 16px; }
+  .cs-grid2 { grid-template-columns: minmax(0, 1fr); }
+  .cs-invite { grid-template-columns: minmax(0, 1fr); }
+  .cs-tile b { font-size: 28px; }
+}
+@media (max-width: 520px) {
+  .cs-tiles, .cs-minis { grid-template-columns: minmax(0, 1fr); }
+  .cs-minis > div { border-left: 0; border-top: 1px solid var(--border); }
+  .cs-minis > div:first-child { border-top: 0; }
+  .cs-health li { grid-template-columns: 14px minmax(0, 1fr); }
+}

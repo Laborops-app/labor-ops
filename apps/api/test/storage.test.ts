@@ -21,7 +21,6 @@ before(async () => {
   Object.assign(process.env, {
     S3_ENDPOINT: endpoint, S3_ACCESS_KEY: real ? process.env.TEST_S3_ACCESS_KEY : 'S3RVER', S3_SECRET_KEY: real ? process.env.TEST_S3_SECRET_KEY : 'S3RVER', S3_REGION: 'us-east-1',
     S3_BUCKET_CHAT: `t-chat-${run}`, S3_BUCKET_DOCUMENTS: `t-docs-${run}`, S3_BUCKET_BACKUPS: `t-backups-${run}`,
-    PLATFORM_ADMINS: OPS,
   });
   const { migrate } = await import('../src/migrate');
   await migrate();
@@ -29,6 +28,7 @@ before(async () => {
     ...(await import('../src/db')),
     storage: await import('../src/storage'),
     backup: await import('../src/backup'),
+    platformAuth: await import('../src/platformAuth'),
   };
   await mods.storage.ensureBuckets();
   app = await (await import('../src/app')).buildApp();
@@ -52,6 +52,15 @@ async function register(email: string) {
   assert.equal(r.status, 200, r.text);
   const c = r.res.cookies.find((x) => x.name === 'lo_token')!;
   return { cookie: `lo_token=${c.value}`, tid: JSON.parse(Buffer.from(c.value.split('.')[1], 'base64url').toString()).tid as string, id: r.json.user.id as string };
+}
+/** A platform console account: invited, then set up through its one-time link. Returns its session cookie. */
+async function platformAdmin(email: string, name = 'Ops') {
+  const { link } = await mods.platformAuth.issueSetup(email, name);
+  const token = new URL(link).searchParams.get('token')!;
+  const r = await call(null, 'POST', '/api/platform/auth/setup', { token, name, password: 'platform-pass-1' });
+  assert.equal(r.status, 200, r.text);
+  const c = r.res.cookies.find((x) => x.name === 'lo_platform')!;
+  return { cookie: `lo_platform=${c.value}`, id: r.json.user.id as string, token };
 }
 const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex');
 
@@ -93,10 +102,8 @@ test('storage: uploads go to their own buckets, are served back through the API,
 
 test('backups: the nightly job dumps the database and copies uploads into the backups bucket; only platform operators see it', async () => {
   const company = await register(`boss-${run}@test.example`);
-  const ops = await register(OPS);
-  assert.equal((await call(company.cookie, 'GET', '/api/platform/storage')).status, 403);
-  assert.equal((await call(company.cookie, 'GET', '/api/auth/me')).json.user.platformAdmin, false);
-  assert.equal((await call(ops.cookie, 'GET', '/api/auth/me')).json.user.platformAdmin, true);
+  const ops = await platformAdmin(OPS);
+  assert.equal((await call(company.cookie, 'GET', '/api/platform/storage')).status, 401); // a company admin is not a platform admin
 
   const out = await mods.backup.nightly('manual');
   assert.ok(out.database.key.startsWith('postgres/'), JSON.stringify(out));
@@ -134,35 +141,71 @@ test('backups: retention keeps recent nights, then one a week, then one a month'
   assert.ok(!drop.has('b0'));
 });
 
-test('platform: admins from PLATFORM_ADMINS and the page, companies can be suspended, storage settings are changed in the app', async () => {
-  const ops = await register(`ops2-${run}@test.example`);
+test('platform: separate console accounts, dashboard, companies (plan, notes, suspend), admins and storage settings', async () => {
   const company = await register(`co2-${run}@test.example`);
-  process.env.PLATFORM_ADMINS; // (bootstrap list was read at start: only OPS)
-  const root = await call(null, 'POST', '/api/auth/login', { email: OPS, password: 'password123' });
-  const rootCookie = `lo_token=${root.res.cookies.find((x: any) => x.name === 'lo_token')!.value}`;
-  assert.equal((await call(company.cookie, 'GET', '/api/platform/overview')).status, 403);
-  const ov = (await call(rootCookie, 'GET', '/api/platform/overview')).json;
-  assert.ok(ov.counts.companies >= 3);
-  assert.equal(ov.storage.enabled, true);
+  const rootCookie = (await platformAdmin(OPS)).cookie; // a new link for an existing account resets its password
 
-  // add and remove a platform admin on the page
-  assert.equal((await call(rootCookie, 'POST', '/api/platform/admins', { email: 'nobody@nowhere.example' })).status, 404);
-  assert.equal((await call(rootCookie, 'POST', '/api/platform/admins', { email: `ops2-${run}@test.example` })).status, 201);
-  assert.equal((await call(ops.cookie, 'GET', '/api/platform/companies')).status, 200);
+  // the console and the company app do not share sessions
+  assert.equal((await call(company.cookie, 'GET', '/api/platform/dashboard')).status, 401);
+  assert.equal((await call(rootCookie, 'GET', '/api/events')).status, 401);
+  assert.equal((await call(null, 'POST', '/api/platform/auth/login', { email: `co2-${run}@test.example`, password: 'password123' })).status, 401);
+  assert.equal((await call(null, 'POST', '/api/platform/auth/login', { email: OPS, password: 'wrong-password' })).status, 401);
+  const login = await call(null, 'POST', '/api/platform/auth/login', { email: OPS, password: 'platform-pass-1' });
+  assert.equal(login.status, 200);
+  assert.ok(login.res.cookies.find((x: any) => x.name === 'lo_platform'));
+  assert.equal((await call(rootCookie, 'GET', '/api/platform/auth/me')).json.user.email, OPS);
+
+  // dashboard
+  const d = (await call(rootCookie, 'GET', '/api/platform/dashboard?days=30')).json;
+  assert.ok(d.kpis.companies >= 2, JSON.stringify(d.kpis));
+  assert.ok(d.kpis.new_companies >= 2);
+  assert.equal(d.unit, 'day');
+  assert.ok(d.series.length >= 30 && d.series.at(-1).signups >= 2, JSON.stringify(d.series.at(-1)));
+  assert.equal(d.health.storage.enabled, true);
+  assert.ok(d.health.dbBytes > 0);
+  assert.equal((await call(rootCookie, 'GET', '/api/platform/dashboard?days=365')).json.unit, 'month');
+  assert.equal((await call(rootCookie, 'GET', '/api/platform/dashboard?days=12')).status, 400);
+
+  // invite another platform admin: a one-time link, no company needed
+  const inv = await call(rootCookie, 'POST', '/api/platform/admins', { email: `ops2-${run}@test.example`, name: 'Second' });
+  assert.equal(inv.status, 201);
+  const token = new URL(inv.json.link).searchParams.get('token')!;
+  assert.equal((await call(null, 'GET', `/api/platform/auth/setup?token=${token}`)).json.email, `ops2-${run}@test.example`);
+  assert.equal((await call(null, 'POST', '/api/platform/auth/setup', { token, name: 'Second', password: 'short' })).status, 400);
+  const set = await call(null, 'POST', '/api/platform/auth/setup', { token, name: 'Second Ops', password: 'second-pass-123' });
+  assert.equal(set.status, 200);
+  assert.equal((await call(null, 'POST', '/api/platform/auth/setup', { token, name: 'Again', password: 'second-pass-123' })).status, 404); // used once
+  const ops2 = `lo_platform=${set.res.cookies.find((x: any) => x.name === 'lo_platform')!.value}`;
+  assert.equal((await call(ops2, 'GET', '/api/platform/companies')).status, 200);
+  assert.equal((await call(rootCookie, 'POST', '/api/platform/admins', { email: `ops2-${run}@test.example` })).status, 409);
   const admins = (await call(rootCookie, 'GET', '/api/platform/admins')).json.admins;
-  assert.ok(admins.some((a: any) => a.email === OPS));
-  assert.equal((await call(ops.cookie, 'DELETE' as any, `/api/platform/admins/${ops.id}`)).status, 400); // not yourself
-  assert.equal((await call(rootCookie, 'DELETE' as any, `/api/platform/admins/${ops.id}`)).status, 200);
+  const second = admins.find((a: any) => a.email === `ops2-${run}@test.example`);
+  assert.equal(second.ready, true);
+  assert.equal((await call(ops2, 'DELETE' as any, `/api/platform/admins/${second.id}`)).status, 400); // not yourself
+  assert.equal((await call(rootCookie, 'DELETE' as any, `/api/platform/admins/${second.id}`)).status, 200);
+  mods.platformAuth.forgetPlatformUser(second.id);
+  assert.equal((await call(ops2, 'GET', '/api/platform/companies')).status, 401); // removed: signed out
 
-  // suspend a company: its people are locked out until it is lifted
+  // companies: detail, plan and notes, suspend
   const list = (await call(rootCookie, 'GET', '/api/platform/companies')).json.companies;
   const co = list.find((c: any) => c.id === company.tid);
   assert.equal(co.admins, `co2-${run}@test.example`);
+  assert.equal((await call(rootCookie, 'PATCH' as any, `/api/platform/companies/${company.tid}`, { plan: 'pro', notes: 'Pays yearly' })).status, 200);
+  assert.equal((await call(rootCookie, 'PATCH' as any, `/api/platform/companies/${company.tid}`, { plan: 'gold' })).status, 400);
+  const det = (await call(rootCookie, 'GET', `/api/platform/companies/${company.tid}`)).json;
+  assert.equal(det.company.plan, 'pro');
+  assert.equal(det.company.platform_notes, 'Pays yearly');
+  assert.equal(det.staff[0].email, `co2-${run}@test.example`);
+  assert.equal(det.activity.length, 30);
+  assert.equal(det.history[0].action, 'company.notes');
   assert.equal((await call(rootCookie, 'POST', `/api/platform/companies/${company.tid}/suspend`, { suspended: true, reason: 'Unpaid' })).status, 200);
   assert.equal((await call(company.cookie, 'GET', '/api/events')).status, 403);
   assert.equal((await call(null, 'POST', '/api/auth/login', { email: `co2-${run}@test.example`, password: 'password123' })).status, 403);
   assert.equal((await call(rootCookie, 'POST', `/api/platform/companies/${company.tid}/suspend`, { suspended: false })).status, 200);
   assert.equal((await call(company.cookie, 'GET', '/api/events')).status, 200);
+  const log = (await call(rootCookie, 'GET', '/api/platform/audit')).json.entries;
+  assert.ok(log.some((e: any) => e.action === 'company.suspend' && e.company && e.detail.reason === 'Unpaid'));
+  assert.ok(log.some((e: any) => e.action === 'company.plan' && e.detail.to === 'pro'));
 
   // storage settings: wrong keys are refused; new bucket names copy the files over before switching
   const st = (await call(rootCookie, 'GET', '/api/platform/storage')).json;

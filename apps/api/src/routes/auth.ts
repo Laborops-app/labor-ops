@@ -5,7 +5,6 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import { pool, withTenant, audit } from '../db';
 import { adminPool } from '../storage';
-import { isPlatformAdmin } from './platform';
 import { authenticate, COOKIE, SessionUser } from '../auth';
 import { config } from '../config';
 
@@ -83,6 +82,6 @@ export async function authRoutes(app: FastifyInstance) {
       company: (await c.query('SELECT name FROM tenants')).rows[0]?.name as string | undefined,
       name: ((await c.query('SELECT name FROM users WHERE id = $1', [u.sub])).rows[0]?.name as string | undefined) ?? u.name,
     }));
-    return { user: { id: u.sub, name, role: u.role, company, canAdjustRates: rates, platformAdmin: u.role === 'admin' && (await isPlatformAdmin(u.tid, u.sub)) } };
+    return { user: { id: u.sub, name, role: u.role, company, canAdjustRates: rates } };
   });
 }

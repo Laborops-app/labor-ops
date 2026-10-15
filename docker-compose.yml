@@ -105,8 +105,8 @@ services:
       BACKUP_S3_REGION: ${BACKUP_S3_REGION:-}
       BACKUP_S3_ACCESS_KEY: ${BACKUP_S3_ACCESS_KEY:-}
       BACKUP_S3_SECRET_KEY: ${BACKUP_S3_SECRET_KEY:-}
-      # First platform admin (an existing company admin's email). Others are added on the Platform page.
-      PLATFORM_ADMINS: ${PLATFORM_ADMINS:-}
+      # Address of the platform console (its own subdomain). Used in the setup links it hands out.
+      PLATFORM_URL: https://${PLATFORM_DOMAIN:-sysadmin.laborops.app}
 
   web:
     build:
@@ -127,6 +127,7 @@ services:
       - "443:443"
     environment:
       DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+      PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:-sysadmin.laborops.app}
     volumes:
       - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

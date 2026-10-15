@@ -1,15 +1,31 @@
-# Caddy terminates HTTPS (automatic Let's Encrypt certificates) and routes by path:
-#   /api/*  -> API container
-#   others  -> web container
-{$DOMAIN} {
-	encode zstd gzip
+# Caddy terminates HTTPS (automatic Let's Encrypt certificates) and routes by host and path.
+#
+#   {$DOMAIN}            the app companies use:   /api/* -> API, everything else -> web
+#   {$PLATFORM_DOMAIN}   the platform console:    /platform pages and /api/platform/* only
+#
+# The console is only reachable on its own address, so its sign-in cookie never touches the company app.
 
+(common) {
+	encode zstd gzip
 	header {
 		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		-Server
+	}
+}
+
+{$DOMAIN} {
+	import common
+
+	# Old links to the console go to its own address; its API is not served here.
+	@console path /platform /platform/*
+	handle @console {
+		redir https://{$PLATFORM_DOMAIN}{uri} 302
+	}
+	handle /api/platform/* {
+		respond "Not found" 404
 	}
 
 	handle /api/* {
@@ -18,5 +34,27 @@
 
 	handle {
 		reverse_proxy web:3000
+	}
+}
+
+{$PLATFORM_DOMAIN} {
+	import common
+	header X-Robots-Tag "noindex, nofollow"
+
+	handle /api/platform/* {
+		reverse_proxy api:4000
+	}
+	handle /api/* {
+		respond "Not found" 404
+	}
+
+	# Console pages and the files they load. Anything else (the company app's pages) is not served here.
+	@console path /platform /platform/* /_next/* /brand/* /sidebar/* /manifest.webmanifest
+	handle @console {
+		reverse_proxy web:3000
+	}
+
+	handle {
+		redir * /platform 302
 	}
 }

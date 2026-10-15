@@ -13,7 +13,6 @@ const SECTIONS: { title: string; items: string[] }[] = [
   { title: 'Sales', items: ['/customers', '/quotes'] },
   { title: 'People', items: ['/crew', '/skills', '/trainings'] },
   { title: 'Admin', items: ['/payroll', '/rules', '/integrations', '/messaging'] },
-  { title: 'Platform', items: ['/platform'] },
   { title: 'Account', items: ['/profile'] },
 ];
 const CHILDREN: Record<string, string[]> = { '/quotes': ['/quote-layouts'], '/crew': ['/groups'] };

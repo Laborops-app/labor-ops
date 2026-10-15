@@ -21,6 +21,8 @@ export const config = {
   demoPassword: process.env.DEMO_PASSWORD ?? 'LaborOps-Demo-1',
   // Public base URL, used for links in emails/SMS and for verifying Twilio webhooks.
   appUrl: (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/+$/, ''),
+  // Where the platform console is served (its own subdomain in production; the same server when developing).
+  platformUrl: (process.env.PLATFORM_URL ?? process.env.APP_URL ?? 'http://localhost:3000').replace(/\/+$/, ''),
   // Email through Amazon SES SMTP. Unset = log-only mode (messages are recorded, nothing is sent).
   email: {
     host: process.env.SES_SMTP_HOST ?? '',
@@ -72,5 +74,4 @@ export const config = {
     pgDump: process.env.PG_DUMP_PATH ?? 'pg_dump',
   },
   // People who run the platform itself (not a company admin): they see storage and backup status.
-  platformAdmins: (process.env.PLATFORM_ADMINS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
 };
