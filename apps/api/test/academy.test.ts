@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { migrate } from '../src/migrate';
 import { buildApp } from '../src/app';
 import { pool, withTenant } from '../src/db';
+import { closeAdminPool } from '../src/storage';
 
 let app: FastifyInstance;
 const run = Date.now().toString(36);
@@ -15,6 +16,7 @@ before(async () => {
 after(async () => {
   await app.close();
   await pool.end();
+  await closeAdminPool();
 });
 
 async function admin() {

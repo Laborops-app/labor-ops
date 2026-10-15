@@ -36,12 +36,12 @@ before(async () => {
 after(async () => {
   await app?.close();
   await mods?.pool.end();
-  await mods?.storage.adminPool().end();
+  await mods?.storage.closeAdminPool();
   if (!real) await s3.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-async function call(cookie: string | null, method: 'GET' | 'POST' | 'PUT', url: string, body?: unknown, headers: Record<string, string> = {}) {
+async function call(cookie: string | null, method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, body?: unknown, headers: Record<string, string> = {}) {
   const res = await app.inject({ method, url, payload: body as any, headers: { ...(cookie ? { cookie } : {}), ...headers } });
   let json: any;
   try { json = res.json(); } catch { /* binary */ }
@@ -132,4 +132,68 @@ test('backups: retention keeps recent nights, then one a week, then one a month'
   assert.ok(kept.length < 40, `kept ${kept.length}`);
   assert.ok(kept.some((r) => (now.getTime() - r.started_at.getTime()) / 86400000 > 150)); // something from five months ago
   assert.ok(!drop.has('b0'));
+});
+
+test('platform: admins from PLATFORM_ADMINS and the page, companies can be suspended, storage settings are changed in the app', async () => {
+  const ops = await register(`ops2-${run}@test.example`);
+  const company = await register(`co2-${run}@test.example`);
+  process.env.PLATFORM_ADMINS; // (bootstrap list was read at start: only OPS)
+  const root = await call(null, 'POST', '/api/auth/login', { email: OPS, password: 'password123' });
+  const rootCookie = `lo_token=${root.res.cookies.find((x: any) => x.name === 'lo_token')!.value}`;
+  assert.equal((await call(company.cookie, 'GET', '/api/platform/overview')).status, 403);
+  const ov = (await call(rootCookie, 'GET', '/api/platform/overview')).json;
+  assert.ok(ov.counts.companies >= 3);
+  assert.equal(ov.storage.enabled, true);
+
+  // add and remove a platform admin on the page
+  assert.equal((await call(rootCookie, 'POST', '/api/platform/admins', { email: 'nobody@nowhere.example' })).status, 404);
+  assert.equal((await call(rootCookie, 'POST', '/api/platform/admins', { email: `ops2-${run}@test.example` })).status, 201);
+  assert.equal((await call(ops.cookie, 'GET', '/api/platform/companies')).status, 200);
+  const admins = (await call(rootCookie, 'GET', '/api/platform/admins')).json.admins;
+  assert.ok(admins.some((a: any) => a.email === OPS));
+  assert.equal((await call(ops.cookie, 'DELETE' as any, `/api/platform/admins/${ops.id}`)).status, 400); // not yourself
+  assert.equal((await call(rootCookie, 'DELETE' as any, `/api/platform/admins/${ops.id}`)).status, 200);
+
+  // suspend a company: its people are locked out until it is lifted
+  const list = (await call(rootCookie, 'GET', '/api/platform/companies')).json.companies;
+  const co = list.find((c: any) => c.id === company.tid);
+  assert.equal(co.admins, `co2-${run}@test.example`);
+  assert.equal((await call(rootCookie, 'POST', `/api/platform/companies/${company.tid}/suspend`, { suspended: true, reason: 'Unpaid' })).status, 200);
+  assert.equal((await call(company.cookie, 'GET', '/api/events')).status, 403);
+  assert.equal((await call(null, 'POST', '/api/auth/login', { email: `co2-${run}@test.example`, password: 'password123' })).status, 403);
+  assert.equal((await call(rootCookie, 'POST', `/api/platform/companies/${company.tid}/suspend`, { suspended: false })).status, 200);
+  assert.equal((await call(company.cookie, 'GET', '/api/events')).status, 200);
+
+  // storage settings: wrong keys are refused; new bucket names copy the files over before switching
+  const st = (await call(rootCookie, 'GET', '/api/platform/storage')).json;
+  assert.equal(st.settings.mode, 'auto');
+  assert.equal(st.storage.source, 'env');
+  const endpoint = process.env.S3_ENDPOINT!;
+  const bad = await call(rootCookie, 'PUT', '/api/platform/storage', { mode: 'custom', custom: { endpoint, accessKey: 'nope', secretKey: 'wrong-secret-123' } });
+  assert.equal(bad.status, 400);
+  const chat = (await call(company.cookie, 'POST', '/api/chat/channels', { name: 'Move', memberIds: [] })).json.id;
+  const fid = (await call(company.cookie, 'POST', `/api/chat/channels/${chat}/files?filename=a.png`, PNG, { 'content-type': 'application/octet-stream' })).json.message.files[0].id;
+  const nb = { chat: `n-chat-${run}`, documents: `n-docs-${run}`, backups: `n-backups-${run}` };
+  const sw = await call(rootCookie, 'PUT', '/api/platform/storage', {
+    mode: 'custom', custom: { endpoint, accessKey: process.env.S3_ACCESS_KEY, secretKey: process.env.S3_SECRET_KEY }, buckets: nb, backups: { hourUtc: 4, keepDaily: 7 },
+  });
+  assert.equal(sw.status, 202, sw.text);
+  for (let i = 0; i < 100; i++) {
+    const j = (await call(rootCookie, 'GET', '/api/platform/storage')).json.job;
+    if (j.state !== 'running') { assert.equal(j.state, 'done', JSON.stringify(j)); break; }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  const after = (await call(rootCookie, 'GET', '/api/platform/storage')).json;
+  assert.equal(after.storage.source, 'custom');
+  assert.equal(after.settings.buckets.chat, nb.chat);
+  assert.equal(after.settings.custom.hasSecret, true);
+  assert.equal(after.settings.custom.secretKey, undefined); // secrets never go back to the page
+  assert.equal(after.schedule.hourUtc, 4);
+  assert.deepEqual((await call(company.cookie, 'GET', `/api/chat/files/${fid}`)).raw, PNG); // still opens from the new bucket
+  // saving again without the secret keeps the saved one
+  assert.equal((await call(rootCookie, 'PUT', '/api/platform/storage', { mode: 'custom', custom: { endpoint, accessKey: process.env.S3_ACCESS_KEY }, buckets: nb })).status, 200);
+  assert.equal((await call(rootCookie, 'GET', '/api/platform/storage')).json.storage.reachable, true);
+  // leave the shared test database as we found it
+  await mods.storage.adminPool().query("DELETE FROM platform_settings WHERE key = 'storage'");
+  mods.storage.apply(null);
 });

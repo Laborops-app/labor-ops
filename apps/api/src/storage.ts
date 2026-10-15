@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { Pool } from 'pg';
 import {
@@ -11,6 +13,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { config } from './config';
+import { decrypt, encrypt } from './crypto';
 
 /**
  * S3-compatible object storage (RustFS by default). Each kind of file has its own bucket:
@@ -21,22 +24,114 @@ import { config } from './config';
  * When storage is not configured, files stay in Postgres as before.
  */
 export type BucketKind = 'chat' | 'documents' | 'backups';
+export type S3Target = { endpoint: string; region: string; accessKey: string; secretKey: string; forcePathStyle: boolean };
+export type Buckets = { chat: string; documents: string; backups: string };
+export type BackupPolicy = { enabled: boolean; hourUtc: number; keepDaily: number; keepWeekly: number; keepMonthly: number };
+/** What is saved on the Platform page (secrets encrypted in platform_settings). */
+export type SavedStorage = {
+  mode: 'auto' | 'local' | 'custom' | 'off';
+  custom?: S3Target | null;
+  buckets?: Partial<Buckets>;
+  backupMode?: 'same' | 'custom';
+  backupCustom?: S3Target | null;
+  backups?: Partial<BackupPolicy>;
+};
+export type Effective = { source: 'off' | 'local' | 'custom' | 'env'; target: S3Target | null; buckets: Buckets; backupTarget: S3Target | null; backups: BackupPolicy };
+
 const S = config.storage;
+const LOCAL_KEYS = process.env.LOCAL_S3_KEYS_DIR ?? '/run/rustfs-keys';
+const LOCAL_ENDPOINT = process.env.LOCAL_S3_ENDPOINT ?? 'http://rustfs:9000';
 
-export const storageEnabled = () => !!(S.endpoint && S.accessKey && S.secretKey);
-export const bucketOf = (k: BucketKind) => S.buckets[k];
+/** The RustFS that runs next to the app writes its generated keys to a shared volume; read them if present. */
+export function localTarget(): S3Target | null {
+  try {
+    const accessKey = fs.readFileSync(path.join(LOCAL_KEYS, 'access'), 'utf8').trim();
+    const secretKey = fs.readFileSync(path.join(LOCAL_KEYS, 'secret'), 'utf8').trim();
+    return accessKey && secretKey ? { endpoint: LOCAL_ENDPOINT, region: 'us-east-1', accessKey, secretKey, forcePathStyle: true } : null;
+  } catch {
+    return null;
+  }
+}
+const envTarget = (): S3Target | null =>
+  S.endpoint && S.accessKey && S.secretKey ? { endpoint: S.endpoint, region: S.region, accessKey: S.accessKey, secretKey: S.secretKey, forcePathStyle: S.forcePathStyle } : null;
+const envBackupTarget = (base: S3Target | null): S3Target | null =>
+  S.backupEndpoint ? { endpoint: S.backupEndpoint, region: S.backupRegion || S.region, accessKey: S.backupAccessKey || S.accessKey, secretKey: S.backupSecretKey || S.secretKey, forcePathStyle: S.forcePathStyle } : base && null;
 
+/** Saved settings win; otherwise S3_* from the environment; otherwise the local RustFS when its keys are there. */
+export function resolve(saved: SavedStorage | null): Effective {
+  const policy: BackupPolicy = {
+    enabled: config.backups.enabled, hourUtc: config.backups.hourUtc, keepDaily: config.backups.keepDaily, keepWeekly: config.backups.keepWeekly, keepMonthly: config.backups.keepMonthly,
+    ...(saved?.backups ?? {}),
+  };
+  const buckets: Buckets = { ...S.buckets, ...Object.fromEntries(Object.entries(saved?.buckets ?? {}).filter(([, v]) => v)) } as Buckets;
+  const mode = saved?.mode ?? 'auto';
+  let source: Effective['source'] = 'off';
+  let target: S3Target | null = null;
+  if (mode === 'custom' && saved?.custom) [source, target] = ['custom', saved.custom];
+  else if (mode === 'local') [source, target] = ['local', localTarget()];
+  else if (mode === 'auto') {
+    const env = envTarget();
+    if (env) [source, target] = ['env', env];
+    else {
+      const loc = localTarget();
+      if (loc) [source, target] = ['local', loc];
+    }
+  }
+  if (!target) source = 'off';
+  const backupTarget = saved?.backupMode === 'custom' && saved.backupCustom ? saved.backupCustom : saved?.backupMode === 'same' ? null : source === 'env' ? envBackupTarget(target) : null;
+  return { source, target, buckets, backupTarget, backups: policy };
+}
+
+let eff: Effective = resolve(null);
+let saved: SavedStorage | null = null;
 let main: S3Client | null = null;
 let backup: S3Client | null = null;
-const make = (endpoint: string, region: string, accessKeyId: string, secretAccessKey: string) =>
-  new S3Client({ endpoint, region, forcePathStyle: S.forcePathStyle, credentials: { accessKeyId, secretAccessKey }, maxAttempts: 3 });
+
+export const effective = () => eff;
+export const savedStorage = () => saved;
+export const storageEnabled = () => !!eff.target;
+export const bucketOf = (k: BucketKind) => eff.buckets[k];
+
+export const makeClient = (t: S3Target) =>
+  new S3Client({ endpoint: t.endpoint, region: t.region || 'us-east-1', forcePathStyle: t.forcePathStyle, credentials: { accessKeyId: t.accessKey, secretAccessKey: t.secretKey }, maxAttempts: 3 });
+
 export function client(kind: BucketKind): S3Client {
-  if (kind === 'backups' && S.backupEndpoint) {
-    backup ??= make(S.backupEndpoint, S.backupRegion || S.region, S.backupAccessKey || S.accessKey, S.backupSecretKey || S.secretKey);
-    return backup;
+  if (!eff.target) throw new Error('Object storage is not set up');
+  if (kind === 'backups' && eff.backupTarget) return (backup ??= makeClient(eff.backupTarget));
+  return (main ??= makeClient(eff.target));
+}
+
+/** Load the saved settings (Platform page) and switch to them. */
+export async function reloadStorage() {
+  const row = (await adminPool().query("SELECT value_enc FROM platform_settings WHERE key = 'storage'")).rows[0];
+  let next: SavedStorage | null = null;
+  if (row) {
+    try {
+      next = JSON.parse(decrypt(row.value_enc));
+    } catch {
+      console.error('storage: saved settings could not be read (encryption key changed?), using defaults');
+    }
   }
-  main ??= make(S.endpoint, S.region, S.accessKey, S.secretKey);
-  return main;
+  apply(next);
+  return eff;
+}
+export function apply(next: SavedStorage | null) {
+  const before = JSON.stringify(eff);
+  saved = next;
+  eff = resolve(next);
+  if (JSON.stringify(eff) !== before) {
+    main?.destroy();
+    backup?.destroy();
+    main = backup = null;
+  }
+}
+export async function saveStorage(next: SavedStorage, by: string | null) {
+  await adminPool().query(
+    `INSERT INTO platform_settings (key, value_enc, updated_by) VALUES ('storage', $1, $2)
+     ON CONFLICT (key) DO UPDATE SET value_enc = EXCLUDED.value_enc, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+    [encrypt(JSON.stringify(next)), by],
+  );
+  apply(next);
 }
 
 /** Create any bucket that does not exist yet. */
@@ -110,7 +205,12 @@ export async function fileBody(kind: BucketKind, row: { data: Buffer | null; sto
 // ---------- maintenance (runs with the database owner, across companies) ----------
 
 let admin: Pool | null = null;
-export const adminPool = () => (admin ??= new Pool({ connectionString: config.adminDatabaseUrl, max: 2 }));
+export const adminPool = () => (admin ??= new Pool({ connectionString: config.adminDatabaseUrl, max: 3 }));
+export async function closeAdminPool() {
+  const a = admin;
+  admin = null;
+  await a?.end();
+}
 
 const TABLES = [
   { table: 'cert_files', kind: 'documents' as BucketKind, time: 'uploaded_at' },
@@ -161,19 +261,24 @@ export async function sweepOrphans(): Promise<number> {
 /** Counts for the status page. */
 export async function storageStatus() {
   const db = adminPool();
-  const out: Record<string, unknown> = { enabled: storageEnabled(), endpoint: S.endpoint || null, buckets: S.buckets, backupEndpoint: S.backupEndpoint || S.endpoint || null };
+  const out: Record<string, unknown> = {
+    enabled: storageEnabled(), source: eff.source, endpoint: eff.target?.endpoint ?? null, buckets: eff.buckets,
+    backupEndpoint: eff.backupTarget?.endpoint ?? eff.target?.endpoint ?? null, separateBackups: !!eff.backupTarget,
+  };
   for (const t of TABLES) {
     const r = (await db.query(`SELECT count(*) FILTER (WHERE storage_key IS NOT NULL)::int AS in_storage, count(*) FILTER (WHERE storage_key IS NULL)::int AS in_db,
                                       COALESCE(sum(size), 0)::bigint AS bytes FROM ${t.table}`)).rows[0];
     out[t.table] = { inStorage: r.in_storage, inDatabase: r.in_db, bytes: Number(r.bytes) };
   }
   if (storageEnabled()) {
-    try {
-      await client('chat').send(new HeadBucketCommand({ Bucket: bucketOf('chat') }));
-      out.reachable = true;
-    } catch (e: any) {
-      out.reachable = false;
-      out.error = String(e?.message ?? e).slice(0, 300);
+    for (const kind of ['chat', 'backups'] as BucketKind[]) {
+      try {
+        await client(kind).send(new HeadBucketCommand({ Bucket: bucketOf(kind) }));
+        out[kind === 'chat' ? 'reachable' : 'backupReachable'] = true;
+      } catch (e: any) {
+        out[kind === 'chat' ? 'reachable' : 'backupReachable'] = false;
+        out[kind === 'chat' ? 'error' : 'backupError'] = String(e?.name === 'NotFound' ? 'bucket not created yet' : e?.message ?? e).slice(0, 300);
+      }
     }
   }
   return out;

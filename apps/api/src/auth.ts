@@ -1,3 +1,4 @@
+import { adminPool } from './storage';
 import { withTenant } from './db';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
@@ -30,7 +31,19 @@ export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
     return reply.code(401).send({ error: 'Not signed in' });
   }
   if (req.user?.tid && req.user?.sub) touchSeen(req.user.tid, req.user.sub);
+  if (req.user?.tid && (await isSuspended(req.user.tid))) return reply.code(403).send({ error: 'This company account is suspended. Contact LaborOps support.', reason: 'suspended' });
 }
+
+// Suspended companies (Platform page) are locked out; checked at most every 30 seconds per company.
+const suspended = new Map<string, { v: boolean; at: number }>();
+async function isSuspended(tid: string) {
+  const hit = suspended.get(tid);
+  if (hit && Date.now() - hit.at < 30_000) return hit.v;
+  const v = !!(await adminPool().query('SELECT 1 FROM tenants WHERE id = $1 AND suspended_at IS NOT NULL', [tid]).catch(() => ({ rowCount: 0 }))).rowCount;
+  suspended.set(tid, { v, at: Date.now() });
+  return v;
+}
+export const forgetSuspension = (tid: string) => suspended.delete(tid);
 
 /** preHandler list: must be signed in and hold one of the roles. */
 export function guard(...roles: Role[]) {

@@ -15,7 +15,20 @@ const icon = (d: React.ReactNode) => (
   </svg>
 );
 
-const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; icon: React.ReactNode }[] = [
+const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; platform?: boolean; icon: React.ReactNode }[] = [
+  {
+    href: '/platform',
+    label: 'Platform',
+    roles: ['admin'],
+    platform: true, // only people who run LaborOps itself
+    icon: icon(
+      <>
+        <rect x="3" y="4" width="18" height="6" rx="1.5" />
+        <rect x="3" y="14" width="18" height="6" rx="1.5" />
+        <path d="M7 7h.01M7 17h.01M11 7h6M11 17h6" />
+      </>,
+    ),
+  },
   {
     href: '/dashboard',
     label: 'Dashboard',
@@ -300,7 +313,7 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
     await api('/api/auth/logout', { method: 'POST', body: {} });
     router.replace('/login');
   };
-  const items = NAV.filter((n) => n.roles.includes(me.role) && (!n.rates || me.role === 'admin' || me.canAdjustRates));
+  const items = NAV.filter((n) => n.roles.includes(me.role) && (!n.rates || me.role === 'admin' || me.canAdjustRates) && (!n.platform || me.platformAdmin));
 
   const current = items.find((n) => path.startsWith(n.href));
 

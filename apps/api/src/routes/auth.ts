@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import { pool, withTenant, audit } from '../db';
+import { adminPool } from '../storage';
 import { isPlatformAdmin } from './platform';
 import { authenticate, COOKIE, SessionUser } from '../auth';
 import { config } from '../config';
@@ -63,6 +64,8 @@ export async function authRoutes(app: FastifyInstance) {
     const hash = u?.password_hash ?? DUMMY_HASH;
     const ok = await bcrypt.compare(body.password, hash);
     if (!u || !ok || !u.active) return reply.code(401).send({ error: 'Incorrect email or password' });
+    if ((await adminPool().query('SELECT 1 FROM tenants WHERE id = $1 AND suspended_at IS NOT NULL', [u.tenant_id])).rowCount)
+      return reply.code(403).send({ error: 'This company account is suspended. Contact LaborOps support.', reason: 'suspended' });
     await withTenant(u.tenant_id, (c) => audit(c, u.tenant_id, u.id, 'auth.login', 'user', u.id));
     setSession(reply, { sub: u.id, tid: u.tenant_id, role: u.role, name: u.name });
     return { user: { id: u.id, name: u.name, role: u.role } };

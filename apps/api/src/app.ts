@@ -45,6 +45,7 @@ export async function buildApp() {
     if (err.statusCode && err.statusCode < 500) return reply.code(err.statusCode).send({ error: err.message });
     if (err.code === '23505') return reply.code(409).send({ error: 'That already exists' });
     req.log.error(err);
+    if (process.env.DEBUG_ERRORS) console.error(err);
     return reply.code(500).send({ error: 'Something went wrong' });
   });
 

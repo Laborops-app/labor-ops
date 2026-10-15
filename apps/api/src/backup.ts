@@ -3,7 +3,7 @@ import { Upload } from '@aws-sdk/lib-storage';
 import { CopyObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { config } from './config';
 import {
-  adminPool, bucketOf, client, deleteObject, ensureBuckets, getObject, listObjects, moveFilesToStorage, storageEnabled, sweepOrphans,
+  adminPool, bucketOf, client, deleteObject, effective, ensureBuckets, reloadStorage, getObject, listObjects, moveFilesToStorage, storageEnabled, sweepOrphans,
   type BucketKind,
 } from './storage';
 
@@ -14,6 +14,7 @@ import {
  * Old database backups are thinned out: every night for BACKUP_KEEP_DAILY days, then one a week, then one a month.
  */
 const B = config.backups;
+const P = () => effective().backups;
 const LOCK = 727274002;
 
 const stamp = (d = new Date()) => d.toISOString().replace(/[:.]/g, '-').replace(/-\d{3}Z$/, 'Z');
@@ -71,7 +72,7 @@ function dumpTo(key: string): Promise<number> {
 }
 
 /** Which finished backups to keep: the last N days, then one per week, then one per month. */
-export function backupsToDelete(rows: { id: string; started_at: Date }[], now = new Date(), keep = { daily: B.keepDaily, weekly: B.keepWeekly, monthly: B.keepMonthly }) {
+export function backupsToDelete(rows: { id: string; started_at: Date }[], now = new Date(), keep = { daily: P().keepDaily, weekly: P().keepWeekly, monthly: P().keepMonthly }) {
   const keepIds = new Set<string>();
   const sorted = [...rows].sort((a, b) => b.started_at.getTime() - a.started_at.getTime());
   const day = 86400000;
@@ -115,7 +116,7 @@ export async function mirrorUploads() {
     for await (const o of listObjects(kind)) {
       live.add(o.key);
       if (have.has(o.key)) continue;
-      const sameServer = !config.storage.backupEndpoint;
+      const sameServer = !effective().backupTarget;
       if (sameServer) {
         await client('backups').send(new CopyObjectCommand({ Bucket: bucketOf('backups'), Key: prefix + o.key, CopySource: `${bucketOf(kind)}/${encodeURIComponent(o.key).replace(/%2F/g, '/')}` }));
       } else {
@@ -155,7 +156,7 @@ export async function nightly(kind: 'scheduled' | 'manual' = 'scheduled') {
 
 /** One server at a time runs the job (advisory lock), once a day after BACKUP_HOUR_UTC. */
 export async function maybeRunNightly(now = new Date()) {
-  if (!B.enabled || !storageEnabled() || now.getUTCHours() < B.hourUtc) return null;
+  if (!P().enabled || !storageEnabled() || now.getUTCHours() < P().hourUtc) return null;
   const db = adminPool();
   const c = await db.connect();
   try {
@@ -175,24 +176,25 @@ export async function maybeRunNightly(now = new Date()) {
 }
 
 export function startStorageJobs() {
-  if (!storageEnabled()) {
-    console.log('storage: S3 not configured, files stay in Postgres and backups are off');
-    return;
-  }
   // RustFS may still be starting: keep trying to create the buckets (up to ~10 minutes), then move old files over.
   const setup = async (attempt = 1): Promise<void> => {
     try {
+      await reloadStorage();
+      if (!storageEnabled()) return console.log('storage: not set up, files stay in Postgres and backups are off');
       await ensureBuckets();
       const n = await moveFilesToStorage();
-      console.log(`storage: buckets ready${n ? `, moved ${n} files from Postgres` : ''}`);
+      console.log(`storage: ${effective().source} storage ready${n ? `, moved ${n} files from Postgres` : ''}`);
     } catch (e: any) {
       if (attempt >= 60) return console.error('storage: could not reach object storage:', e?.message ?? e);
       setTimeout(() => setup(attempt + 1), 10_000).unref();
     }
   };
   setup();
-  const tick = () => maybeRunNightly().catch((e) => console.error('backup: nightly job failed:', e?.message ?? e));
+  // Settings saved on another server instance are picked up within a few minutes.
+  const tick = async () => {
+    await reloadStorage().catch(() => undefined);
+    await maybeRunNightly().catch((e) => console.error('backup: nightly job failed:', e?.message ?? e));
+  };
   setTimeout(tick, 60_000).unref();
-  setInterval(tick, 15 * 60_000).unref();
+  setInterval(tick, 5 * 60_000).unref();
 }
-

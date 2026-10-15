@@ -71,7 +71,7 @@ docker compose exec api node dist/seed.js --reset   # rebuild the sample company
 
 ## File storage and backups (RustFS / S3)
 
-Uploads go to S3-compatible object storage, one bucket per kind of file, all private (the API checks access and streams files):
+Uploads go to S3-compatible object storage, one private bucket per kind of file (the API checks access and streams files):
 
 | Bucket (default name) | Holds |
 |---|---|
@@ -79,22 +79,16 @@ Uploads go to S3-compatible object storage, one bucket per kind of file, all pri
 | `laborops-documents` | certificate scans and academy certificate PDFs |
 | `laborops-backups` | nightly `pg_dump` of the database (`postgres/…`) and a copy of every upload (`files/…`) |
 
-Turn it on in `.env` on the server, then deploy:
+Nothing to configure: `docker compose up` starts RustFS next to the app, generates its keys into a private volume the api can
+read, creates the buckets and moves any files still in Postgres. Storage, bucket names, a separate backup server and the backup
+schedule are changed on the **Platform** page (settings are saved encrypted in the database). `S3_*` / `BACKUP_S3_*` in `.env`
+still work as a fallback when nothing is saved on the page.
 
-```
-COMPOSE_PROFILES=storage
-S3_ACCESS_KEY=<openssl rand -hex 12>
-S3_SECRET_KEY=<openssl rand -hex 24>
-PLATFORM_ADMINS=you@example.com
-```
+## Platform admin
 
-This starts RustFS next to the app; the buckets are created on start and files already in Postgres are moved over. Without these
-settings files stay in Postgres and backups are off. For backups that survive losing the server, set `BACKUP_S3_ENDPOINT`,
-`BACKUP_S3_ACCESS_KEY` and `BACKUP_S3_SECRET_KEY` to a second S3 server (RustFS elsewhere, AWS S3, Backblaze B2, Wasabi).
-
-Backups run every night after `BACKUP_HOUR_UTC` and are kept daily for 14 days, weekly for 8 weeks and monthly for 12 months.
-Status, "Back up now" and downloads are under Integrations → Storage & backups (only for `PLATFORM_ADMINS`).
-The RustFS console listens on the server's localhost only: `ssh -L 9001:localhost:9001 <server>` and open http://localhost:9001.
+The Platform page (`/platform`) is for the people who run LaborOps itself, not for company admins: overview and health,
+every company (with suspend / lift), storage, backups and the list of platform admins. The first platform admin is the
+company admin whose email is in `PLATFORM_ADMINS` (set once in `.env`); after that, add and remove them on the page.
 
 Restore (on the server):
 
