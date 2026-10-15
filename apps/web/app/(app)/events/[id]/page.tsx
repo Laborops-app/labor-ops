@@ -84,6 +84,10 @@ function Body({ me }: { me: Me }) {
   const [asLead, setAsLead] = useState(false);
   const [busyAdd, setBusyAdd] = useState(false);
   const [payEdit, setPayEdit] = useState<{ id: string; value: string } | null>(null);
+  // Editing a shift's role and times, or a phase's name and dates, in place.
+  const [timeEdit, setTimeEdit] = useState<{ id: string; role: string; start: string; end: string } | null>(null);
+  const [phaseEdit, setPhaseEdit] = useState<{ id: string; label: string; start: string; end: string; move: boolean } | null>(null);
+  const formDated = useRef(false);
   // "Confirm automatically": crew are put straight on the shift instead of being asked to accept. Remembered on this device.
   const [autoConfirm, setAutoConfirmState] = useState(false);
   useEffect(() => {
@@ -169,6 +173,16 @@ function Body({ me }: { me: Me }) {
       .then((r) => {
         setD(r);
         setTplStart((v) => v || r.event.start_date.slice(0, 10));
+        // The add-shift form starts on the event's first day (not tomorrow); times and length are kept.
+        if (!formDated.current) {
+          formDated.current = true;
+          const day = r.event.start_date.slice(0, 10);
+          setF((x) => {
+            const len = new Date(x.endsAt).getTime() - new Date(x.startsAt).getTime();
+            const st = new Date(`${day}T${x.startsAt.slice(11)}`);
+            return { ...x, startsAt: localInput(st), endsAt: localInput(new Date(st.getTime() + len)) };
+          });
+        }
       })
       .catch((e) => setError(e.message));
   const customerId = d?.event.customer_id ?? null;
@@ -196,6 +210,37 @@ function Body({ me }: { me: Me }) {
     } catch (err) {
       setError((err as Error).message);
       return false;
+    }
+  };
+
+  const saveTime = async (force = false): Promise<void> => {
+    if (!timeEdit) return;
+    const st = new Date(timeEdit.start), en = new Date(timeEdit.end);
+    if (!(en > st)) return setError('The shift must end after it starts.');
+    setError('');
+    setNote('');
+    try {
+      await api(`/api/shifts/${timeEdit.id}`, { method: 'PATCH', body: { roleName: timeEdit.role.trim() || undefined, startsAt: st.toISOString(), endsAt: en.toISOString(), force: force || undefined } });
+      setTimeEdit(null);
+      setNote('Shift updated. Anyone on it has been told about the new time.');
+      await load();
+    } catch (err) {
+      if (err instanceof ApiError && err.reason === 'clash' && !force && confirm(`${err.message}\n\nSave the new time anyway?`)) return saveTime(true);
+      setError((err as Error).message);
+    }
+  };
+  const savePhase = async () => {
+    if (!phaseEdit) return;
+    if (phaseEdit.end < phaseEdit.start) return setError('The phase ends before it starts.');
+    setError('');
+    setNote('');
+    try {
+      const r = await api<{ phase: { movedShifts?: number } }>(`/api/event-phases/${phaseEdit.id}`, { method: 'PATCH', body: { label: phaseEdit.label, startDate: phaseEdit.start, endDate: phaseEdit.end, moveShifts: phaseEdit.move } });
+      setPhaseEdit(null);
+      setNote(r.phase.movedShifts ? `Phase updated and ${r.phase.movedShifts} shift${r.phase.movedShifts === 1 ? '' : 's'} moved with it. Crew on them have been told.` : 'Phase updated.');
+      await load();
+    } catch (err) {
+      setError((err as Error).message);
     }
   };
 
@@ -344,8 +389,42 @@ function Body({ me }: { me: Me }) {
             <section className="card" key={s.id}>
               <div className="row space">
                 <div>
+                  {timeEdit?.id === s.id ? (
+                    <form className="time-edit" onSubmit={(e) => { e.preventDefault(); saveTime(); }}>
+                      <label>
+                        Role
+                        <input list="role-names" value={timeEdit.role} onChange={(e) => setTimeEdit({ ...timeEdit, role: e.target.value })} required maxLength={100} />
+                      </label>
+                      <label>
+                        Starts
+                        <input
+                          type="datetime-local"
+                          value={timeEdit.start}
+                          onChange={(e) => {
+                            // Moving the start keeps the shift's length.
+                            const len = new Date(timeEdit.end).getTime() - new Date(timeEdit.start).getTime();
+                            const st = new Date(e.target.value);
+                            setTimeEdit({ ...timeEdit, start: e.target.value, end: isNaN(st.getTime()) || !(len > 0) ? timeEdit.end : localInput(new Date(st.getTime() + len)) });
+                          }}
+                          required
+                        />
+                      </label>
+                      <label>
+                        Ends
+                        <input type="datetime-local" value={timeEdit.end} min={timeEdit.start} onChange={(e) => setTimeEdit({ ...timeEdit, end: e.target.value })} required />
+                      </label>
+                      <div className="row" style={{ gap: 6 }}>
+                        <button className="btn small primary">Save</button>
+                        <button type="button" className="btn ghost small" onClick={() => setTimeEdit(null)}>Cancel</button>
+                      </div>
+                    </form>
+                  ) : (
+                  <>
                   <h2>{s.role_name}</h2>
                   <div className="muted small">
+                    <button type="button" className="btn ghost small time-edit-btn" title="Change the role, date or time" onClick={() => setTimeEdit({ id: s.id, role: s.role_name, start: localInput(new Date(s.starts_at)), end: localInput(new Date(s.ends_at)) })}>
+                      ✎ Edit time
+                    </button>{' '}
                     {fmtDateTime(s.starts_at)} – {fmtTime(s.ends_at)}
                     {s.hourly_rate != null && (
                       <>
@@ -357,6 +436,8 @@ function Body({ me }: { me: Me }) {
                     {s.hourly_rate != null && !!s.ot_hours && ` · ${s.ot_hours} h overtime`}
                     {s.hourly_rate != null && !!s.dt_hours && ` · ${s.dt_hours} h double time`}
                   </div>
+                  </>
+                  )}
                   {s.role_rate !== undefined && s.hourly_rate == null && (
                     <div className="small" style={{ marginTop: '.3rem', color: 'var(--staff-warn)' }}>
                       No {s.pay_type === 'day' ? 'day rate' : 'pay rate'} set for {s.role_name}
@@ -557,6 +638,33 @@ function Body({ me }: { me: Me }) {
     <div key={g.key} className="phase-group">
       {(g.phase || d.phases.length > 0) && (
         <div className="phase-head">
+          {phaseEdit && g.phase && phaseEdit.id === g.phase.id ? (
+            <form className="time-edit phase-edit" onSubmit={(e) => { e.preventDefault(); savePhase(); }}>
+              <label>
+                Phase
+                <input value={phaseEdit.label} onChange={(e) => setPhaseEdit({ ...phaseEdit, label: e.target.value })} required maxLength={80} />
+              </label>
+              <label>
+                Starts
+                <input type="date" value={phaseEdit.start} onChange={(e) => setPhaseEdit({ ...phaseEdit, start: e.target.value, end: phaseEdit.end < e.target.value ? e.target.value : phaseEdit.end })} required />
+              </label>
+              <label>
+                Ends
+                <input type="date" value={phaseEdit.end} min={phaseEdit.start} onChange={(e) => setPhaseEdit({ ...phaseEdit, end: e.target.value })} required />
+              </label>
+              {g.shifts.length > 0 && (
+                <label className="check">
+                  <input type="checkbox" checked={phaseEdit.move} onChange={(e) => setPhaseEdit({ ...phaseEdit, move: e.target.checked })} />
+                  Move its {g.shifts.length} shift{g.shifts.length === 1 ? '' : 's'} by the same number of days
+                </label>
+              )}
+              <div className="row" style={{ gap: 6 }}>
+                <button className="btn small primary">Save</button>
+                <button type="button" className="btn ghost small" onClick={() => setPhaseEdit(null)}>Cancel</button>
+              </div>
+            </form>
+          ) : (
+          <>
           <div>
             <h2>{g.phase ? g.phase.label : 'Not in a phase'}</h2>
             {g.phase && (
@@ -573,7 +681,12 @@ function Body({ me }: { me: Me }) {
               <button className="btn small" onClick={() => templateForPhase(g.phase!)}>
                 Use template
               </button>
+              <button className="btn ghost small" title="Change this phase's name or dates" onClick={() => setPhaseEdit({ id: g.phase!.id, label: g.phase!.label, start: g.phase!.starts_on.slice(0, 10), end: g.phase!.ends_on.slice(0, 10), move: true })}>
+                ✎ Edit dates
+              </button>
             </div>
+          )}
+          </>
           )}
         </div>
       )}
@@ -583,6 +696,7 @@ function Body({ me }: { me: Me }) {
 
   return (
     <div className="split">
+      <datalist id="role-names">{skillNames.map((n) => <option key={n} value={n} />)}</datalist>
       <div className="split-main">
       <TopbarAction>
         <button className="btn primary" onClick={() => { shiftForm.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); setTimeout(() => (shiftForm.current?.querySelector('select, input') as HTMLElement | null)?.focus(), 350); }}>

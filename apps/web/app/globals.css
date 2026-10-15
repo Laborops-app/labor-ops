@@ -1668,3 +1668,11 @@ a.cs-co:hover b { color: var(--primary); }
 .lead-role-check input { width: auto; }
 .rates td:first-child { min-width: 170px; }
 .lead-role-check { white-space: nowrap; }
+/* in-place editing of a shift's role/time and a phase's dates */
+.time-edit { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; padding: 10px 12px; margin: 2px 0 6px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
+.time-edit label { display: grid; gap: 4px; font-size: 13px; font-weight: 600; }
+.time-edit label.check { display: flex; align-items: center; gap: 8px; font-weight: 500; flex-basis: 100%; }
+.time-edit label.check input { width: auto; }
+.time-edit input[type="datetime-local"] { min-width: 200px; }
+.phase-edit { flex: 1; }
+.time-edit-btn { padding: 2px 8px; margin-right: 4px; }

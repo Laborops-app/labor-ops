@@ -7,6 +7,7 @@ import { respondLinks } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { loadDepartments } from '../leads';
+import { tellTimeChange } from '../shiftTimes';
 import { withTenant, audit } from '../db';
 import { CustomerError, advanceStage, createCustomer } from '../crm';
 import { getToken, pushEventRequest, RentmanError } from '../rentman';
@@ -483,12 +484,23 @@ export async function eventRoutes(app: FastifyInstance) {
   });
   app.patch('/api/event-phases/:id', { preHandler: mgr }, async (req, reply) => {
     const { id: phaseId } = id.parse(req.params);
-    const b = phaseBody.parse(req.body);
+    // moveShifts: the phase's shifts move by as many days as its start date did (their times of day stay).
+    const b = phaseBody.extend({ moveShifts: z.boolean().optional() }).parse(req.body);
     if (b.endDate < b.startDate) return reply.code(400).send({ error: 'End date is before the start date' });
     const row = await withTenant(req.user.tid, async (c) => {
+      const prev = (await c.query('SELECT starts_on::text AS s FROM event_phases WHERE id = $1', [phaseId])).rows[0];
+      if (!prev) return null;
       const r = await c.query('UPDATE event_phases SET label = $2, starts_on = $3, ends_on = $4 WHERE id = $1 RETURNING id, event_id, label, starts_on, ends_on', [phaseId, b.label, b.startDate, b.endDate]);
-      if (r.rows[0]) await syncRange(c, r.rows[0].event_id);
-      return r.rows[0];
+      const days = Math.round((Date.parse(`${b.startDate}T12:00:00Z`) - Date.parse(`${prev.s.slice(0, 10)}T12:00:00Z`)) / 86400_000);
+      let moved = 0;
+      if (b.moveShifts && days) {
+        const m = await c.query(`UPDATE shifts SET starts_at = starts_at + make_interval(days => $2), ends_at = ends_at + make_interval(days => $2) WHERE phase_id = $1 RETURNING id`, [phaseId, days]);
+        moved = m.rowCount ?? 0;
+        for (const x of m.rows) await tellTimeChange(c, req.user.tid, x.id);
+      }
+      await syncRange(c, r.rows[0].event_id);
+      await audit(c, req.user.tid, req.user.sub, 'event.phase_update', 'event', r.rows[0].event_id, { ...b, movedShifts: moved, days });
+      return { ...r.rows[0], movedShifts: moved };
     });
     return row ? { phase: row } : reply.code(404).send({ error: 'Phase not found' });
   });

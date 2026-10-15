@@ -2888,3 +2888,43 @@ test('on-site: labor coordinator covers the whole event, leads (chosen per event
   await call(a, 'PATCH', `/api/skill-groups/${g}`, { name: 'Sound' });
   assert.ok((await call(a, 'GET', '/api/skills')).json.skills.some((r: any) => r.name === 'Sound Lead' && r.isLead));
 });
+
+test('shift and phase dates: edit a shift time (double-booking asks first, crew told), move a phase with its shifts', async () => {
+  const a = await register('times');
+  const c1 = await mkCrew(a, 'tm1');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Trade show', startDate: '2031-10-19', endDate: '2031-10-19' })).json.event.id as string;
+  const ph = (await call(a, 'POST', `/api/events/${ev}/phases`, { label: 'Load in', startDate: '2031-10-19', endDate: '2031-10-19' })).json.phase.id as string;
+  const mk = async (startsAt: string, endsAt: string, phaseId: string | null = null) =>
+    (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Audio Lead', startsAt, endsAt, headcount: 2, phaseId })).json.shift.id as string;
+  const s1 = await mk('2031-10-16T20:00:00Z', '2031-10-17T04:00:00Z');
+  const s2 = await mk('2031-10-19T14:00:00Z', '2031-10-19T22:00:00Z', ph);
+  await call(a, 'POST', `/api/shifts/${s1}/assign`, { userId: c1.id, confirmed: true });
+  await call(a, 'POST', `/api/shifts/${s2}/assign`, { userId: c1.id, confirmed: true });
+  // Wrong way round
+  assert.equal((await call(a, 'PATCH', `/api/shifts/${s1}`, { startsAt: '2031-10-19T22:00:00Z', endsAt: '2031-10-19T14:00:00Z' })).status, 409);
+  // Moving it onto c1's other shift: asks first
+  const clash = await call(a, 'PATCH', `/api/shifts/${s1}`, { startsAt: '2031-10-19T15:00:00Z', endsAt: '2031-10-19T20:00:00Z' });
+  assert.equal(clash.status, 409);
+  assert.equal(clash.json.reason, 'clash');
+  assert.match(clash.json.error, /Crew tm1/);
+  // A free time saves, keeps people on it and tells them
+  const ok = await call(a, 'PATCH', `/api/shifts/${s1}`, { startsAt: '2031-10-19T06:00:00Z', endsAt: '2031-10-19T12:00:00Z', roleName: 'Audio' });
+  assert.equal(ok.status, 200, ok.text);
+  assert.equal(new Date(ok.json.shift.starts_at).toISOString(), '2031-10-19T06:00:00.000Z');
+  assert.equal(ok.json.shift.role_name, 'Audio');
+  const note = (await call(c1.session, 'GET', '/api/notifications')).json;
+  assert.ok(JSON.stringify(note).includes('Time changed'), JSON.stringify(note).slice(0, 400));
+  // Crew cannot
+  assert.equal((await call(c1.session, 'PATCH', `/api/shifts/${s1}`, { startsAt: '2031-10-19T06:00:00Z', endsAt: '2031-10-19T13:00:00Z' })).status, 403);
+  // Move the phase a day later, with its shifts; the event's dates follow
+  const mv = await call(a, 'PATCH', `/api/event-phases/${ph}`, { label: 'Load in', startDate: '2031-10-20', endDate: '2031-10-20', moveShifts: true });
+  assert.equal(mv.status, 200, mv.text);
+  assert.equal(mv.json.phase.movedShifts, 1);
+  const det = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  assert.equal(new Date(det.shifts.find((s: any) => s.id === s2).starts_at).toISOString(), '2031-10-20T14:00:00.000Z');
+  assert.equal(new Date(det.shifts.find((s: any) => s.id === s1).starts_at).toISOString(), '2031-10-19T06:00:00.000Z'); // not in the phase
+  assert.equal(det.event.start_date.slice(0, 10), '2031-10-20');
+  // Without moveShifts the shifts stay put
+  await call(a, 'PATCH', `/api/event-phases/${ph}`, { label: 'Load in', startDate: '2031-10-21', endDate: '2031-10-21' });
+  assert.equal(new Date((await call(a, 'GET', `/api/events/${ev}`)).json.shifts.find((s: any) => s.id === s2).starts_at).toISOString(), '2031-10-20T14:00:00.000Z');
+});

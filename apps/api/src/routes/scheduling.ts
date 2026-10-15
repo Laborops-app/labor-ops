@@ -10,6 +10,7 @@ import { loadRules, checkRules } from '../pay';
 import { canAdjustRates } from '../rates';
 import { claimLinks } from '../notify/respond';
 import { syncEventChannel } from './chat';
+import { tellTimeChange, timeClashes } from '../shiftTimes';
 import { evaluateShift, findClash, filledCount, certMessage } from '../eligibility';
 
 const uuid = z.string().uuid();
@@ -104,7 +105,13 @@ export async function schedulingRoutes(app: FastifyInstance) {
   app.patch('/api/shifts/:id', { preHandler: mgr }, async (req, reply) => {
     const { id } = idParam.parse(req.params);
     const b = z
-      .object({ isOpen: z.boolean().optional(), requiredCerts: certList.optional(), headcount: z.number().int().min(1).max(500).optional(), phaseId: z.string().uuid().nullable().optional(), payRate: z.number().min(0.01).max(10000).multipleOf(0.01).nullable().optional(), payType: z.enum(['hourly', 'day']).optional() })
+      .object({
+        isOpen: z.boolean().optional(), requiredCerts: certList.optional(), headcount: z.number().int().min(1).max(500).optional(), phaseId: z.string().uuid().nullable().optional(),
+        payRate: z.number().min(0.01).max(10000).multipleOf(0.01).nullable().optional(), payType: z.enum(['hourly', 'day']).optional(),
+        // New date and time (and role name); `force` saves even when someone on the shift would be double-booked.
+        startsAt: z.string().datetime({ offset: true }).optional(), endsAt: z.string().datetime({ offset: true }).optional(),
+        roleName: z.string().trim().min(1).max(100).optional(), force: z.boolean().optional(),
+      })
       .parse(req.body);
     const row = await withTenant(req.user.tid, async (c) => {
       if ((b.payRate !== undefined || b.payType !== undefined) && !(await canAdjustRates(c, req.user))) return { error: 'You are not allowed to change pay rates. Ask an admin.', forbidden: true };
@@ -112,16 +119,29 @@ export async function schedulingRoutes(app: FastifyInstance) {
         const filled = await filledCount(c, id);
         if (b.headcount < filled) return { error: `${filled} people are already on this shift` };
       }
-      const wasOpen = (await c.query('SELECT is_open FROM shifts WHERE id = $1', [id])).rows[0]?.is_open;
+      const cur = (await c.query('SELECT is_open, starts_at, ends_at FROM shifts WHERE id = $1', [id])).rows[0];
+      const wasOpen = cur?.is_open;
+      const ns = new Date(b.startsAt ?? cur?.starts_at ?? 0), ne = new Date(b.endsAt ?? cur?.ends_at ?? 0);
+      const timeChanged = !!cur && (b.startsAt !== undefined || b.endsAt !== undefined) && (+ns !== +new Date(cur.starts_at) || +ne !== +new Date(cur.ends_at));
+      if (timeChanged) {
+        if (+ne <= +ns) return { error: 'The shift must end after it starts' };
+        const clashes = b.force ? [] : await timeClashes(c, id, ns, ne);
+        if (clashes.length) return { error: `At the new time ${clashes.length === 1 ? 'this person would be' : 'these people would be'} double-booked: ${clashes.join(', ')}.`, reason: 'clash', clashes };
+      }
       if (b.phaseId && !(await c.query('SELECT 1 FROM event_phases p JOIN shifts s ON s.event_id = p.event_id WHERE p.id = $1 AND s.id = $2', [b.phaseId, id])).rowCount) return { error: 'That phase belongs to a different event' };
       const r = await c.query(
         `UPDATE shifts SET offer_group_id = CASE WHEN $2::boolean IS FALSE THEN NULL ELSE offer_group_id END, is_open = COALESCE($2, is_open), required_certs = COALESCE($3, required_certs), headcount = COALESCE($4, headcount),
                 phase_id = CASE WHEN $5::boolean THEN $6::uuid ELSE phase_id END,
                 pay_rate_override = CASE WHEN $7::boolean THEN $8::numeric ELSE pay_rate_override END,
-                pay_type = COALESCE($9, pay_type)
+                pay_type = COALESCE($9, pay_type),
+                starts_at = CASE WHEN $10::boolean THEN $11::timestamptz ELSE starts_at END,
+                ends_at = CASE WHEN $10::boolean THEN $12::timestamptz ELSE ends_at END,
+                role_name = COALESCE($13, role_name)
          WHERE id = $1 RETURNING *`,
-        [id, b.isOpen ?? null, b.requiredCerts ?? null, b.headcount ?? null, b.phaseId !== undefined, b.phaseId ?? null, b.payRate !== undefined, b.payRate ?? null, b.payType ?? null],
+        [id, b.isOpen ?? null, b.requiredCerts ?? null, b.headcount ?? null, b.phaseId !== undefined, b.phaseId ?? null, b.payRate !== undefined, b.payRate ?? null, b.payType ?? null,
+          timeChanged, ns.toISOString(), ne.toISOString(), b.roleName ?? null],
       );
+      if (r.rows[0] && timeChanged) await tellTimeChange(c, req.user.tid, id);
       // People already on the shift hear about a pay change (their pay line is recalculated from the new rate).
       if (r.rows[0] && (b.payRate !== undefined || b.payType !== undefined)) {
         const who = (await c.query("SELECT user_id FROM shift_assignments WHERE shift_id = $1 AND status <> 'declined'", [id])).rows;
