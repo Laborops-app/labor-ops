@@ -19,6 +19,7 @@ export async function seedDemo(): Promise<void> {
       await seedScheduling(c, tid);
       await seedAddresses(c);
       await seedSkills(c, tid);
+      await seedPayroll(c, tid);
     });
     return;
   }
@@ -102,6 +103,7 @@ export async function seedDemo(): Promise<void> {
     await seedScheduling(c, tenantId);
     await seedAddresses(c);
     await seedSkills(c, tenantId);
+    await seedPayroll(c, tenantId);
     await audit(c, tenantId, admin, 'tenant.seed', 'tenant', tenantId);
   });
   console.log('demo data created (admin@demo.laborops.app, manager@..., crew1@... through crew5@...)');
@@ -180,6 +182,90 @@ async function seedScheduling(c: import('pg').PoolClient, tenantId: string): Pro
     ]),
   ]);
   if (manager) await audit(c, tenantId, manager, 'tenant.seed_scheduling', 'tenant', tenantId);
+}
+
+/**
+ * A full week of approved hours for "last week" (Monday to Sunday), so the Payroll page always has a pay period to
+ * run. Added again whenever the demo starts and last week has no approved time, so the sample never goes stale.
+ * Includes overtime (over 40 hours, and long days), one entry still waiting for approval, and ADP file numbers.
+ */
+export async function seedPayroll(c: import('pg').PoolClient, tenantId: string, now = new Date()): Promise<void> {
+  const day = 86400_000;
+  const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const monday = todayUtc - (((now.getUTCDay() + 6) % 7) + 7) * day; // Monday of last week (00:00 UTC)
+  const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
+  const has = await c.query(
+    "SELECT 1 FROM time_entries WHERE status = 'approved' AND clock_in >= $1 AND clock_in < $2 LIMIT 1",
+    [new Date(monday).toISOString(), new Date(monday + 7 * day).toISOString()],
+  );
+  if (has.rowCount) return;
+  const people = (await c.query("SELECT id, lower(split_part(email, '@', 1)) AS k FROM users WHERE email LIKE '%@demo.laborops.app'")).rows as { id: string; k: string }[];
+  const who = Object.fromEntries(people.map((p) => [p.k, p.id]));
+  const manager = who.manager ?? null;
+  if (!who.crew1 || !who.crew5) return;
+
+  // Payroll file numbers, so the export has employee IDs (Riley is left without one to show the warning).
+  const adp: Record<string, string> = { crew1: '100101', crew2: '100102', crew3: '100103', crew4: '100104' };
+  for (const [k, id] of Object.entries(adp)) await c.query(`UPDATE users SET payroll_ids = payroll_ids || jsonb_build_object('adp', $2::text) WHERE id = $1 AND NOT payroll_ids ? 'adp'`, [who[k], id]);
+
+  // A sample ADP company code, so the ADP file is complete (only if none is set under Integrations).
+  const { loadAcct, saveAcct } = await import('./accounting');
+  const acct = await loadAcct(c);
+  if (!acct.payroll.adp.companyCode) {
+    acct.payroll.adp.companyCode = 'DMO';
+    await saveAcct(c, tenantId, acct);
+  }
+
+  const label = new Date(monday).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  const ev = (await c.query(
+    `INSERT INTO events (tenant_id, name, client, venue, address, start_date, end_date, notes, created_by)
+     VALUES ($1,$2,'Colorado Convention Center','Colorado Convention Center','700 14th St, Denver, CO 80202',$3,$4,'Sample week for the Payroll page.',$5) RETURNING id`,
+    [tenantId, `Denver Home & Garden Expo (week of ${label})`, iso(monday), iso(monday + 5 * day), manager],
+  )).rows[0].id as string;
+
+  // [crew, role, day offsets from Monday, start hour (Denver), hours each day]
+  const plan: [string, string, number[], number, number][] = [
+    ['crew1', 'Audio Tech', [0, 1, 2, 3, 4], 7, 9],          // 45 h: weekly overtime and a little each day
+    ['crew2', 'Lighting Tech', [0, 1, 2, 3], 8, 8],         // 32 h, no overtime
+    ['crew3', 'Camera Operator', [1, 2, 3], 9, 10],         // 30 h
+    ['crew4', 'Forklift Operator', [0, 1, 2, 3, 4, 5], 6, 8], // 48 h: 8 h overtime
+    ['crew5', 'Security', [4, 5], 14, 12.5],                // two long show days
+  ];
+  const shifts = new Map<string, string>();
+  for (const [k, role, days, startH, hours] of plan) {
+    for (const d of days) {
+      const startMs = monday + d * day + (startH + 6) * 3600_000; // Denver is UTC-6 (MDT) / -7: close enough for a demo
+      const endMs = startMs + hours * 3600_000;
+      const key = `${role}|${d}`;
+      let sid = shifts.get(key);
+      if (!sid) {
+        sid = (await c.query(
+          'INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount) VALUES ($1,$2,$3,$4,$5,1) RETURNING id',
+          [tenantId, ev, role, new Date(startMs).toISOString(), new Date(endMs).toISOString()],
+        )).rows[0].id as string;
+        shifts.set(key, sid);
+      }
+      const aid = (await c.query("INSERT INTO shift_assignments (tenant_id, shift_id, user_id, status) VALUES ($1,$2,$3,'accepted') RETURNING id", [tenantId, sid, who[k]])).rows[0].id;
+      // Clock-in a few minutes early or late, like real punches. Riley's last day is still waiting for approval.
+      const jitter = ((d * 7 + k.length * 3) % 11) - 5;
+      const waiting = k === 'crew5' && d === 5;
+      await c.query(
+        `INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in, clock_out, status, approved_by, approved_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [tenantId, aid, who[k], new Date(startMs + jitter * 60_000).toISOString(), new Date(endMs + jitter * 60_000).toISOString(),
+          waiting ? 'submitted' : 'approved', waiting ? null : manager, waiting ? null : new Date(endMs + day).toISOString()],
+      );
+    }
+  }
+  console.log(`demo: added last week's sample hours for payroll (${iso(monday)} to ${iso(monday + 6 * day)})`);
+}
+
+/** For the running demo: add last week's sample hours if they are missing (called every few hours). */
+export async function refreshDemoPayroll(): Promise<void> {
+  const found = await pool.query('SELECT tenant_id FROM auth_find_user($1)', ['admin@demo.laborops.app']);
+  if (!found.rowCount) return;
+  const tid = found.rows[0].tenant_id as string;
+  await withTenant(tid, (c) => seedPayroll(c, tid));
 }
 
 /** Removes the demo company (and everything in it) using the owner connection. */

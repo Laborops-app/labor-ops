@@ -1,7 +1,7 @@
 import { config } from './config';
 import { migrateWithRetry } from './migrate';
 import { buildApp } from './app';
-import { seedDemo } from './seed';
+import { refreshDemoPayroll, seedDemo } from './seed';
 import { startWorkers } from './notify/worker';
 import { startStorageJobs } from './backup';
 
@@ -14,6 +14,8 @@ async function main() {
     startWorkers();
     startStorageJobs();
   }
+  // Demo: keep a full week of approved hours in "last week" for the Payroll page.
+  if (config.seedDemo) setInterval(() => refreshDemoPayroll().catch((e) => console.error('demo payroll:', e?.message ?? e)), 6 * 3600_000).unref();
 }
 
 main().catch((err) => {
