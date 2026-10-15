@@ -8,6 +8,8 @@ import ThemeToggle from '@/components/ThemeToggle';
 import InstallApp, { InstallPopup } from '@/components/InstallApp';
 import NotificationBell from '@/components/NotificationBell';
 import Sidebar from '@/components/Sidebar';
+import AppTabs from '@/components/AppTabs';
+import { initTabs, openTab } from '@/lib/tabs';
 
 const icon = (d: React.ReactNode) => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -270,6 +272,18 @@ export function initials(name: string) {
     .join('');
 }
 
+/** What a tab is called until its page says (an event's name, a customer's name…). */
+const DETAIL: Record<string, string> = { events: 'Event', customers: 'Customer', quotes: 'Quote', crew: 'Crew member', 'my-shifts': 'Shift' };
+function tabTitle(path: string) {
+  const [, first, id] = path.split('/');
+  if (id) return DETAIL[first] ?? '…';
+  return NAV.find((n) => n.href === path)?.label ?? (first ? first.replace(/-/g, ' ').replace(/^\w/, (c) => c.toUpperCase()) : 'Home');
+}
+function tabIcon(path: string) {
+  const n = NAV.filter((x) => path === x.href || path.startsWith(x.href + '/')).sort((a, b) => b.href.length - a.href.length)[0];
+  return n?.icon ?? null;
+}
+
 export default function Shell({ roles, children }: { roles: Role[]; children: (me: Me) => React.ReactNode }) {
   const router = useRouter();
   const path = usePathname();
@@ -292,6 +306,13 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
     poll();
     const t = setInterval(poll, 8000);
     return () => clearInterval(t);
+  }, [me, path]);
+
+  // Every page opened gets an in-app tab.
+  useEffect(() => {
+    if (!me) return;
+    initTabs(me.id);
+    openTab(path, path + window.location.search, tabTitle(path));
   }, [me, path]);
 
   if (!me) return <div className="center muted">Loading…</div>;
@@ -332,6 +353,7 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
             </svg>
           </button>
         </header>
+        <AppTabs path={path} iconFor={tabIcon} />
         <main className="page">{children(me)}</main>
       </div>
 

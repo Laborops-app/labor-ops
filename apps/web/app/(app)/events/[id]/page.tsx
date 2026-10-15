@@ -1,4 +1,5 @@
 'use client';
+import { useTabTitle } from '@/lib/tabs';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
@@ -312,6 +313,7 @@ function Body({ me }: { me: Me }) {
     }
   };
 
+  useTabTitle(d?.event.name);
   if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
   const ev = d.event;
 

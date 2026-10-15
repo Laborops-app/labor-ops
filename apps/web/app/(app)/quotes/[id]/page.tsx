@@ -1,4 +1,5 @@
 'use client';
+import { useTabTitle } from '@/lib/tabs';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -122,6 +123,7 @@ function Body() {
     } catch (e) { setError((e as Error).message); return false; } finally { setBusy(false); }
   };
 
+  useTabTitle(d ? `Quote #${d.quote.number}` : null);
   if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
   const q = d.quote;
   const email = to || q.customer_email || '';

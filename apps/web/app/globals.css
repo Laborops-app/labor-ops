@@ -1613,3 +1613,27 @@ a.cs-co:hover b { color: var(--primary); }
   .co-col { flex-basis: 84vw; }
   .cd { grid-template-columns: minmax(0, 1fr); gap: 24px; }
 }
+
+/* ---------- In-app tabs (one per open page) ---------- */
+.at-bar { display: flex; align-items: flex-end; gap: 4px; padding: 8px 24px 0; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--bg) 92%, transparent); overflow-x: auto; scrollbar-width: thin; }
+.at-tab { flex: 0 0 auto; display: flex; align-items: center; max-width: 240px; min-width: 120px; height: 38px; border: 1px solid transparent; border-bottom: 0; border-radius: 10px 10px 0 0; color: var(--muted); position: relative; top: 1px; }
+.at-tab:hover { background: color-mix(in srgb, var(--surface) 60%, transparent); color: var(--text); }
+.at-tab.on { background: var(--surface); border-color: var(--border); color: var(--text); }
+.at-tab.on::after { content: ''; position: absolute; left: 10px; right: 10px; top: 0; height: 2px; border-radius: 0 0 2px 2px; background: var(--primary); }
+.at-tab.dragging { opacity: 0.4; }
+.at-link { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 100%; padding: 0 4px 0 12px; color: inherit; text-decoration: none; font-size: 13px; font-weight: 500; }
+.at-link:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; border-radius: 8px; }
+.at-icon { display: grid; place-items: center; flex: none; width: 16px; height: 16px; }
+.at-icon svg { width: 16px; height: 16px; }
+.at-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.at-x { flex: none; display: grid; place-items: center; width: 22px; height: 22px; margin-right: 6px; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; opacity: 0; }
+.at-tab:hover .at-x, .at-tab.on .at-x, .at-x:focus-visible { opacity: 1; }
+.at-x:hover { background: var(--surface-2); color: var(--text); }
+.at-others { flex: none; align-self: center; margin: 0 0 4px 8px; padding: 6px 10px; border: 0; border-radius: 8px; background: none; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.at-others:hover { background: var(--surface-2); color: var(--text); }
+@media (hover: none) { .at-x { opacity: 1; } }
+@media (max-width: 760px) {
+  .at-bar { padding: 6px 10px 0; }
+  .at-tab { min-width: 96px; max-width: 170px; height: 34px; }
+  .at-others { display: none; }
+}

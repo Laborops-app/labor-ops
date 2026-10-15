@@ -1,4 +1,5 @@
 'use client';
+import { useTabTitle } from '@/lib/tabs';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -51,6 +52,7 @@ function Body() {
     }
   };
 
+  useTabTitle(d ? `${d.shift.role_name}${d.shift.event_name ? ` · ${d.shift.event_name}` : ''}` : null);
   if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
   const s = d.shift;
   const place = [s.venue, s.address].filter(Boolean).join(', ');

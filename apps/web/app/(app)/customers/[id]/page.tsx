@@ -1,4 +1,5 @@
 'use client';
+import { useTabTitle } from '@/lib/tabs';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -51,6 +52,7 @@ function Body() {
   }, [id]);
   const run = (p: Promise<unknown>, ok = '') => p.then(() => { if (ok) setNote(ok); return load(); }).catch((x) => setError((x as Error).message));
 
+  useTabTitle(d?.customer.name);
   if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
   const c = d.customer;
   const dirty = f.name !== c.name || f.notes !== (c.notes ?? '');
