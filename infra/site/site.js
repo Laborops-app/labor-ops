@@ -22,7 +22,7 @@
     '<tr><td>Password (all)</td><td><code>' + PASSWORD + '</code> <button class="copy" data-copy="' + PASSWORD + '">Copy</button></td></tr>' +
     '</tbody></table>' +
     '<p style="font-size:.86rem">The demo starts in about half a minute, is shared with other visitors and is wiped every 2 hours. No emails or texts are sent.</p>' +
-    '<div class="modal-acts"><button class="btn" data-close>Not now</button><a class="btn accent" href="' + DEMO + '" target="_blank" rel="noopener" data-launch>Launch the demo →</a></div>' +
+    '<div class="modal-acts"><button class="btn btn-dark" data-close>Not now</button><a class="btn btn-brand" href="' + DEMO + '" target="_blank" rel="noopener" data-launch>Launch the demo →</a></div>' +
     '</div>';
   document.body.appendChild(dlg);
   var open = function (e) {
@@ -42,6 +42,15 @@
     }
   });
   if (location.hash === '#demo') open();
+  // "Who it's for" row: arrow buttons scroll one card
+  var row = document.getElementById('roles-row');
+  document.querySelectorAll('[data-row]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      if (!row) return;
+      var card = row.querySelector('.role-card');
+      row.scrollBy({ left: Number(b.getAttribute('data-row')) * ((card ? card.offsetWidth : 400) + 24), behavior: 'smooth' });
+    });
+  });
   var y = document.getElementById('year');
   if (y) y.textContent = new Date().getFullYear();
 })();

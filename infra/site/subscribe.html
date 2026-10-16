@@ -4,61 +4,83 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pricing · LaborOps</title>
-<meta name="description" content="Simple plans priced by active crew. Every plan includes every feature.">
+<meta name="description" content="Plans priced by active crew, with every feature on every plan.">
 <meta property="og:title" content="Pricing · LaborOps">
-<meta property="og:description" content="Simple plans priced by active crew. Every plan includes every feature.">
+<meta property="og:description" content="Plans priced by active crew, with every feature on every plan.">
 <meta property="og:image" content="https://laborops.app/logo-full.png">
 <link rel="icon" href="/icon.png">
 <link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Inter:wght@500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/site.css">
 </head>
 <body>
-<header class="nav">
+<header class="site-header">
   <div class="wrap">
-    <a class="brand" href="/"><img src="/icon.png" alt="" width="32" height="32"><span>Labor<b>Ops</b></span></a>
-    <nav class="nav-links" aria-label="Main">
-      <a class="hide-sm" href="/#features">Features</a>
-      <a class="hide-sm" href="/subscribe">Pricing</a>
-      <a class="btn primary small" href="#demo" data-demo>Try the demo</a>
-    </nav>
+    <a class="logo" href="/"><img src="/icon.png" alt="" width="30" height="30">LaborOps</a>
+    <nav class="site-nav" aria-label="Main"><a href="/#features">Features</a><a href="/#roles">Roles</a><a href="/subscribe" aria-current="page">Pricing</a><a href="#demo" data-demo>Live demo</a></nav>
+    <a class="btn btn-dark" href="#demo" data-demo>Try the demo</a>
   </div>
 </header>
 
-<main class="page">
+<main>
+<section class="alt">
   <div class="wrap">
-    <div class="sec-head" style="text-align:center;margin:0 auto 32px">
-      <span class="eyebrow">Pricing</span>
-      <h2>Priced by active crew. Every feature on every plan.</h2>
-      <p>Labor coordinators, HR and admins are always free. Push notifications and email are unlimited; each plan includes texts.</p>
+    <div class="sec-head">
+      <span class="pill"><span class="ico-mask" style="--m:url(/assets/tag.svg)"></span>Pricing</span>
+      <h1 style="font-size:clamp(36px,5vw,56px);margin:0;line-height:1.1">Find the right plan</h1>
+      <p>Priced by active crew, with every feature on every plan. Labor coordinators, HR and admins are always free; push notifications and email are unlimited.</p>
     </div>
-    <div class="closed" role="status">
-      <strong>We're not taking new customers just yet.</strong>
-      <span>Subscriptions open soon. In the meantime, the live demo has everything below. <a href="#demo" data-demo>Try it now</a>.</span>
-    </div>
+    
+    <div class="notice" role="status"><b>We're not taking new customers just yet.</b><span>Plans open soon. Everything below is in the live demo today.</span><a href="#demo" data-demo>Try it now →</a></div>
     <div class="plans">
-      <div class="plan">
-        <b>Starter</b><div class="price">$49<small> / month</small></div>
-        <ul><li>Up to 25 active crew</li><li>250 texts a month</li><li>Scheduling, time and payroll exports</li><li>Invoices and reports</li></ul>
-        <button class="btn" disabled title="Not open yet">Coming soon</button>
-      </div>
-      <div class="plan pop">
-        <b>Pro</b><div class="price">$149<small> / month</small></div>
-        <ul><li>Up to 100 active crew</li><li>1,000 texts a month</li><li>Leads and on-site coordinators</li><li>QuickBooks Online sync</li></ul>
-        <button class="btn primary" disabled title="Not open yet">Coming soon</button>
-      </div>
-      <div class="plan">
-        <b>Business</b><div class="price">$399<small> / month</small></div>
-        <ul><li>Up to 400 active crew</li><li>4,000 texts a month</li><li>Several divisions</li><li>Priority support</li></ul>
-        <button class="btn" disabled title="Not open yet">Coming soon</button>
-      </div>
+      <article class="plan">
+        <div class="plan-head"><h3>Starter</h3><p>For small crews getting off spreadsheets.</p></div>
+        <div class="price">$49<small>/month</small></div><hr>
+        <ul class="features"><li>Up to 25 active crew</li><li>250 texts a month</li><li>Scheduling and crew picker</li><li>Clock-in on any phone, offline too</li><li>Payroll exports and invoices</li></ul>
+        <button class="btn btn-dark" disabled>Coming soon</button>
+      </article>
+      <article class="plan brand">
+        <span class="pill teal"><span class="ico-mask" style="--m:url(/assets/sparkle.svg)"></span>Popular</span>
+        <div class="plan-head"><h3>Pro</h3><p>For busy production companies.</p></div>
+        <div class="price">$149<small>/month</small></div><hr>
+        <ul class="features"><li>Up to 100 active crew</li><li>1,000 texts a month</li><li>Everything in Starter</li><li>Leads and on-site coordinators</li><li>QuickBooks Online and ADP</li><li>Reports with margin per event</li></ul>
+        <button class="btn btn-light" disabled>Coming soon</button>
+      </article>
+      <article class="plan brand">
+        <div class="plan-head"><h3>Business</h3><p>For staffing companies at scale.</p></div>
+        <div class="price">$399<small>/month</small></div><hr>
+        <ul class="features"><li>Up to 400 active crew</li><li>4,000 texts a month</li><li>Everything in Pro</li><li>HR accounts for invoicing and payroll</li><li>Several divisions</li><li>Priority support</li></ul>
+        <a class="btn btn-brand" href="#demo" data-demo>Try the demo</a>
+      </article>
     </div>
-    <p class="note" style="text-align:center;margin-top:28px"><a class="btn accent" href="#demo" data-demo>Try the live demo</a></p>
   </div>
-</main>
-<footer>
+</section>
+<section class="alt cta-sec">
   <div class="wrap">
-    <span>© <span id="year">2026</span> LaborOps · Crew scheduling, time and payroll for live events</span>
-    <span><a href="/subscribe">Pricing</a> · <a href="/signup">Sign up</a> · <a href="#demo" data-demo>Live demo</a></span>
+    <div class="cta-box">
+      <div class="cta-copy">
+        <h2>Let’s run your next show on LaborOps</h2>
+        <div class="acts"><a class="btn btn-brand" href="#demo" data-demo>Try the live demo</a><a class="btn btn-white" href="/subscribe">See pricing</a></div>
+      </div>
+      <img src="/assets/cta-photo.jpg" alt="" width="589" height="562">
+    </div>
+  </div>
+</section>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="foot">
+      <div>
+        <a class="logo" href="/"><img src="/icon.png" alt="" width="30" height="30">LaborOps</a>
+        <p>Crew scheduling, time tracking, payroll and invoicing for production, event and staffing companies.</p>
+      </div>
+      <div><h4>Product</h4><ul><li><a href="/#features">Features</a></li><li><a href="/#roles">Who it's for</a></li><li><a href="/subscribe">Pricing</a></li></ul></div>
+      <div><h4>Get started</h4><ul><li><a href="#demo" data-demo>Live demo</a></li><li><a href="/signup">Sign up</a></li></ul></div>
+      <div><h4>See it working</h4><div class="try"><span>Full sample company, no sign-up</span><a href="#demo" data-demo>Open</a></div></div>
+    </div>
+    <div class="copy-note">© <span id="year">2026</span> LaborOps. All rights reserved.</div>
   </div>
 </footer>
 <script src="/site.js"></script>

@@ -10,38 +10,43 @@
 <meta property="og:image" content="https://laborops.app/logo-full.png">
 <link rel="icon" href="/icon.png">
 <link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Inter:wght@500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/site.css">
 </head>
 <body>
-<header class="nav">
+<header class="site-header">
   <div class="wrap">
-    <a class="brand" href="/"><img src="/icon.png" alt="" width="32" height="32"><span>Labor<b>Ops</b></span></a>
-    <nav class="nav-links" aria-label="Main">
-      <a class="hide-sm" href="/#features">Features</a>
-      <a class="hide-sm" href="/subscribe">Pricing</a>
-      <a class="btn primary small" href="#demo" data-demo>Try the demo</a>
-    </nav>
+    <a class="logo" href="/"><img src="/icon.png" alt="" width="30" height="30">LaborOps</a>
+    <nav class="site-nav" aria-label="Main"><a href="/#features">Features</a><a href="/#roles">Roles</a><a href="/subscribe">Pricing</a><a href="#demo" data-demo>Live demo</a></nav>
+    <a class="btn btn-dark" href="#demo" data-demo>Try the demo</a>
   </div>
 </header>
 
-<main class="page">
+<main class="simple alt">
   <div class="wrap">
     <div class="card">
-      <img src="/icon-192.png" alt="" width="72" height="72" style="margin:0 auto 10px;border-radius:16px">
-      <span class="eyebrow">Sign up</span>
-      <h1>We're not taking new companies yet.</h1>
-      <p style="color:var(--muted)">LaborOps opens to new customers soon. Until then, explore the live demo: a full sample company with crew, events, timesheets, payroll and invoices. No sign-up needed.</p>
-      <div class="cta" style="justify-content:center;margin-top:20px">
-        <a class="btn accent" href="#demo" data-demo>Try the live demo</a>
-        <a class="btn" href="/subscribe">See pricing</a>
-      </div>
+      <span class="pill"><span class="ico-mask" style="--m:url(/assets/tag.svg)"></span>Sign up</span>
+      <h1>We're not taking new companies yet</h1>
+      <p>LaborOps opens to new customers soon. Until then, explore the live demo: a full sample company with crew, events, timesheets, payroll and invoices. No sign-up needed.</p>
+      <div class="stack"><img src="/assets/crew-1.jpg" alt="" width="48" height="48"><img src="/assets/crew-2.jpg" alt="" width="48" height="48"><img src="/assets/crew-3.jpg" alt="" width="48" height="48"><img src="/assets/crew-4.jpg" alt="" width="48" height="48"><img src="/assets/crew-5.jpg" alt="" width="48" height="48"></div>
+      <div class="row"><a class="btn btn-brand btn-lg" href="#demo" data-demo>Try the live demo</a><a class="btn btn-dark btn-lg" href="/subscribe">See pricing</a></div>
     </div>
   </div>
 </main>
-<footer>
+<footer class="site-footer">
   <div class="wrap">
-    <span>© <span id="year">2026</span> LaborOps · Crew scheduling, time and payroll for live events</span>
-    <span><a href="/subscribe">Pricing</a> · <a href="/signup">Sign up</a> · <a href="#demo" data-demo>Live demo</a></span>
+    <div class="foot">
+      <div>
+        <a class="logo" href="/"><img src="/icon.png" alt="" width="30" height="30">LaborOps</a>
+        <p>Crew scheduling, time tracking, payroll and invoicing for production, event and staffing companies.</p>
+      </div>
+      <div><h4>Product</h4><ul><li><a href="/#features">Features</a></li><li><a href="/#roles">Who it's for</a></li><li><a href="/subscribe">Pricing</a></li></ul></div>
+      <div><h4>Get started</h4><ul><li><a href="#demo" data-demo>Live demo</a></li><li><a href="/signup">Sign up</a></li></ul></div>
+      <div><h4>See it working</h4><div class="try"><span>Full sample company, no sign-up</span><a href="#demo" data-demo>Open</a></div></div>
+    </div>
+    <div class="copy-note">© <span id="year">2026</span> LaborOps. All rights reserved.</div>
   </div>
 </footer>
 <script src="/site.js"></script>
