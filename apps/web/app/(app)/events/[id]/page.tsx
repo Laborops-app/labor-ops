@@ -15,6 +15,7 @@ import TimeEdit from '@/components/TimeEdit';
 import Modal from '@/components/Modal';
 import InvoicePanel from '@/components/InvoicePanel';
 import HrEventView from '@/components/HrEventView';
+import EventCrewSearch from '@/components/EventCrewSearch';
 import TopbarAction, { PlusIcon, TrashIcon, avClass, initialsOf } from '@/components/TopbarAction';
 import CopyEvent from '@/components/CopyEvent';
 import { api, ApiError, Me, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
@@ -522,7 +523,7 @@ function Body({ me }: { me: Me }) {
           const best = (a: { m: Member }, b: { m: Member }) => Number(!!flagOf(a.m)) - Number(!!flagOf(b.m)) || stars(b.m) - stars(a.m) || a.m.name.localeCompare(b.m.name);
           const options = [...candidates].sort(best).map(({ m, e }) => pickOption(m, e, starsShown(m, s.role_name), undefined, d.event.name));
           return (
-            <section className="card" key={s.id}>
+            <section className="card" key={s.id} id={`shift-${s.id}`}>
               <div className="row space">
                 <div>
                   {timeEdit?.id === s.id ? (
@@ -810,6 +811,51 @@ function Body({ me }: { me: Me }) {
     setTplStart(p.starts_on.slice(0, 10));
     setSettings('tpl');
   };
+  // Inside a phase, shifts are grouped by position (Load In → Loaders, Pushers …); each group collapses on its own.
+  const subKey = (phaseKey: string, role: string) => `${phaseKey}:${roleKey(role)}`;
+  const addRoleToPhase = (p: Phase | null, role: string) => {
+    if (p) addToPhase(p, false);
+    else setF((x) => ({ ...x, phaseId: '' }));
+    setOtherRole(!skillNames.includes(role));
+    setF((x) => ({ ...x, roleName: role }));
+    openShiftModal();
+  };
+  const roleGroups = (g: { key: string; phase: Phase | null; shifts: Shift[] }) => {
+    const byRole = new Map<string, Shift[]>();
+    for (const s of g.shifts) {
+      const k = roleKey(s.role_name);
+      byRole.set(k, [...(byRole.get(k) ?? []), s]);
+    }
+    return [...byRole.values()].map((list) => {
+      const role = list[0].role_name;
+      const k = subKey(g.key, role);
+      const open = !closed.has(k);
+      const need = list.reduce((n, x) => n + x.headcount, 0);
+      const have = list.reduce((n, x) => n + Math.min(x.headcount, x.assignments.filter((a) => a.status !== 'declined').length), 0);
+      return (
+        <div key={k} className="role-group">
+          <div className="role-head">
+            <button
+              type="button"
+              className="phase-toggle role-toggle"
+              aria-expanded={open}
+              onClick={() => { const n = new Set(closed); if (n.has(k)) n.delete(k); else n.add(k); setClosedSaved(n); }}
+            >
+              <svg className="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+              <span>
+                <b>{role}</b>
+                <span className="muted small">{list.length} shift{list.length === 1 ? '' : 's'} · <span className={have >= need ? 'filled-ok' : ''}>{have}/{need} filled</span></span>
+              </span>
+            </button>
+            <button type="button" className="btn ghost small" title={`Add another ${role} shift${g.phase ? ` to ${g.phase.label}` : ''}`} onClick={() => addRoleToPhase(g.phase, role)}>
+              + {role}
+            </button>
+          </div>
+          {open && <div className="role-shifts">{renderShifts(list)}</div>}
+        </div>
+      );
+    });
+  };
   const groupSection = (g: { key: string; phase: Phase | null; shifts: Shift[] }) => (
     <div key={g.key} className="phase-group">
       {(g.phase || d.phases.length > 0) && (
@@ -879,7 +925,7 @@ function Body({ me }: { me: Me }) {
           )}
         </div>
       )}
-      {closed.has(g.key) ? null : g.shifts.length === 0 ? <Empty>{g.phase ? `No shifts in ${g.phase.label} yet.` : 'No shifts yet. Add the first one above.'}</Empty> : renderShifts(g.shifts)}
+      {closed.has(g.key) ? null : g.shifts.length === 0 ? <Empty>{g.phase ? `No shifts in ${g.phase.label} yet.` : 'No shifts yet. Add the first one above.'}</Empty> : roleGroups(g)}
     </div>
   );
 
@@ -1167,6 +1213,22 @@ function Body({ me }: { me: Me }) {
       )}
 
       <EventDetails ev={ev} hasPhases={d.phases.length > 0} shiftCount={d.shifts.length} onSaved={load} onError={setError} />
+      {d.shifts.some((s) => s.assignments.length > 0) && (
+        <EventCrewSearch
+          shifts={d.shifts}
+          phases={d.phases}
+          onJump={(shiftId, key, role) => {
+            const sk = subKey(key, role);
+            if (closed.has(key) || closed.has(sk)) { const n = new Set(closed); n.delete(key); n.delete(sk); setClosedSaved(n); }
+            setTimeout(() => {
+              const el = document.getElementById(`shift-${shiftId}`);
+              if (!el) return;
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+            }, 60);
+          }}
+        />
+      )}
       {groups.length > 1 && (
         <div className="row phase-all">
           <button type="button" className="btn ghost small" onClick={() => setClosedSaved(new Set())} disabled={closed.size === 0}>Expand all</button>

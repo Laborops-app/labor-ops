@@ -2859,6 +2859,15 @@ test('on-site: labor coordinator covers the whole event, leads (chosen per event
   assert.equal((await call(lead.session, 'POST', `/api/onsite/assignments/${aLight}/check-in`)).status, 404);
   assert.equal((await call(lead.session, 'POST', `/api/onsite/assignments/${aLater}/check-in`)).status, 404);
   assert.equal((await call(lead.session, 'POST', `/api/onsite/assignments/${aAudio}/check-out`)).status, 200);
+  // Whole-event roster: a lead sees everyone (read only), with phones only for their own team
+  const ro = await call(lead.session, 'GET', `/api/onsite/events/${ev}/roster`);
+  assert.equal(ro.status, 200, ro.text);
+  assert.deepEqual(ro.json.people.map((x: any) => x.name).sort(), ['Crew os-audio', 'Crew os-audio2', 'Crew os-coord', 'Crew os-lead', 'Crew os-light']);
+  const lightRow = ro.json.people.find((x: any) => x.name === 'Crew os-light');
+  assert.equal(lightRow.my_team, false);
+  assert.equal(lightRow.phone, null);
+  assert.equal(ro.json.people.find((x: any) => x.name === 'Crew os-audio').my_team, true);
+  assert.equal((await call(au.session, 'GET', `/api/onsite/events/${ev}/roster`)).status, 404);
 
   // On-site coordinator: everyone at the event
   const cv = (await call(coord.session, 'GET', `/api/onsite/events/${ev}`)).json;

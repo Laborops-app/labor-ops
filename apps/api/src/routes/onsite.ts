@@ -145,6 +145,36 @@ export async function onsiteRoutes(app: FastifyInstance) {
     return out ?? reply.code(404).send({ error: 'You do not have on-site access to this event' });
   });
 
+  // Who is on the whole event (read only), so a lead can find anyone, not just their own team. Phone numbers
+  // only for the crew the caller covers; check-in and time changes stay limited to that crew.
+  app.get('/api/onsite/events/:id/roster', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const out = await withTenant(req.user.tid, async (c) => {
+      const scope = await scopeFor(c, req.user.sub, id);
+      if (!scope) return null;
+      const rows = (
+        await c.query(
+          `SELECT a.id AS assignment_id, u.id AS user_id, u.name, u.phone, a.is_lead,
+                  s.id AS shift_id, s.role_name, s.starts_at, s.ends_at, p.label AS phase,
+                  (SELECT t.clock_in FROM time_entries t WHERE t.assignment_id = a.id AND t.clock_out IS NULL ORDER BY t.clock_in DESC LIMIT 1) AS clocked_in_at,
+                  (SELECT max(t.clock_out) FROM time_entries t WHERE t.assignment_id = a.id) AS last_clock_out
+             FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN users u ON u.id = a.user_id
+             LEFT JOIN event_phases p ON p.id = s.phase_id
+            WHERE s.event_id = $1 AND a.status = 'accepted'
+            ORDER BY s.starts_at, s.role_name, u.name`,
+          [id],
+        )
+      ).rows;
+      return {
+        people: rows.map(({ phone, ...r }) => {
+          const mine = scope.covers({ id: r.shift_id, role_name: r.role_name, starts_at: r.starts_at, ends_at: r.ends_at });
+          return { ...r, my_team: mine, phone: mine && r.user_id !== req.user.sub ? phone : null, is_me: r.user_id === req.user.sub };
+        }),
+      };
+    });
+    return out ?? reply.code(404).send({ error: 'You do not have on-site access to this event' });
+  });
+
   app.post('/api/onsite/assignments/:id/check-in', { preHandler: authenticate }, async (req, reply) => {
     const { id } = z.object({ id: uuid }).parse(req.params);
     const r = await withTenant(req.user.tid, async (c) => {
