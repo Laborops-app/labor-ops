@@ -20,6 +20,17 @@ export default function MyEarnings() {
   const [d, setD] = useState<Data | null>(null);
   const [open, setOpen] = useState(false);
   const [err, setErr] = useState('');
+  // Folded by default; the choice is remembered on this device.
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    try { setShown(localStorage.getItem('lo_earnings_open') === '1'); } catch { /* storage blocked */ }
+  }, []);
+  const toggle = () => {
+    setShown((v) => {
+      try { localStorage.setItem('lo_earnings_open', v ? '0' : '1'); } catch { /* ignore */ }
+      return !v;
+    });
+  };
   useEffect(() => {
     setErr('');
     api<Data>(`/api/my/earnings?offset=${offset}`).then(setD).catch((e) => setErr(e.message));
@@ -32,21 +43,28 @@ export default function MyEarnings() {
     ...d.scheduled.shifts.map((e) => ({ ...e, kind: 'Scheduled' })),
   ].sort((a, b) => a.date.localeCompare(b.date)) : [];
   return (
-    <section className="card earnings">
-      <div className="row space earnings-head">
-        <div>
-          <h2 style={{ margin: 0 }}>Earnings</h2>
-          <div className="muted small">
+    <section className={`card earnings${shown ? ' open' : ''}`}>
+      <button type="button" className="earn-toggle" onClick={toggle} aria-expanded={shown}>
+        <span className="earn-toggle-text">
+          <b>Earnings</b>
+          <span className="muted small">
             {p ? <>{p.current ? 'This pay period' : p.past ? 'Past pay period' : 'Next pay period'} · {range(p.from, p.to)}</> : 'Loading…'}
-          </div>
-        </div>
-        <div className="row" style={{ gap: '.25rem' }}>
+          </span>
+        </span>
+        <span className="earn-toggle-sum">
+          <span className="earn-label">{p?.past ? 'Total' : 'Estimated'}</span>
+          <span className="earn-sum">{d ? money(d.estimated.pay) : '…'}</span>
+        </span>
+        <svg className="fold-chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+      </button>
+      {shown && (
+        <div className="row earn-nav">
           <button className="icon-btn" aria-label="Previous pay period" onClick={() => setOffset(offset - 1)} disabled={offset <= -26}>‹</button>
-          {offset !== 0 && <button className="btn ghost small" onClick={() => setOffset(0)}>Now</button>}
+          {offset !== 0 && <button className="btn ghost small" onClick={() => setOffset(0)}>This period</button>}
           <button className="icon-btn" aria-label="Next pay period" onClick={() => setOffset(offset + 1)} disabled={offset >= 1}>›</button>
         </div>
-      </div>
-      {d && (
+      )}
+      {d && shown && (
         <>
           <div className="earn-grid">
             <div className="earn-tile main">

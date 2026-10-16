@@ -1807,3 +1807,14 @@ details.card.profile-fold > summary::before { content: none; }
 .earn-tile.main .earn-value { color: var(--primary); }
 .earn-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 @media (max-width: 599px) { .earn-grid { grid-template-columns: 1fr 1fr; } }
+.earnings { padding-top: 0; padding-bottom: 0; }
+.earnings.open { padding-bottom: 1rem; }
+.earn-toggle { all: unset; box-sizing: border-box; width: 100%; display: flex; align-items: center; gap: 0.75rem; padding: 0.9rem 0; min-height: 56px; cursor: pointer; }
+.earn-toggle:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 8px; }
+.earn-toggle-text { flex: 1; display: grid; gap: 0.1rem; min-width: 0; }
+.earn-toggle-text b { font-size: 1.1rem; }
+.earn-toggle-sum { display: grid; justify-items: end; }
+.earn-sum { font-size: 1.2rem; font-weight: 700; color: var(--primary); font-variant-numeric: tabular-nums; }
+.earnings .fold-chev { color: var(--muted); transition: transform 0.15s; flex: none; }
+.earnings.open .fold-chev { transform: rotate(180deg); }
+.earn-nav { gap: 0.25rem; margin: 0 0 0.6rem; }
