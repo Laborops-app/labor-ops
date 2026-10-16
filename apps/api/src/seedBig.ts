@@ -4,6 +4,7 @@ import type { PoolClient } from 'pg';
 import { pool, withTenant, audit } from './db';
 import { config } from './config';
 import { roleKeyOf } from './pay';
+import { timesheetGaps } from './pipeline';
 
 /**
  * The public demo (demoapp.laborops.app): on top of the regular demo company, a busy season of sample data —
@@ -36,6 +37,12 @@ const SHOWS = ['Spring Product Launch', 'Tech Summit', 'Holiday Gala', 'Charity 
   'Food & Wine Festival', 'Hip-Hop Showcase', 'Ballet Gala', 'Home Show', 'Car Launch', 'Awards Dinner', 'Electronic Music Night', 'Gaming Convention', 'Bridal Show',
   'Art Fair', 'Shareholder Meeting', 'Christmas Market', 'Indie Rock Weekend', 'Opera Night', 'Science Expo', 'Film Festival', 'Kids Fest', 'Pumpkin Festival', 'Rodeo', 'Gala Dinner', 'Tattoo Expo'];
 
+const PHASE_ROLES: Record<string, string[]> = {
+  'Load in': ['Stagehand', 'Loader', 'Rigger', 'Forklift Operator', 'Lighting Tech'],
+  'Show day': ['Audio Tech', 'Lighting Tech', 'Camera Operator', 'Security', 'Runner', 'Stagehand'],
+  Strike: ['Stagehand', 'Loader', 'Forklift Operator', 'Rigger'],
+  Single: ['Stagehand', 'Audio Tech', 'Lighting Tech', 'Loader', 'Security', 'Runner'],
+};
 const VENUES = ['Main Stage', 'Exhibit Hall A', 'Grand Ballroom', 'North Lawn', 'Arena Floor', 'Studio 3', 'Pavilion', 'Amphitheatre', 'Hall B', 'Rooftop Terrace'];
 const DAY = 86400_000;
 const ymd = (offset: number) => new Date(Date.now() + offset * DAY).toISOString().slice(0, 10);
@@ -121,17 +128,20 @@ async function big(c: PoolClient, tid: string, hash: string) {
     let billed = 0;
     for (let d = 0; d < days; d++) {
       const day = start + d;
-      await c.query('INSERT INTO event_phases (tenant_id, event_id, label, starts_on, ends_on) VALUES ($1,$2,$3,$4,$4)',
-        [tid, eid, days === 1 ? 'Show day' : d === 0 ? 'Load in' : d === days - 1 ? 'Strike' : 'Show day', ymd(day)]);
-      const roles = [...new Set(Array.from({ length: int(3, 5) }, () => pick(ROLES)))];
+      // One phase per day, and each day's shifts sit in it with roles that fit the phase.
+      const label = days === 1 ? 'Show day' : d === 0 ? 'Load in' : d === days - 1 ? 'Strike' : 'Show day';
+      const phaseId = (await c.query('INSERT INTO event_phases (tenant_id, event_id, label, starts_on, ends_on) VALUES ($1,$2,$3,$4,$4) RETURNING id',
+        [tid, eid, label, ymd(day)])).rows[0].id as string;
+      const fits = PHASE_ROLES[days === 1 ? 'Single' : label];
+      const roles = [...new Set(Array.from({ length: int(3, Math.min(5, fits.length)) }, () => pick(fits)))].map((n) => ROLES.find((r) => r[0] === n)!);
       for (const [role, , bill] of roles) {
-        const startH = pick([6, 7, 8, 12, 16]);
+        const startH = label === 'Load in' ? pick([6, 7, 8]) : label === 'Strike' ? pick([16, 18, 20]) : pick([8, 10, 12, 16]);
         const len = pick([4, 6, 8, 8, 10]);
         const head = int(2, 7);
         const sid = id();
         await c.query(
-          'INSERT INTO shifts (id, tenant_id, event_id, role_name, starts_at, ends_at, headcount, min_hours) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
-          [sid, tid, eid, role, at(day, startH), at(day, startH + len), head, len <= 4 ? 4 : null],
+          'INSERT INTO shifts (id, tenant_id, event_id, role_name, starts_at, ends_at, headcount, min_hours, phase_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+          [sid, tid, eid, role, at(day, startH), at(day, startH + len), head, len <= 4 ? 4 : null, phaseId],
         );
         const fit = crew.filter((p) => p.skills.includes(role) && free(p.id, day)).sort(() => rnd() - 0.5);
         const others = crew.filter((p) => !p.skills.includes(role) && free(p.id, day)).sort(() => rnd() - 0.5);
@@ -184,8 +194,22 @@ async function big(c: PoolClient, tid: string, hash: string) {
       await c.query("UPDATE events SET pipeline_status = 'canceled', archived_at = now(), archive_reason = 'canceled', archived_by = $2 WHERE id = $1", [eid, manager]);
     }
   }
+  // The regular demo events get one phase per day, with their shifts placed in the day they start.
+  const tz = (await one('SELECT timezone FROM tenants WHERE id = $1', [tid])).timezone as string;
+  const bare = (await c.query('SELECT id, start_date::text AS s, end_date::text AS e FROM events e WHERE NOT EXISTS (SELECT 1 FROM event_phases p WHERE p.event_id = e.id)')).rows;
+  for (const ev of bare) {
+    const n = Math.round((Date.parse(ev.e) - Date.parse(ev.s)) / DAY) + 1;
+    for (let d = 0; d < n; d++) {
+      const day = new Date(Date.parse(ev.s) + d * DAY).toISOString().slice(0, 10);
+      const label = n === 1 ? 'Show day' : d === 0 ? 'Load in' : d === n - 1 ? 'Strike' : 'Show day';
+      const pid = (await c.query('INSERT INTO event_phases (tenant_id, event_id, label, starts_on, ends_on) VALUES ($1,$2,$3,$4,$4) RETURNING id', [tid, ev.id, label, day])).rows[0].id;
+      await c.query('UPDATE shifts SET phase_id = $2 WHERE event_id = $1 AND phase_id IS NULL AND (starts_at AT TIME ZONE $4)::date = $3::date', [ev.id, pid, day, tz]);
+    }
+  }
   // The regular demo events follow the calendar too.
-  await c.query("UPDATE events SET pipeline_status = 'completed' WHERE end_date < current_date AND pipeline_status NOT IN ('completed', 'canceled')");
+  // Finished events become Completed only when all their time is in (the same rule as the board).
+  for (const e of (await c.query("SELECT id FROM events WHERE end_date < current_date AND pipeline_status NOT IN ('completed', 'canceled')")).rows)
+    await c.query(`UPDATE events SET pipeline_status = $2 WHERE id = $1`, [e.id, (await timesheetGaps(c, e.id)).ok ? 'completed' : 'in_progress']);
   await c.query("UPDATE events SET pipeline_status = 'in_progress' WHERE start_date <= current_date AND end_date >= current_date AND pipeline_status NOT IN ('completed', 'canceled', 'in_progress')");
   // A notice for HR and the admin: something ready to invoice
   const ready = await one("SELECT id, name FROM events WHERE pipeline_status = 'completed' AND archived_at IS NULL ORDER BY end_date DESC LIMIT 1", []);

@@ -16,7 +16,7 @@ import { STATUS, STATUS_ORDER, PRIORITY, type PipelineStatus, type Priority } fr
 type Card = {
   id: string; name: string; client: string | null; venue: string | null; start_date: string; end_date: string; status: PipelineStatus; priority: Priority;
   status_changed_at: string; customer_id: string | null; customer_name: string | null; created_by: string | null;
-  slots: number; filled: number; accepted: number; waiting: number; shift_count: number; on_clock: number; to_approve: number; to_rate: number; invoiced: boolean; messages: number;
+  slots: number; filled: number; accepted: number; waiting: number; shift_count: number; on_clock: number; missing_time?: number; to_approve: number; to_rate: number; invoiced: boolean; messages: number;
   quote: { id: string; number: number; status: string } | null; crew: { id: string; name: string; status: string }[];
 };
 type Board = { events: Card[]; team: { id: string; name: string; role: string }[] };
@@ -140,6 +140,7 @@ function CardView({ c, onMove, onPriority, onDragStart, onDragEnd, dragging }: {
 
       {wrap && (
         <ul className="pm-wrap" aria-label="Wrap-up">
+          {(c.missing_time ?? 0) > 0 && <li className="todo"><Svg size={14}>{Ico.clock}</Svg>{c.missing_time} shift{c.missing_time === 1 ? '' : 's'} with no time submitted</li>}
           <li className={c.to_approve ? 'todo' : 'done'}><Svg size={14}>{c.to_approve ? Ico.clock : Ico.check}</Svg>{c.to_approve ? `${c.to_approve} timesheet${c.to_approve === 1 ? '' : 's'} to approve` : 'Timesheets approved'}</li>
           <li className={c.to_rate ? 'todo' : 'done'}><Svg size={14}>{c.to_rate ? Ico.clock : Ico.check}</Svg>{c.to_rate ? `${c.to_rate} to rate` : 'Crew rated'}</li>
           <li className={c.invoiced ? 'done' : 'todo'}><Svg size={14}>{c.invoiced ? Ico.check : Ico.clock}</Svg>{c.invoiced ? 'Invoiced' : 'Not invoiced'}</li>

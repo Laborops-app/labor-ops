@@ -76,3 +76,31 @@ export async function autoAdvance(c: PoolClient, tid: string) {
   const due = (await c.query("SELECT id FROM events WHERE pipeline_status = 'confirmed' AND start_date <= current_date AND end_date >= current_date")).rows;
   for (const e of due) await setStatus(c, tid, e.id, 'in_progress', null, 'Event started');
 }
+
+/**
+ * What stops an event from being Completed: every worked shift needs its time submitted.
+ *  - open: someone is still clocked in
+ *  - missing: an accepted shift is over but the person has no time (and isn't marked a no-show)
+ *  - upcoming: accepted shifts that haven't ended yet
+ */
+export async function timesheetGaps(c: PoolClient, eventId: string) {
+  const r = (
+    await c.query(
+      `SELECT
+         (SELECT count(*)::int FROM time_entries t JOIN shift_assignments a ON a.id = t.assignment_id JOIN shifts s ON s.id = a.shift_id
+           WHERE s.event_id = $1 AND t.clock_out IS NULL) AS open,
+         (SELECT count(*)::int FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id
+           WHERE s.event_id = $1 AND a.status = 'accepted' AND s.ends_at <= now() AND a.no_show_at IS NULL
+             AND NOT EXISTS (SELECT 1 FROM time_entries t WHERE t.assignment_id = a.id)) AS missing,
+         (SELECT count(*)::int FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id
+           WHERE s.event_id = $1 AND a.status = 'accepted' AND s.ends_at > now()) AS upcoming`,
+      [eventId],
+    )
+  ).rows[0] as { open: number; missing: number; upcoming: number };
+  const parts: string[] = [];
+  const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`;
+  if (r.upcoming) parts.push(`${n(r.upcoming, 'shift hasn\'t', 'shifts haven\'t')} finished yet`);
+  if (r.open) parts.push(`${n(r.open, 'person is', 'people are')} still clocked in`);
+  if (r.missing) parts.push(`${n(r.missing, 'worked shift has', 'worked shifts have')} no time submitted (add the time, or mark a no-show)`);
+  return { ...r, ok: !parts.length, message: parts.length ? `Not ready to complete: ${parts.join('; ')}.` : '' };
+}

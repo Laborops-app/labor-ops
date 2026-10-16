@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
 import { guard } from '../auth';
-import { STATUSES, autoAdvance, setStatus } from '../pipeline';
+import { STATUSES, autoAdvance, setStatus, timesheetGaps } from '../pipeline';
 
 const mgr = guard('admin', 'manager', 'hr');
 
@@ -39,6 +39,9 @@ export async function pipelineRoutes(app: FastifyInstance) {
                     WHERE s.event_id = e.id AND a.status = 'accepted' AND s.ends_at < now()
                       AND NOT EXISTS (SELECT 1 FROM crew_reviews r WHERE r.user_id = a.user_id AND r.shift_id = s.id)) AS to_rate,
                   EXISTS (SELECT 1 FROM event_invoices i WHERE i.event_id = e.id) AS invoiced,
+                  (SELECT count(*)::int FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id
+                    WHERE s.event_id = e.id AND a.status = 'accepted' AND s.ends_at <= now() AND a.no_show_at IS NULL
+                      AND NOT EXISTS (SELECT 1 FROM time_entries t WHERE t.assignment_id = a.id)) AS missing_time,
                   (SELECT count(*)::int FROM chat_messages m JOIN chat_channels ch ON ch.id = m.channel_id WHERE ch.event_id = e.id AND ch.kind = 'event' AND m.deleted_at IS NULL) AS messages,
                   (SELECT json_build_object('id', qq.id, 'number', qq.number, 'status', qq.status)
                      FROM quotes qq WHERE qq.event_id = e.id ORDER BY (qq.status = 'accepted') DESC, qq.created_at DESC LIMIT 1) AS quote,
@@ -77,6 +80,11 @@ export async function pipelineRoutes(app: FastifyInstance) {
     const out = await withTenant(req.user.tid, async (c) => {
       const ev = (await c.query('SELECT id, pipeline_status, priority FROM events WHERE id = $1', [id])).rows[0];
       if (!ev) return null;
+      // Completed means every timesheet is in: nobody still clocked in, no worked shift without time.
+      if (b.status === 'completed' && ev.pipeline_status !== 'completed') {
+        const gaps = await timesheetGaps(c, id);
+        if (!gaps.ok) return { blocked: gaps } as const;
+      }
       if (b.status) await setStatus(c, req.user.tid, id, b.status, req.user.sub, null);
       if (b.priority && b.priority !== ev.priority) {
         await c.query('UPDATE events SET priority = $2 WHERE id = $1', [id, b.priority]);
@@ -89,6 +97,10 @@ export async function pipelineRoutes(app: FastifyInstance) {
       return (await c.query('SELECT pipeline_status AS status, priority, status_changed_at, board_position FROM events WHERE id = $1', [id])).rows[0];
     });
     if (out === 'bad') return reply.code(400).send({ error: 'The order must include the card that moved' });
+    if (out && 'blocked' in out) {
+      const g = out.blocked!;
+      return reply.code(409).send({ error: g.message, reason: 'timesheets_incomplete', open: g.open, missing: g.missing, upcoming: g.upcoming });
+    }
     return out ?? reply.code(404).send({ error: 'Event not found' });
   });
 

@@ -3575,3 +3575,32 @@ test('pipeline: completed → admins and HR told it is ready to invoice; invoice
   assert.equal(await withTenant(tid, (c) => purgeArchive(c, tid)), 1);
   assert.equal((await call(a, 'GET', '/api/archive')).json.events.length, 0);
 });
+
+test('pipeline: an event can only be Completed once every timesheet is in', async () => {
+  const a = await register('gate');
+  const tid = await tenantOf(a);
+  const c1 = await mkCrew(a, 'gt1');
+  const c2 = await mkCrew(a, 'gt2');
+  const ev = await mkEvent(a);
+  const mk = async (who: string, s: number, e: number) => {
+    const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: start(s), endsAt: start(e), headcount: 1 })).json.shift.id;
+    return (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: who, confirmed: true, override: true })).json.assignment.id as string;
+  };
+  const worked = await mk(c1.id, -8, -4);
+  const later = await mk(c2.id, 2, 6);
+  let r = await call(a, 'PATCH', `/api/events/${ev}/pipeline`, { status: 'completed' });
+  assert.equal(r.status, 409);
+  assert.equal(r.json.reason, 'timesheets_incomplete');
+  assert.deepEqual([r.json.missing, r.json.upcoming, r.json.open], [1, 1, 0]);
+  // Time added, the later shift moved into the past but the person is still clocked in
+  await withTenant(tid, async (c) => {
+    await c.query("INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in, clock_out, status) SELECT $1, a.id, a.user_id, s.starts_at, s.ends_at, 'submitted' FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE a.id = $2", [tid, worked]);
+    await c.query("UPDATE shifts SET starts_at = now() - interval '3 hours', ends_at = now() - interval '1 hour' FROM shift_assignments a WHERE a.id = $1 AND shifts.id = a.shift_id", [later]);
+    await c.query("INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in) SELECT $1, a.id, a.user_id, now() - interval '3 hours' FROM shift_assignments a WHERE a.id = $2", [tid, later]);
+  });
+  r = await call(a, 'PATCH', `/api/events/${ev}/pipeline`, { status: 'completed' });
+  assert.equal(r.status, 409);
+  assert.match(r.json.error, /still clocked in/);
+  await withTenant(tid, (c) => c.query("UPDATE time_entries SET clock_out = now(), status = 'submitted' WHERE assignment_id = $1", [later]));
+  assert.equal((await call(a, 'PATCH', `/api/events/${ev}/pipeline`, { status: 'completed' })).status, 200);
+});
