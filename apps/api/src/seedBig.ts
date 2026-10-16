@@ -170,7 +170,7 @@ async function big(c: PoolClient, tid: string, hash: string) {
       await c.query('INSERT INTO quotes (id, tenant_id, number, customer_id, event_id, title, status, tax_pct, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,8,$8)',
         [qid, tid, ++quoteNo, cust, eid, `Labor estimate`, qs, manager]);
       for (const [k, [role, , bill]] of ROLES.slice(0, int(2, 5)).entries())
-        await c.query('INSERT INTO quote_lines (tenant_id, quote_id, sort, description, qty, hours, rate) VALUES ($1,$2,$3,$4,$5,$6,$7)', [tid, qid, k, role, int(2, 6), 8 * days, bill]);
+        await c.query('INSERT INTO quote_lines (tenant_id, quote_id, sort, description, qty, hours, rate) VALUES ($1,$2,$3,$4,$5,$6,$7)', [tid, qid, k, role, int(1, 3), 6 * days, bill]);
     }
     // Invoices: completed events more than ~10 days ago are invoiced and archived; a couple are canceled
     if (status === 'completed' && end < -10 && billed > 0) {

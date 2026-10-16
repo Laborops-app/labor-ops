@@ -31,9 +31,9 @@ export default function DemoBanner() {
       <b>Live demo</b>
       <span>
         Resets in <span className="demo-clock">{h > 0 ? `${h}:${String(m).padStart(2, '0')}` : m}:{String(sec).padStart(2, '0')}</span>
-        {soon ? ': anything you change will be wiped soon.' : '. Everything you change is wiped then.'}
+        <span className="demo-more">{soon ? ': anything you change will be wiped soon.' : '. Everything you change is wiped then.'}</span>
       </span>
-      <a href="https://laborops.app">laborops.app</a>
+      <a className="demo-more" href="https://laborops.app">laborops.app</a>
     </div>
   );
 }

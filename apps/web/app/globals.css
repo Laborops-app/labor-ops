@@ -1842,3 +1842,4 @@ details.card.profile-fold > summary::before { content: none; }
 .demo-logins table { margin-top: 0.4rem; width: 100%; }
 .demo-logins td { padding: 0.15rem 0.3rem; }
 .auth:has(.demo-banner) { padding-top: 56px; }
+@media (max-width: 599px) { .demo-banner { font-size: 0.8rem; padding: 0.3rem 0.75rem; } .demo-banner .demo-more { display: none; } }
