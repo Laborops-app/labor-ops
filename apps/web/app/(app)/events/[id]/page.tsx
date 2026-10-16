@@ -17,6 +17,7 @@ import InvoicePanel from '@/components/InvoicePanel';
 import TopbarAction, { PlusIcon, TrashIcon, avClass, initialsOf } from '@/components/TopbarAction';
 import CopyEvent from '@/components/CopyEvent';
 import { api, ApiError, Me, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
+import LaborBudget from '@/components/LaborBudget';
 import { EventDetails, Phases, Clocking, RentmanCard, EventFull, Phase, RmView } from '@/components/EventInfo';
 import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 
@@ -1171,6 +1172,7 @@ function Body({ me }: { me: Me }) {
         <button type="button" className="btn primary block" onClick={() => openShiftModal()}>+ Add shift</button>
       </section>
       <Phases eventId={id} phases={d.phases} onChanged={load} onError={setError} />
+      <LaborBudget eventId={id} budget={(ev as any).labor_budget} onError={setError} />
       </aside>
 
 

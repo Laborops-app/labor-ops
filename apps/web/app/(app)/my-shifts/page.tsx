@@ -3,7 +3,15 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
-import { api, fmtDateTime, fmtTime, getPosition, money } from '@/lib/api';
+import { api, ApiError, fmtDateTime, fmtTime, getPosition, money } from '@/lib/api';
+import { onPunchesChanged, pendingPunches, punch, type Punch } from '@/lib/punchQueue';
+import IosInstallHint from '@/components/IosInstallHint';
+
+/** Offline, the server can't say whether clock-in is open, so the window is worked out on the phone (1 h before start to 2 h after end). */
+const canClock = (s: { can_clock_in: boolean; starts_at: string; ends_at: string }) =>
+  typeof navigator !== 'undefined' && navigator.onLine === false
+    ? Date.now() >= +new Date(s.starts_at) - 3600_000 && Date.now() <= +new Date(s.ends_at) + 2 * 3600_000
+    : s.can_clock_in;
 
 type MyShift = {
   assignment_id: string;
@@ -36,18 +44,52 @@ function Body() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
 
+  const [offline, setOffline] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [queued, setQueued] = useState<Punch[]>([]);
   const load = async () => {
     try {
       const [s, t] = await Promise.all([api<{ shifts: MyShift[] }>('/api/my/shifts'), api<{ entries: Entry[] }>('/api/my/time')]);
       setShifts(s.shifts);
       setEntries(t.entries);
+      setOffline(false);
+      try { localStorage.setItem('lo_my_shifts', JSON.stringify({ at: Date.now(), shifts: s.shifts, entries: t.entries })); } catch { /* storage blocked */ }
     } catch (e) {
-      setError((e as Error).message);
+      // No signal: show the shifts from the last time they loaded.
+      const cached = (() => { try { return JSON.parse(localStorage.getItem('lo_my_shifts') || 'null'); } catch { return null; } })();
+      if (!(e instanceof ApiError) && cached) {
+        setShifts(cached.shifts);
+        setEntries(cached.entries);
+        setOffline(true);
+      } else setError((e as Error).message);
     }
   };
   useEffect(() => {
     load();
+    const refresh = () =>
+      pendingPunches().then((l) => {
+        const left = l.filter((p) => !p.error);
+        setQueued(left);
+        if (!left.length) setNotice((n) => (n.startsWith('No signal') ? '' : n));
+      });
+    refresh();
+    const off = onPunchesChanged(() => {
+      refresh();
+      if (navigator.onLine) load();
+    });
+    return off;
   }, []);
+  // A punch saved offline counts on screen straight away.
+  const queuedIn = (id: string) => queued.some((p) => p.kind === 'in' && p.body.assignmentId === id);
+  const queuedOut = queued.some((p) => p.kind === 'out');
+  const doPunch = (s: MyShift, kind: 'in' | 'out') =>
+    act(s.assignment_id, async () => {
+      setNotice('');
+      // Location: required where the event checks it (waits up to 10 s), otherwise a quick best effort.
+      const pos = kind === 'in' && s.needs_location ? await getPosition() : await getPosition(4000).catch(() => null);
+      const how = await punch(kind, { ...(kind === 'in' ? { assignmentId: s.assignment_id } : {}), ...(pos ?? {}) }, `${s.role_name}, ${s.event_name}`);
+      if (how === 'queued') setNotice(`No signal: your ${kind === 'in' ? 'clock-in' : 'clock-out'} is saved on this phone with the time you tapped, and will send by itself.`);
+    });
 
   const act = async (key: string, fn: () => Promise<unknown>) => {
     setError('');
@@ -62,12 +104,16 @@ function Body() {
     }
   };
 
-  const clockedIn = shifts?.some((s) => s.clocked_in);
+  const isIn = (s: MyShift) => (s.clocked_in || queuedIn(s.assignment_id)) && !(queuedOut && (s.clocked_in || queuedIn(s.assignment_id)));
+  const clockedIn = shifts?.some(isIn);
 
   return (
     <>
       <h1>My shifts</h1>
+      <IosInstallHint />
       {error && <Banner onClose={() => setError('')}>{error}</Banner>}
+      {notice && <Banner kind="info" onClose={() => setNotice('')}>{notice}</Banner>}
+      {offline && <p className="muted small">Offline: showing your shifts as of the last time they loaded.</p>}
       {!shifts ? (
         <div className="muted">Loading…</div>
       ) : shifts.length === 0 ? (
@@ -93,7 +139,7 @@ function Body() {
                   </div>
                 )}
               </div>
-              <Pill status={s.clocked_in ? 'clocked in' : s.status} />
+              <Pill status={isIn(s) ? 'clocked in' : s.status} />
             </div>
             <div className="row">
               <Link className="btn ghost small" href={`/my-shifts/${s.assignment_id}`}>
@@ -114,23 +160,18 @@ function Body() {
                   </button>
                 </>
               )}
-              {s.status === 'accepted' && !s.clocked_in && s.clock_mode === 'coordinator' && (
+              {s.status === 'accepted' && !isIn(s) && s.clock_mode === 'coordinator' && (
                 <span className="muted small">Your labor coordinator will check you in when you arrive.</span>
               )}
-              {s.status === 'accepted' && !s.clocked_in && s.clock_mode !== 'coordinator' && !s.can_clock_in && (
+              {s.status === 'accepted' && !isIn(s) && s.clock_mode !== 'coordinator' && !canClock(s) && (
                 <span className="muted small">Clock-in opens 1 hour before the shift starts.</span>
               )}
-              {s.status === 'accepted' && !s.clocked_in && s.clock_mode !== 'coordinator' && s.can_clock_in && (
+              {s.status === 'accepted' && !isIn(s) && s.clock_mode !== 'coordinator' && canClock(s) && (
                 <>
                   <button
                     className="btn primary big"
                     disabled={!!busy || !!clockedIn}
-                    onClick={() =>
-                      act(s.assignment_id, async () => {
-                        const pos = s.needs_location ? await getPosition() : await getPosition(4000).catch(() => null);
-                        await api('/api/time/clock-in', { body: { assignmentId: s.assignment_id, ...(pos ?? {}) } });
-                      })
-                    }
+                    onClick={() => doPunch(s, 'in')}
                   >
                     Clock in
                   </button>
@@ -146,13 +187,13 @@ function Body() {
                   </button>
                 </>
               )}
-              {!s.swap_status && s.can_offer_swap && !s.clocked_in && (
+              {!s.swap_status && s.can_offer_swap && !isIn(s) && (
                 <button className="btn ghost small" disabled={!!busy} onClick={() => act(s.assignment_id, () => api(`/api/assignments/${s.assignment_id}/offer-swap`, { body: {} }))}>
                   Offer for swap
                 </button>
               )}
-              {s.clocked_in && (
-                <button className="btn danger-solid big" disabled={!!busy} onClick={() => act(s.assignment_id, async () => api('/api/time/clock-out', { body: (await getPosition(4000).catch(() => null)) ?? {} }))}>
+              {isIn(s) && (
+                <button className="btn danger-solid big" disabled={!!busy} onClick={() => doPunch(s, 'out')}>
                   Clock out
                 </button>
               )}

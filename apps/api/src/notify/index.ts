@@ -3,10 +3,15 @@ import { toE164 } from './providers';
 import { absUrl, renderEmail } from './templates';
 import { loadRates, loadRules, estimateShift, money } from '../pay';
 
-export type Category = 'assignment' | 'shift_change' | 'reminder' | 'approval_request' | 'approval_result' | 'open_shift' | 'chat' | 'cert' | 'account' | 'training';
+export type Category = 'assignment' | 'shift_change' | 'reminder' | 'approval_request' | 'approval_result' | 'open_shift' | 'chat' | 'cert' | 'account' | 'training' | 'attendance';
 
 // Categories that may also go out by text message (when the person opted in). Everything else is email + in-app only.
-const SMS_CATEGORIES = new Set<Category>(['assignment', 'shift_change', 'reminder', 'approval_result']);
+const SMS_CATEGORIES = new Set<Category>(['assignment', 'shift_change', 'reminder', 'approval_result', 'attendance']);
+/**
+ * Someone with the app installed (push on) gets the push first; the text only goes out if they have not opened it
+ * within this many minutes. Saves texts and still reaches people whose phone dropped the push.
+ */
+export const ESCALATE_MIN = Number(process.env.SMS_ESCALATE_MIN ?? 10);
 
 export type NotifyInput = {
   userId: string;
@@ -52,8 +57,16 @@ export async function notify(c: PoolClient, tenantId: string, input: NotifyInput
       [tenantId, u.id, n.category, n.title, n.body, n.link ?? null],
     );
     const nid = nr[0].id;
-    for (const sub of subs.filter((x) => x.user_id === u.id).slice(0, 5)) {
-      const payload = JSON.stringify({ title: n.title, body: n.body.split('\n').filter(Boolean).slice(0, 3).join('\n'), url: n.link ?? '/', tag: n.category });
+    const mySubs = subs.filter((x) => x.user_id === u.id).slice(0, 5);
+    const unread = mySubs.length ? Number((await c.query('SELECT count(*)::int AS n FROM notifications WHERE user_id = $1 AND read_at IS NULL', [u.id])).rows[0].n) : 0;
+    for (const sub of mySubs) {
+      const short = n.body.split('\n').filter(Boolean).slice(0, 3).join('\n');
+      // Declarative Web Push (Safari 18.4+ shows it even without the service worker running); other browsers use the plain fields.
+      const payload = JSON.stringify({
+        web_push: 8030,
+        notification: { title: n.title, body: short, navigate: absUrl(n.link ?? '/'), tag: n.category, app_badge: String(unread), data: { id: nid } },
+        title: n.title, body: short, url: n.link ?? '/', tag: n.category, id: nid, badge: unread,
+      });
       await c.query(
         `INSERT INTO deliveries (tenant_id, user_id, notification_id, channel, category, to_addr, subject, body)
          VALUES ($1,$2,$3,'push',$4,$5,$6,$7)`,
@@ -71,10 +84,11 @@ export async function notify(c: PoolClient, tenantId: string, input: NotifyInput
     const phone = toE164(u.phone);
     if (!n.quiet && (SMS_CATEGORIES.has(n.category) || n.allowSms) && u.notify_sms && u.sms_consent_at && phone) {
       const text = `LaborOps: ${n.sms ?? n.title}${n.smsLink || n.link ? ' ' + absUrl(n.smsLink ?? n.link) : ''} Reply STOP to opt out.`;
+      const escalate = mySubs.length > 0 && ESCALATE_MIN > 0;
       await c.query(
-        `INSERT INTO deliveries (tenant_id, user_id, notification_id, channel, category, to_addr, body)
-         VALUES ($1,$2,$3,'sms',$4,$5,$6)`,
-        [tenantId, u.id, nid, n.category, phone, text.slice(0, 480)],
+        `INSERT INTO deliveries (tenant_id, user_id, notification_id, channel, category, to_addr, body, escalation, send_after)
+         VALUES ($1,$2,$3,'sms',$4,$5,$6,$7, now() + make_interval(mins => $8))`,
+        [tenantId, u.id, nid, n.category, phone, text.slice(0, 480), escalate, escalate ? ESCALATE_MIN : 0],
       );
     }
   }

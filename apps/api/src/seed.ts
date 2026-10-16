@@ -30,7 +30,7 @@ export async function seedDemo(): Promise<void> {
   const id = () => crypto.randomUUID();
 
   await withTenant(tenantId, async (c) => {
-    await c.query('INSERT INTO tenants (id, name, slug) VALUES ($1,$2,$3)', [tenantId, 'Demo Productions', DEMO_SLUG]);
+    await c.query("INSERT INTO tenants (id, name, slug, plan) VALUES ($1,$2,$3,'internal')", [tenantId, 'Demo Productions', DEMO_SLUG]);
     const addUser = async (email: string, name: string, role: string, skills: string[] = [], phone?: string) => {
       const uid = id();
       await c.query(

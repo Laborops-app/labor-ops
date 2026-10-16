@@ -6,11 +6,11 @@ import { enqueueAccountEmail } from './index';
 export const hashToken = (t: string) => crypto.createHash('sha256').update(t).digest('hex');
 
 /** Create a single-use token (older unused ones of the same kind are voided) and return the raw value for the link. */
-export async function issueToken(c: PoolClient, tenantId: string, userId: string, kind: 'reset' | 'invite', ttlHours: number) {
+export async function issueToken(c: PoolClient, tenantId: string, userId: string, kind: 'reset' | 'invite' | 'magic', ttlHours: number) {
   const raw = crypto.randomBytes(32).toString('base64url');
   await c.query("UPDATE auth_tokens SET used_at = now() WHERE user_id = $1 AND kind = $2 AND used_at IS NULL", [userId, kind]);
   await c.query(
-    "INSERT INTO auth_tokens (tenant_id, user_id, kind, token_hash, expires_at) VALUES ($1,$2,$3,$4, now() + make_interval(hours => $5))",
+    "INSERT INTO auth_tokens (tenant_id, user_id, kind, token_hash, expires_at) VALUES ($1,$2,$3,$4, now() + make_interval(secs => $5::float8 * 3600))",
     [tenantId, userId, kind, hashToken(raw), ttlHours],
   );
   return raw;

@@ -23,7 +23,7 @@ const ENTRY_SQL = `
     ROUND(EXTRACT(EPOCH FROM (COALESCE(t.clock_out, now()) - t.clock_in)) / 3600.0, 2)::float AS hours,
     u.id AS user_id, u.name AS user_name, u.email AS user_email,
     s.role_name, s.pay_rate_override AS shift_rate, cr.rate AS crew_rate, cr.pay_type AS crew_pay_type, e.name AS event_name, ap.name AS approved_by_name,
-    t.edited_at, ed.name AS edited_by_name, t.original_clock_in, t.original_clock_out, t.payroll_exported_at
+    t.edited_at, ed.name AS edited_by_name, t.original_clock_in, t.original_clock_out, t.payroll_exported_at, t.offline_in, t.offline_out, t.auto_clocked_out
   FROM time_entries t
   JOIN users u ON u.id = t.user_id
   JOIN shift_assignments a ON a.id = t.assignment_id
@@ -147,16 +147,34 @@ export async function timeRoutes(app: FastifyInstance) {
     return { distance };
   };
 
+  // A punch made offline arrives later with the phone's own time ("at") and a random id ("clientId"); sending it twice is harmless.
+  const punchIn = z.object({ clientId: uuid.optional(), at: z.string().datetime({ offset: true }).optional() });
+  const MAX_OFFLINE_H = 12;
+  /** The time to record: the phone's time when it was offline (never in the future, never more than 12 h old). */
+  const punchTime = (at?: string): { at: Date; offline: boolean } | { error: string } => {
+    const now = Date.now();
+    if (!at) return { at: new Date(now), offline: false };
+    const t = Math.min(+new Date(at), now);
+    if (now - t > MAX_OFFLINE_H * 3600_000) return { error: `This punch was saved on your phone more than ${MAX_OFFLINE_H} hours ago. Ask your labor coordinator to add your time.` };
+    return { at: new Date(t), offline: now - t > 2 * 60_000 };
+  };
+
   app.post('/api/time/clock-in', { preHandler: authenticate }, async (req, reply) => {
-    const body = z.object({ assignmentId: uuid }).merge(geoIn).parse(req.body);
+    const body = z.object({ assignmentId: uuid }).merge(geoIn).merge(punchIn).parse(req.body);
     const { assignmentId } = body;
+    const when = punchTime(body.at);
+    if ('error' in when) return reply.code(409).send({ error: when.error, reason: 'too_old' });
     const result = await withTenant(req.user.tid, async (c) => {
+      if (body.clientId) {
+        const dup = (await c.query('SELECT id, clock_in FROM time_entries WHERE client_in_id = $1 AND user_id = $2', [body.clientId, req.user.sub])).rows[0];
+        if (dup) return { code: 200, entry: dup, duplicate: true };
+      }
       const a = (
         await c.query(
-          `SELECT a.id, (now() BETWEEN s.starts_at - interval '1 hour' AND s.ends_at + interval '2 hours') AS in_window
+          `SELECT a.id, ($3::timestamptz BETWEEN s.starts_at - interval '1 hour' AND s.ends_at + interval '2 hours') AS in_window
            FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id
            WHERE a.id = $1 AND a.user_id = $2 AND a.status = 'accepted'`,
-          [assignmentId, req.user.sub],
+          [assignmentId, req.user.sub, when.at],
         )
       ).rows[0];
       if (!a) return { code: 404, error: 'Accept the shift before clocking in' };
@@ -168,16 +186,14 @@ export async function timeRoutes(app: FastifyInstance) {
       const fence = rules ? checkFence(rules, body) : { distance: null };
       if ('error' in fence && fence.error) return { code: 409, error: fence.error, reason: 'geofence', distance: fence.distance };
       const t = (
-        await c.query('INSERT INTO time_entries (tenant_id, assignment_id, user_id, in_lat, in_lng, in_distance_m) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, clock_in', [
-          req.user.tid,
-          assignmentId,
-          req.user.sub,
-          body.lat ?? null,
-          body.lng ?? null,
-          fence.distance ?? null,
-        ])
+        await c.query(
+          `INSERT INTO time_entries (tenant_id, assignment_id, user_id, in_lat, in_lng, in_distance_m, clock_in, client_in_id, in_accuracy_m, offline_in)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id, clock_in, offline_in`,
+          [req.user.tid, assignmentId, req.user.sub, body.lat ?? null, body.lng ?? null, fence.distance ?? null, when.at, body.clientId ?? null,
+            body.accuracy === undefined ? null : Math.round(body.accuracy), when.offline],
+        )
       ).rows[0];
-      await audit(c, req.user.tid, req.user.sub, 'time.clock_in', 'time_entry', t.id);
+      await audit(c, req.user.tid, req.user.sub, 'time.clock_in', 'time_entry', t.id, when.offline ? { offline: true } : undefined);
       return { code: 201, entry: t };
     });
     const { code, ...rest } = result as { code: number; [k: string]: unknown };
@@ -185,17 +201,26 @@ export async function timeRoutes(app: FastifyInstance) {
   });
 
   app.post('/api/time/clock-out', { preHandler: authenticate }, async (req, reply) => {
-    const pos = geoIn.parse(req.body ?? {});
+    const pos = geoIn.merge(punchIn).parse(req.body ?? {});
+    const when = punchTime(pos.at);
+    if ('error' in when) return reply.code(409).send({ error: when.error, reason: 'too_old' });
     const row = await withTenant(req.user.tid, async (c) => {
-      const open = (await c.query('SELECT id, assignment_id FROM time_entries WHERE user_id = $1 AND clock_out IS NULL', [req.user.sub])).rows[0];
+      if (pos.clientId) {
+        const dup = (await c.query('SELECT id, clock_in, clock_out, auto_approved FROM time_entries WHERE client_out_id = $1 AND user_id = $2', [pos.clientId, req.user.sub])).rows[0];
+        if (dup) return { ...dup, duplicate: true };
+      }
+      const open = (await c.query('SELECT id, assignment_id, clock_in FROM time_entries WHERE user_id = $1 AND clock_out IS NULL', [req.user.sub])).rows[0];
       if (!open) return null;
+      // A clock-out can never come before the clock-in.
+      const outAt = new Date(Math.max(+when.at, +new Date(open.clock_in)));
       const rules = await rulesFor(c, open.assignment_id);
       const dist = rules && rules.geo_lat !== null && rules.geo_lng !== null && pos.lat !== undefined && pos.lng !== undefined ? Math.round(distanceM(pos.lat, pos.lng, rules.geo_lat, rules.geo_lng)) : null;
       const r = await c.query(
-        "UPDATE time_entries SET clock_out = now(), status = 'submitted', out_lat = $2, out_lng = $3, out_distance_m = $4 WHERE id = $1 RETURNING id, clock_in, clock_out",
-        [open.id, pos.lat ?? null, pos.lng ?? null, dist],
+        `UPDATE time_entries SET clock_out = $5, status = 'submitted', out_lat = $2, out_lng = $3, out_distance_m = $4, client_out_id = $6, out_accuracy_m = $7, offline_out = $8
+          WHERE id = $1 RETURNING id, clock_in, clock_out, offline_out`,
+        [open.id, pos.lat ?? null, pos.lng ?? null, dist, outAt, pos.clientId ?? null, pos.accuracy === undefined ? null : Math.round(pos.accuracy), when.offline],
       );
-      await audit(c, req.user.tid, req.user.sub, 'time.clock_out', 'time_entry', r.rows[0].id);
+      await audit(c, req.user.tid, req.user.sub, 'time.clock_out', 'time_entry', r.rows[0].id, when.offline ? { offline: true } : undefined);
       return { ...r.rows[0], auto_approved: await autoApprove(c, r.rows[0].id) };
     });
     if (!row) return reply.code(409).send({ error: 'You are not clocked in' });

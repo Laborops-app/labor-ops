@@ -3175,3 +3175,244 @@ test('new event: phases can be made with it, one per day within the dates', asyn
   assert.deepEqual(d.phases.map((p: any) => [p.label, p.starts_on.slice(0, 10), p.ends_on.slice(0, 10)]), [['Load in', '2035-04-01', '2035-04-01'], ['Show', '2035-04-02', '2035-04-02'], ['Strike', '2035-04-03', '2035-04-03']]);
   assert.equal((await call(a, 'POST', '/api/events', { name: 'Bad', startDate: '2035-04-01', endDate: '2035-04-01', phases: [{ label: 'Show', date: '2035-04-05' }] })).status, 400);
 });
+
+// ===================== billing, offline punches, sign-in links, passkeys, reports, attendance =====================
+
+test('billing: free trial on signup, Stripe checkout, webhook sets the plan, text packs, crew limit, cancel', async () => {
+  const { saveBilling, DEFAULT_BILLING, forgetBilling, signStripe } = await import('../src/billing');
+  const a = await register('bill');
+  const tid = await tenantOf(a);
+  let b = (await call(a, 'GET', '/api/billing')).json;
+  assert.equal(b.enabled, false);
+  assert.equal(b.billing.plan, 'trial');
+  assert.ok(b.billing.trialEndsAt, 'a new company gets a trial end date');
+  // Crew can't open the billing page
+  const c1 = await mkCrew(a, 'bill1');
+  assert.equal((await call(c1.session, 'GET', '/api/billing')).status, 403);
+  assert.equal((await call(a, 'POST', '/api/billing/checkout', { plan: 'starter' })).status, 409, 'billing off: no checkout');
+
+  await saveBilling({ ...DEFAULT_BILLING, secretKey: 'sk_test_abc', webhookSecret: 'whsec_abc', smsPack: { size: 500, priceId: 'price_sms', priceLabel: '$15' },
+    plans: { ...DEFAULT_BILLING.plans, starter: { ...DEFAULT_BILLING.plans.starter, crewLimit: 2, priceId: 'price_starter' } } }, null);
+  const realFetch = globalThis.fetch;
+  const seen: { url: string; body: string }[] = [];
+  globalThis.fetch = (async (url: any, init: any) => {
+    seen.push({ url: String(url), body: String(init?.body ?? '') });
+    const ok = (j: unknown) => new Response(JSON.stringify(j), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    if (String(url).endsWith('/v1/checkout/sessions')) return ok({ id: 'cs_1', url: 'https://checkout.stripe.com/c/cs_1' });
+    if (String(url).endsWith('/v1/subscriptions/sub_1'))
+      return ok({ id: 'sub_1', object: 'subscription', customer: 'cus_1', status: 'active', current_period_end: Math.floor(Date.now() / 1000) + 30 * 86400, items: { data: [{ price: { id: 'price_starter' } }] }, metadata: { tenant_id: tid } });
+    if (String(url).endsWith('/v1/billing_portal/sessions')) return ok({ url: 'https://billing.stripe.com/p/1' });
+    return new Response('{}', { status: 404 });
+  }) as typeof fetch;
+  const hook = (ev: object, secret = 'whsec_abc') => {
+    const raw = JSON.stringify(ev);
+    return app.inject({ method: 'POST', url: '/api/billing/webhook', payload: raw, headers: { 'content-type': 'application/json', 'stripe-signature': signStripe(raw, secret) } });
+  };
+  try {
+    const co = await call(a, 'POST', '/api/billing/checkout', { plan: 'starter' });
+    assert.equal(co.status, 200, co.text);
+    assert.equal(co.json.url, 'https://checkout.stripe.com/c/cs_1');
+    const sent = new URLSearchParams(seen[0].body);
+    assert.equal(sent.get('line_items[0][price]'), 'price_starter');
+    assert.equal(sent.get('client_reference_id'), tid);
+    assert.equal(sent.get('mode'), 'subscription');
+    // Webhook: wrong signature is refused; the right one sets the plan; a repeat is ignored
+    const done = { id: `evt_${run}_1`, type: 'checkout.session.completed', data: { object: { object: 'checkout.session', mode: 'subscription', payment_status: 'paid', client_reference_id: tid, customer: 'cus_1', subscription: 'sub_1', metadata: { tenant_id: tid, kind: 'plan', plan: 'starter' } } } };
+    assert.equal((await hook(done, 'whsec_wrong')).statusCode, 400);
+    assert.equal((await hook(done)).statusCode, 200);
+    assert.equal((await hook(done)).json().duplicate, true);
+    b = (await call(a, 'GET', '/api/billing')).json;
+    assert.equal(b.billing.plan, 'starter');
+    assert.equal(b.billing.status, 'active');
+    assert.equal(b.billing.customerId, 'cus_1');
+    assert.ok(b.billing.periodEnd);
+    // Plan limit: 2 active crew on this Starter (one already)
+    await mkCrew(a, 'bill2');
+    const third = await call(a, 'POST', '/api/crew', { name: 'Crew bill3', email: `bill3-${run}@test.example`, password: 'password123' });
+    assert.equal(third.status, 402);
+    assert.equal(third.json.reason, 'plan_limit');
+    // Labor coordinators don't count
+    assert.equal((await call(a, 'POST', '/api/crew', { name: 'LC', email: `billlc-${run}@test.example`, password: 'password123', role: 'manager' })).status, 201);
+    // Deactivate one, then bringing them back needs room too
+    assert.equal((await call(a, 'PATCH', `/api/crew/${c1.id}`, { active: false })).status, 200);
+    assert.equal((await call(a, 'POST', '/api/crew', { name: 'Crew bill3', email: `bill3-${run}@test.example`, password: 'password123' })).status, 201);
+    assert.equal((await call(a, 'PATCH', `/api/crew/${c1.id}`, { active: true })).status, 402);
+    // Text pack
+    assert.equal((await call(a, 'POST', '/api/billing/sms-pack', { packs: 2 })).status, 200);
+    assert.equal(new URLSearchParams(seen.at(-1)!.body).get('metadata[texts]'), '1000');
+    await hook({ id: `evt_${run}_2`, type: 'checkout.session.completed', data: { object: { object: 'checkout.session', mode: 'payment', payment_status: 'paid', client_reference_id: tid, customer: 'cus_1', metadata: { tenant_id: tid, kind: 'sms', texts: '1000' } } } });
+    assert.equal((await call(a, 'GET', '/api/billing')).json.billing.smsCredits, 1000);
+    // Portal
+    assert.equal((await call(a, 'POST', '/api/billing/portal')).json.url, 'https://billing.stripe.com/p/1');
+    // Already subscribed: checkout points to the portal instead
+    assert.equal((await call(a, 'POST', '/api/billing/checkout', { plan: 'pro' })).json.reason, 'has_subscription');
+    // Past the monthly allowance a text uses a credit; with none left it is skipped
+    const { useSmsAllowance } = await import('../src/billing');
+    await adminQuery("UPDATE tenants SET plan = 'trial', sms_credits = 1 WHERE id = $1", [tid]);
+    await adminQuery(`INSERT INTO deliveries (tenant_id, channel, to_addr, body, status, sent_at) SELECT $1, 'sms', '+15555550100', 'x', 'sent', now() FROM generate_series(1, 100)`, [tid]);
+    assert.deepEqual(await useSmsAllowance(tid), { ok: true });
+    assert.equal((await useSmsAllowance(tid)).ok, false);
+    await adminQuery("UPDATE tenants SET plan = 'starter' WHERE id = $1", [tid]);
+    // Cancelled: back to the trial limits
+    await hook({ id: `evt_${run}_3`, type: 'customer.subscription.deleted', data: { object: { id: 'sub_1', object: 'subscription', customer: 'cus_1', status: 'canceled', items: { data: [{ price: { id: 'price_starter' } }] }, metadata: { tenant_id: tid } } } });
+    b = (await call(a, 'GET', '/api/billing')).json;
+    assert.equal(b.billing.plan, 'trial');
+    assert.equal(b.billing.status, 'canceled');
+  } finally {
+    globalThis.fetch = realFetch;
+    await adminQuery("DELETE FROM platform_settings WHERE key = 'billing'", []);
+    forgetBilling();
+  }
+});
+
+test('offline punches: the phone time is kept, sending twice is harmless, very old punches are refused', async () => {
+  const a = await register('offl');
+  const c1 = await mkCrew(a, 'off1');
+  const ev = await mkEvent(a);
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Loader', startsAt: start(-1), endsAt: start(6), headcount: 1 })).json.shift.id as string;
+  const asg = (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, confirmed: true })).json.assignment.id as string;
+  const inId = crypto.randomUUID(), outId = crypto.randomUUID();
+  const at = new Date(Date.now() - 40 * 60_000).toISOString();
+  const first = await call(c1.session, 'POST', '/api/time/clock-in', { assignmentId: asg, clientId: inId, at, accuracy: 18.4 });
+  assert.equal(first.status, 201, first.text);
+  assert.equal(first.json.entry.offline_in, true);
+  assert.equal(new Date(first.json.entry.clock_in).toISOString(), at);
+  const again = await call(c1.session, 'POST', '/api/time/clock-in', { assignmentId: asg, clientId: inId, at });
+  assert.equal(again.status, 200);
+  assert.equal(again.json.duplicate, true);
+  // A time in the future is capped at now
+  const out = await call(c1.session, 'POST', '/api/time/clock-out', { clientId: outId, at: new Date(Date.now() + 3600_000).toISOString() });
+  assert.equal(out.status, 200, out.text);
+  assert.ok(+new Date(out.json.entry.clock_out) <= Date.now() + 1000);
+  assert.equal((await call(c1.session, 'POST', '/api/time/clock-out', { clientId: outId })).json.entry.duplicate, true);
+  const t = (await call(a, 'GET', '/api/timesheets')).json.entries;
+  assert.equal(t.length, 1);
+  assert.equal(t[0].offline_in, true);
+  // More than 12 hours old: ask the coordinator instead
+  const old = await call(c1.session, 'POST', '/api/time/clock-in', { assignmentId: asg, clientId: crypto.randomUUID(), at: new Date(Date.now() - 13 * 3600_000).toISOString() });
+  assert.equal(old.status, 409);
+  assert.equal(old.json.reason, 'too_old');
+});
+
+test('sign-in link: emailed, works once, then expires', async () => {
+  const a = await register('magic');
+  const c1 = await mkCrew(a, 'mag1');
+  const tid = await tenantOf(a);
+  assert.equal((await call(null, 'POST', '/api/auth/magic', { email: `nobody-${run}@test.example` })).json.ok, true);
+  assert.equal((await call(null, 'POST', '/api/auth/magic', { email: `mag1-${run}@test.example` })).status, 200);
+  const d = (await withTenant(tid, (c) => c.query("SELECT body FROM deliveries WHERE user_id = $1 AND subject = 'Your LaborOps sign-in link'", [c1.id]))).rows[0];
+  const token = /magic\?token=([\w-]+)/.exec(d.body)![1];
+  const ok = await call(null, 'POST', '/api/auth/magic/verify', { token });
+  assert.equal(ok.status, 200, ok.text);
+  assert.equal(ok.json.user.id, c1.id);
+  assert.ok(ok.res.cookies.find((x) => x.name === 'lo_token'));
+  assert.equal((await call(null, 'POST', '/api/auth/magic/verify', { token })).status, 400);
+});
+
+test('passkeys: options come with a challenge; a made-up passkey is refused; list is per person', async () => {
+  const a = await register('pkey');
+  const opts = await call(a, 'POST', '/api/passkeys/options');
+  assert.equal(opts.status, 200);
+  assert.ok(opts.json.challenge);
+  assert.equal(opts.json.rp.name, 'LaborOps');
+  assert.equal((await call(a, 'GET', '/api/passkeys')).json.items.length, 0);
+  assert.equal((await call(null, 'POST', '/api/auth/passkey', { response: { id: 'abc' } })).status, 400, 'no challenge');
+  const o = await call(null, 'POST', '/api/auth/passkey/options');
+  const ck = o.res.cookies.find((x) => x.name === 'lo_pk')!;
+  const r = await app.inject({ method: 'POST', url: '/api/auth/passkey', payload: { response: { id: 'not-a-real-passkey', rawId: 'x', type: 'public-key', response: {} } }, headers: { cookie: `lo_pk=${ck.value}` } });
+  assert.equal(r.statusCode, 401);
+});
+
+test('push: a text waits behind the push and is dropped once the push is opened', async () => {
+  const a = await register('esc');
+  const c1 = await mkCrew(a, 'esc1');
+  const tid = await tenantOf(a);
+  await withTenant(tid, async (c) => {
+    await c.query("UPDATE users SET phone = '3035550142', notify_sms = true, sms_consent_at = now() WHERE id = $1", [c1.id]);
+    await c.query("INSERT INTO push_subscriptions (tenant_id, user_id, endpoint, p256dh, auth) VALUES ($1,$2,$3,'k','a')", [tid, c1.id, `https://push.example/${run}`]);
+  });
+  const { notify } = await import('../src/notify');
+  await withTenant(tid, (c) => notify(c, tid, { userId: c1.id, category: 'assignment', title: 'New shift', body: 'Audio', link: '/my-shifts' }));
+  const rows = (await withTenant(tid, (c) => c.query('SELECT channel, escalation, send_after > now() AS later, body, notification_id FROM deliveries WHERE user_id = $1 ORDER BY channel', [c1.id]))).rows;
+  const push = rows.find((r) => r.channel === 'push')!;
+  const sms = rows.find((r) => r.channel === 'sms')!;
+  assert.equal(sms.escalation, true);
+  assert.equal(sms.later, true);
+  const payload = JSON.parse(push.body);
+  assert.equal(payload.web_push, 8030);
+  assert.match(payload.notification.navigate, /\/my-shifts$/);
+  assert.equal(payload.notification.app_badge, '1');
+  // Opened on the phone: the text is skipped
+  assert.equal((await call(c1.session, 'POST', `/api/notifications/${push.notification_id}/ack`)).status, 200);
+  await pool.query('SELECT notify_skip_acked()');
+  assert.equal((await withTenant(tid, (c) => c.query("SELECT status FROM deliveries WHERE user_id = $1 AND channel = 'sms'", [c1.id]))).rows[0].status, 'skipped');
+});
+
+test('attendance: late nudge and alert, no-show flag (cleared by clocking in), forgotten clock-out closed for review', async () => {
+  const a = await register('attn');
+  const tid = await tenantOf(a);
+  const late = await mkCrew(a, 'att1');
+  const gone = await mkCrew(a, 'att2');
+  const forgot = await mkCrew(a, 'att3');
+  const ev = await mkEvent(a);
+  const mk = async (s: number, e: number, who: string) => {
+    const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Audio', startsAt: start(s), endsAt: start(e), headcount: 1 })).json.shift.id as string;
+    return (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: who, confirmed: true, override: true })).json.assignment.id as string;
+  };
+  const aLate = await mk(-0.25, 6, late.id);   // started 15 minutes ago
+  const aGone = await mk(-2, 4, gone.id);      // started 2 hours ago
+  const aForgot = await mk(-9, -5, forgot.id); // ended 5 hours ago, still clocked in
+  await withTenant(tid, (c) => c.query("INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in) VALUES ($1,$2,$3, now() - interval '9 hours')", [tid, aForgot, forgot.id]));
+  const { attendanceFor } = await import('../src/attendance');
+  const r1 = await withTenant(tid, (c) => attendanceFor(c, tid, 'America/Denver'));
+  assert.deepEqual(r1, { late: 1, noShows: 1, clockedOut: 1 });
+  // Run again: nothing new
+  assert.deepEqual(await withTenant(tid, (c) => attendanceFor(c, tid, 'America/Denver')), { late: 0, noShows: 0, clockedOut: 0 });
+  const notes = (await withTenant(tid, (c) => c.query('SELECT user_id, title FROM notifications ORDER BY created_at'))).rows;
+  assert.ok(notes.some((n) => n.user_id === late.id && /not clocked in/.test(n.title)));
+  assert.ok(notes.some((n) => n.user_id === a.id && /late/.test(n.title)));
+  assert.ok(notes.some((n) => n.user_id === a.id && /no-show/.test(n.title)));
+  assert.ok(notes.some((n) => n.user_id === forgot.id && /clocked out automatically/.test(n.title)));
+  const e = (await withTenant(tid, (c) => c.query('SELECT clock_out, status, auto_clocked_out FROM time_entries WHERE assignment_id = $1', [aForgot]))).rows[0];
+  assert.equal(e.auto_clocked_out, true);
+  assert.equal(e.status, 'submitted', 'never auto-approved');
+  assert.ok((await withTenant(tid, (c) => c.query('SELECT no_show_at FROM shift_assignments WHERE id = $1', [aGone]))).rows[0].no_show_at);
+  // Checked in after all: no longer a no-show
+  assert.equal((await call(a, 'POST', `/api/assignments/${aGone}/check-in`, {})).status, 201);
+  assert.equal((await withTenant(tid, (c) => c.query('SELECT no_show_at FROM shift_assignments WHERE id = $1', [aGone]))).rows[0].no_show_at, null);
+  void aLate;
+  // Settings
+  const rules = (await call(a, 'GET', '/api/labor-rules')).json;
+  assert.equal(rules.lateAlertMin, 10);
+  assert.equal((await call(a, 'PUT', '/api/labor-rules', { ...rules, lateAlertMin: 0, autoClockoutH: 4 })).json.autoClockoutH, 4);
+});
+
+test('reports: fill rate, scheduled vs worked, cost vs billed, margin, labor budget, CSV', async () => {
+  const a = await register('rpt');
+  const tid = await tenantOf(a);
+  assert.equal((await call(a, 'POST', '/api/skills', { name: 'Stagehand', payRate: 20, billRate: 50 })).status, 201);
+  const c1 = await mkCrew(a, 'rp1');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Gala', startDate: new Date().toISOString().slice(0, 10), endDate: new Date().toISOString().slice(0, 10) })).json.event.id as string;
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: start(-5), endsAt: start(-1), headcount: 2 })).json.shift.id as string;
+  const asg = (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, confirmed: true })).json.assignment.id as string;
+  await withTenant(tid, (c) => c.query("INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in, clock_out, status, approved_at) SELECT $1, a.id, a.user_id, s.starts_at, s.ends_at, 'approved', now() FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE a.id = $2", [tid, asg]));
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/budget`, { budget: 100 })).json.budget, 100);
+  const d = new Date().toISOString().slice(0, 10);
+  const r = await call(a, 'GET', `/api/reports?from=${d}&to=${d}`);
+  assert.equal(r.status, 200, r.text);
+  const e = r.json.events.find((x: any) => x.id === ev);
+  assert.equal(e.slots, 2);
+  assert.equal(e.filled, 1);
+  assert.equal(e.fillRate, 0.5);
+  assert.equal(e.scheduledHours, 4);
+  assert.equal(e.actualHours, 4);
+  assert.equal(e.laborCost, 80);
+  assert.equal(e.billed, 200);
+  assert.equal(e.margin, 120);
+  assert.equal(e.marginPct, 0.6);
+  assert.equal(e.budgetLeft, 20);
+  const csv = await call(a, 'GET', `/api/reports/events.csv?from=${d}&to=${d}`);
+  assert.match(csv.text, /^Event,Customer,Start/);
+  assert.match(csv.text, /Gala/);
+  assert.equal((await call(a, 'GET', '/api/reports?from=2030-02-01&to=2030-01-01')).status, 400);
+});

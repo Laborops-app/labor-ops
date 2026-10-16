@@ -1730,3 +1730,52 @@ a.cs-co:hover b { color: var(--primary); }
 .pick-stars.overall { background: transparent; border: 1px solid var(--warn); }
 .pick-stars-note { font-weight: 500; font-size: 11px; opacity: .9; }
 .pick-unrated { color: var(--muted); font-size: 12px; margin-left: 6px; }
+
+/* ---------- reports ---------- */
+.report-range { gap: 0.6rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.report-range label.inline { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.86rem; color: var(--muted); }
+.report-range label.inline input { width: auto; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 0.9rem 1rem; }
+.kpi-label { font-size: 0.78rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.kpi-value { font-size: 1.5rem; font-weight: 700; margin-top: 0.2rem; font-variant-numeric: tabular-nums; }
+.kpi.good .kpi-value { color: var(--good); }
+.kpi.bad .kpi-value { color: var(--bad); }
+.report-table td, .report-table th { vertical-align: top; }
+.report-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.report-table .neg, .report-table .neg b { color: var(--bad); }
+.report-table .nowrap { white-space: nowrap; }
+.report-flags { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.25rem; }
+.report-flags .chip { font-size: 0.72rem; }
+.th-sort { font: inherit; font-weight: 600; background: none; border: 0; color: inherit; cursor: pointer; padding: 0; }
+th.num .th-sort { text-align: right; }
+
+/* ---------- offline punches ---------- */
+.punch-sync { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.5rem 1rem 0; }
+.punch-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; border-radius: 12px; padding: 0.6rem 0.85rem; font-size: 0.9rem; }
+.punch-row > span { flex: 1 1 220px; }
+.punch-row.pending { background: var(--warn-bg); color: var(--warn); }
+.punch-row.offline { background: var(--surface-2); color: var(--text); }
+.punch-row.refused { background: var(--bad-bg); color: var(--bad); }
+.punch-dot { width: 10px; height: 10px; flex: 0 0 10px; border-radius: 50%; background: currentColor; animation: punch-pulse 1.4s ease-in-out infinite; }
+@keyframes punch-pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .punch-dot { animation: none; } }
+
+/* ---------- install funnel, sign-in, passkeys ---------- */
+.install-hint h2 { margin: 0; }
+.install-steps { margin: 0.5rem 0 0.75rem 1.2rem; padding: 0; display: grid; gap: 0.45rem; }
+.signin-alt { display: grid; gap: 0.5rem; margin-top: 0.75rem; }
+.plain-list { list-style: none; margin: 0 0 0.75rem; padding: 0; display: grid; gap: 0.5rem; }
+.plain-list li { padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+
+/* ---------- billing ---------- */
+.plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 0.75rem; }
+.plan { border: 1px solid var(--border); border-radius: 14px; padding: 1rem; background: var(--surface); display: flex; flex-direction: column; gap: 0.4rem; }
+.plan.current { border-color: var(--primary); box-shadow: 0 0 0 2px var(--ring); }
+.plan-price { font-size: 1.3rem; font-weight: 700; }
+.plan ul { margin: 0.2rem 0 0.6rem 1rem; padding: 0; font-size: 0.88rem; }
+.plan .btn { margin-top: auto; }
+.meter { height: 8px; border-radius: 6px; background: var(--surface-2); overflow: hidden; margin: 0.3rem 0 0.2rem; }
+.meter > span { display: block; height: 100%; background: var(--primary); border-radius: 6px; }
+.meter.over > span { background: var(--bad); }
+.billing-note { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }

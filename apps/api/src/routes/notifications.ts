@@ -41,6 +41,13 @@ export async function notificationRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  // Tapped on the phone (the service worker reports it): counts as read, and cancels a text waiting behind the push.
+  app.post('/api/notifications/:id/ack', { preHandler: authenticate }, async (req) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    await withTenant(req.user.tid, (c) => c.query('UPDATE notifications SET acked_at = COALESCE(acked_at, now()), read_at = COALESCE(read_at, now()) WHERE id = $1 AND user_id = $2', [id, req.user.sub]));
+    return { ok: true };
+  });
+
   // Delete one notification from my inbox.
   app.delete('/api/notifications/:id', { preHandler: authenticate }, async (req, reply) => {
     const { id } = z.object({ id: uuid }).parse(req.params);

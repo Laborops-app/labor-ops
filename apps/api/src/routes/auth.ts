@@ -7,6 +7,7 @@ import { pool, withTenant, audit } from '../db';
 import { adminPool } from '../storage';
 import { authenticate, COOKIE, SessionUser } from '../auth';
 import { config } from '../config';
+import { billingSettings } from '../billing';
 
 const registerBody = z.object({
   company: z.string().trim().min(2).max(100),
@@ -43,7 +44,9 @@ export async function authRoutes(app: FastifyInstance) {
     const hash = await bcrypt.hash(body.password, 10);
     const slug = `${slugify(body.company)}-${crypto.randomBytes(3).toString('hex')}`;
     await withTenant(tenantId, async (c) => {
-      await c.query('INSERT INTO tenants (id, name, slug) VALUES ($1,$2,$3)', [tenantId, body.company, slug]);
+      // New companies start on a free trial (its length is set on the Platform page).
+      const trialDays = (await billingSettings()).trialDays;
+      await c.query("INSERT INTO tenants (id, name, slug, plan, trial_ends_at) VALUES ($1,$2,$3,'trial', now() + make_interval(days => $4))", [tenantId, body.company, slug, trialDays]);
       await c.query(
         "INSERT INTO users (id, tenant_id, email, name, role, password_hash) VALUES ($1,$2,$3,$4,'admin',$5)",
         [userId, tenantId, body.email, body.name, hash],

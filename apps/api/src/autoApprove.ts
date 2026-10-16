@@ -12,6 +12,8 @@ export async function autoApprove(c: PoolClient, entryId: string): Promise<boole
        LEFT JOIN labor_rules lr ON true
       WHERE t.id = $1 AND a.id = t.assignment_id AND t.status = 'submitted' AND t.clock_out IS NOT NULL
         AND COALESCE(lr.auto_approve, true)
+        -- Closed automatically because nobody clocked out: a person has to look at it first (an edit counts).
+        AND (NOT t.auto_clocked_out OR t.edited_at IS NOT NULL)
         AND t.clock_in >= s.starts_at - make_interval(mins => COALESCE(lr.auto_approve_grace_min, 10))
         AND t.clock_out <= s.ends_at + make_interval(mins => COALESCE(lr.auto_approve_grace_min, 10))
       RETURNING t.id`,

@@ -11,6 +11,7 @@ const route = (pattern: string, load: () => Promise<{ default: ComponentType }>)
 };
 export const PAGE_ROUTES: PageRoute[] = [
   route('/accounting', () => import('@/app/(app)/accounting/page')),
+  route('/billing', () => import('@/app/(app)/billing/page')),
   route('/availability', () => import('@/app/(app)/availability/page')),
   route('/chat', () => import('@/app/(app)/chat/page')),
   route('/crew/[id]', () => import('@/app/(app)/crew/[id]/page')),
@@ -36,6 +37,7 @@ export const PAGE_ROUTES: PageRoute[] = [
   route('/quote-layouts', () => import('@/app/(app)/quote-layouts/page')),
   route('/quotes/[id]', () => import('@/app/(app)/quotes/[id]/page')),
   route('/quotes', () => import('@/app/(app)/quotes/page')),
+  route('/reports', () => import('@/app/(app)/reports/page')),
   route('/requests', () => import('@/app/(app)/requests/page')),
   route('/rules', () => import('@/app/(app)/rules/page')),
   route('/schedule', () => import('@/app/(app)/schedule/page')),

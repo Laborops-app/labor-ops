@@ -1,3 +1,6 @@
+import { signinRoutes } from './routes/signin';
+import { billingRoutes } from './routes/billing';
+import { reportRoutes } from './routes/reports';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import jwt from '@fastify/jwt';
@@ -93,5 +96,8 @@ export async function buildApp() {
   await app.register(customerRoutes);
   await app.register(quoteRoutes);
   await app.register(trainingRoutes);
+  await app.register(billingRoutes);
+  await app.register(signinRoutes);
+  await app.register(reportRoutes);
   return app;
 }

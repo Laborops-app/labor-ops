@@ -16,6 +16,9 @@ type Entry = {
   event_name: string;
   approved_by_name: string | null;
   auto_approved?: boolean;
+  offline_in?: boolean;
+  offline_out?: boolean;
+  auto_clocked_out?: boolean;
   edited_at?: string | null;
   edited_by_name?: string | null;
   original_clock_in?: string | null;
@@ -128,7 +131,15 @@ function Body() {
                         </div>
                       )}
                     </td>
-                    <td className="small">{r.clock_out ? fmtDateTime(r.clock_out) : <Pill status="open" />}</td>
+                    <td className="small">
+                      {r.clock_out ? fmtDateTime(r.clock_out) : <Pill status="open" />}
+                      {(r.auto_clocked_out || r.offline_in || r.offline_out) && (
+                        <div>
+                          {r.auto_clocked_out && !r.edited_at && <span className="chip warn small-chip" style={{ marginLeft: 0 }} title="Nobody clocked out, so it was closed at the scheduled end. Check the real time before approving.">Auto clock-out</span>}
+                          {(r.offline_in || r.offline_out) && <span className="chip small-chip" style={{ marginLeft: 0 }} title="Punched with no signal and sent later; the time is when it was tapped on the phone.">Offline</span>}
+                        </div>
+                      )}
+                    </td>
                     <td>{r.hours.toFixed(2)}</td>
                     <td>
                       {r.status === 'submitted' ? (

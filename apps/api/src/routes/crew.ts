@@ -1,3 +1,4 @@
+import { crewRoomFor } from '../billing';
 import type { FastifyInstance } from 'fastify';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
@@ -94,6 +95,10 @@ export async function crewRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: body.role === 'admin' ? 'Only an admin can add admins' : 'Only an admin can add labor coordinators' });
     if ((await pool.query('SELECT 1 FROM auth_find_user($1)', [body.email])).rowCount)
       return reply.code(409).send({ error: 'That email is already registered' });
+    if (body.role === 'crew') {
+      const full = await crewRoomFor(req.user.tid);
+      if (full) return reply.code(402).send({ error: full, reason: 'plan_limit' });
+    }
     // Demo has no email invites yet, so a temporary password is shown once to whoever adds the person.
     const tempPassword = body.password ?? crypto.randomBytes(6).toString('base64url');
     const hash = await bcrypt.hash(tempPassword, 10);
@@ -168,6 +173,12 @@ export async function crewRoutes(app: FastifyInstance) {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const b = patchBody.parse(req.body);
     if (b.active === false && id === req.user.sub) return reply.code(400).send({ error: 'You cannot deactivate your own account' });
+    if (b.active === true) {
+      // Bringing back an inactive crew member takes a seat on the plan.
+      const was = (await withTenant(req.user.tid, (c) => c.query('SELECT active, role FROM users WHERE id = $1', [id]))).rows[0];
+      const full = was && !was.active && was.role === 'crew' ? await crewRoomFor(req.user.tid) : null;
+      if (full) return reply.code(402).send({ error: full, reason: 'plan_limit' });
+    }
     if (b.email) {
       const taken = (await pool.query('SELECT id FROM auth_find_user($1)', [b.email])).rows[0];
       if (taken && taken.id !== id) return reply.code(409).send({ error: 'That email is already registered to someone else' });

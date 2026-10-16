@@ -6,7 +6,7 @@ import { api } from '@/lib/api';
 
 type Rules = {
   minRestHours: number; maxDailyHours: number; dailyOtAfter: number; weeklyOtAfter: number; otMultiplier: number;
-  nightStart: string; nightEnd: string; nightPremiumPct: number; sundayPremiumPct: number; holidayPremiumPct: number; holidays: string[]; defaultState: string | null; autoApprove?: boolean; autoApproveGraceMin?: number;
+  nightStart: string; nightEnd: string; nightPremiumPct: number; sundayPremiumPct: number; holidayPremiumPct: number; holidays: string[]; defaultState: string | null; autoApprove?: boolean; autoApproveGraceMin?: number; lateAlertMin?: number; noShowMin?: number; autoClockoutH?: number;
 };
 type StateRule = { state: string; otMult: number; dtAfter: number | null; dtMult: number; custom: boolean };
 
@@ -72,6 +72,14 @@ function Body() {
             <Num label="Grace either side" suffix="minutes" step={1} value={r.autoApproveGraceMin ?? 10} onChange={(n) => set({ autoApproveGraceMin: n })} hint="Clocking in this much before the start, or out this much after the end, still counts as on schedule. Leaving early always counts." />
           </div>
           <p className="muted">Anything outside that waits on the Timesheets page for a coordinator to approve.</p>
+        </section>
+        <section className="card">
+          <h2>Late, no-shows and forgotten clock-outs</h2>
+          <div className="grid2">
+            <Num label="Late alert after" suffix="minutes" step={1} value={r.lateAlertMin ?? 10} onChange={(n) => set({ lateAlertMin: n })} hint="Not clocked in this long after the start: the person gets a nudge, and coordinators and the event's leads are told. 0 turns it off." />
+            <Num label="No-show after" suffix="minutes" step={5} value={r.noShowMin ?? 60} onChange={(n) => set({ noShowMin: n })} hint="Still not clocked in: marked as a no-show (cleared if they are checked in later). 0 turns it off." />
+            <Num label="Close a forgotten clock-out after" suffix="hours past the end" step={0.5} value={r.autoClockoutH ?? 3} onChange={(n) => set({ autoClockoutH: n })} hint="Still clocked in this long after the shift ended: closed at the scheduled end and left for you to check (never approved automatically). 0 turns it off." />
+          </div>
         </section>
         <section className="card">
           <h2>Overtime</h2>

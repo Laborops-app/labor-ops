@@ -3,6 +3,8 @@ import { sendEmail, sendSms } from './providers';
 import { sendPush } from './push';
 import { loadSettings, saveIntegration, type Resolved } from './settings';
 import { runSweeps } from './sweeps';
+import { useSmsAllowance } from '../billing';
+import { runAttendance } from '../attendance';
 
 const MAX_ATTEMPTS = 4;
 const BACKOFF = [60, 300, 900]; // seconds before retry 2, 3, 4
@@ -20,6 +22,8 @@ async function settingsFor(tenantId: string): Promise<Resolved> {
 }
 
 export async function processQueue(limit = 20): Promise<number> {
+  // Texts held back behind a push are dropped once the push was opened.
+  await pool.query('SELECT notify_skip_acked()');
   const { rows } = await pool.query('SELECT * FROM notify_claim($1)', [limit]);
   for (const d of rows) {
     const finish = (status: string, error: string | null, id: string | null, retry = 0) =>
@@ -44,6 +48,13 @@ export async function processQueue(limit = 20): Promise<number> {
           r = { ok: false, permanent: pr.gone, error: pr.error };
         }
       } else {
+        if (d.channel === 'sms') {
+          const allow = await useSmsAllowance(d.tenant_id);
+          if (!allow.ok) {
+            await finish('skipped', allow.reason, null);
+            continue;
+          }
+        }
         const cfg = await settingsFor(d.tenant_id);
         if (d.channel === 'email') r = await sendEmail(cfg, { to: d.to_addr, subject: d.subject ?? '(no subject)', text: d.body, html: d.html });
         else
@@ -82,5 +93,7 @@ export function startWorkers() {
   const sweep = () => runSweeps().catch((e) => console.error('notify sweep error', e));
   const t2 = setInterval(sweep, 15 * 60 * 1000);
   const t3 = setTimeout(sweep, 30_000);
-  t1.unref(); t2.unref(); t3.unref();
+  // Late / no-show alerts and forgotten clock-outs need to be quick, so they run every 2 minutes.
+  const t4 = setInterval(() => runAttendance().catch((e) => console.error('attendance error', e)), 2 * 60 * 1000);
+  t1.unref(); t2.unref(); t3.unref(); t4.unref();
 }

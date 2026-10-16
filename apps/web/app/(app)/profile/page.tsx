@@ -2,6 +2,7 @@
 import { useLoadEffect } from '@/lib/tabs';
 import { useRef, useState } from 'react';
 import { InstallCard } from '@/components/InstallApp';
+import Passkeys from '@/components/Passkeys';
 import NotificationSettings from '@/components/NotificationSettings';
 import Shell, { initials } from '@/components/Shell';
 import { Banner } from '@/components/ui';
@@ -298,6 +299,7 @@ function Body({ role }: { role: string }) {
       )}
 
       <InstallCard />
+      <Passkeys />
 
       <NotificationSettings phone={u?.phone} />
 

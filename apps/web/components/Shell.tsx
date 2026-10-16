@@ -3,9 +3,10 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
 import { createContext, useContext, useEffect, useState } from 'react';
-import { api, Me, Role, roleLabel } from '@/lib/api';
+import { api, ApiError, Me, Role, roleLabel } from '@/lib/api';
 import ThemeToggle from '@/components/ThemeToggle';
 import InstallApp, { InstallPopup } from '@/components/InstallApp';
+import PunchSync from '@/components/PunchSync';
 import NotificationBell from '@/components/NotificationBell';
 import Sidebar from '@/components/Sidebar';
 import AppTabs from '@/components/AppTabs';
@@ -163,6 +164,27 @@ const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; field?
     ),
   },
   {
+    href: '/reports',
+    label: 'Reports',
+    roles: ['admin', 'manager'],
+    icon: icon(
+      <>
+        <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
+      </>,
+    ),
+  },
+  {
+    href: '/billing',
+    label: 'Billing',
+    roles: ['admin'],
+    icon: icon(
+      <>
+        <rect x="2" y="5" width="20" height="14" rx="2" />
+        <path d="M2 10h20M6 15h4" />
+      </>,
+    ),
+  },
+  {
     href: '/rules',
     label: 'Labor rules',
     roles: ['admin'],
@@ -313,8 +335,20 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     api<{ user: Me }>('/api/auth/me')
-      .then(({ user }) => setMe(user))
-      .catch(() => router.replace(`/login?next=${encodeURIComponent(location.pathname + location.search)}`));
+      .then(({ user }) => {
+        setMe(user);
+        try { localStorage.setItem('lo_me', JSON.stringify(user)); } catch { /* storage blocked */ }
+      })
+      .catch((e) => {
+        // No signal: open with who was signed in last time, so crew can still see shifts and clock in offline.
+        if (!(e instanceof ApiError)) {
+          try {
+            const cached = JSON.parse(localStorage.getItem('lo_me') || 'null');
+            if (cached) return setMe(cached);
+          } catch { /* ignore */ }
+        }
+        router.replace(`/login?next=${encodeURIComponent(location.pathname + location.search)}`);
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -337,6 +371,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
 
   const signOut = async () => {
     await api('/api/auth/logout', { method: 'POST', body: {} });
+    try { localStorage.removeItem('lo_me'); localStorage.removeItem('lo_my_shifts'); } catch { /* ignore */ }
     // A full reload, so nothing from this session's open tabs stays in memory.
     window.location.href = '/login';
   };
@@ -374,6 +409,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
           </button>
         </header>
         <AppTabs path={path} iconFor={tabIcon} />
+        <PunchSync />
         <main className="page"><KeepAlive fallback={children} /></main>
       </div>
 

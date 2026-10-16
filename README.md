@@ -11,14 +11,42 @@ docker-compose.yml   The whole stack on one server: Postgres, API, web, Caddy.
 .github/workflows    CI (tests + build) and automatic deploy to the demo server.
 ```
 
-## What the demo does
+## What it does
 
-- Companies sign up; each company's data is isolated by PostgreSQL Row-Level Security (enforced by the database, not just app code).
-- Roles: Admin, Manager, Crew.
-- Managers: add crew, create events, add shifts, assign crew (double-booking and over-filling are blocked), approve timesheets, export approved hours as CSV.
-- Crew: see their shifts on a phone, accept/decline, clock in/out (clock-in opens 1 hour before a shift).
+**Companies and people**
+- Companies sign up and get a free trial; each company's data is isolated by PostgreSQL Row-Level Security (enforced by the database, not just app code).
+- Roles: Admin, Labor Coordinator, Crew. Only admins add admins. Field permissions: an *On-site Labor Coordinator* checks crew in and out and rates them for the whole event; *leads* (chosen per event, one lead role per department) do the same for their own team.
+- Roles & rates (pay, day and bill rates), certificates with expiry, crew groups, trainings and an academy, crew reviews and star ratings.
 
-Not built yet (see the spec, phases 2-6): native mobile apps, push notifications, geofencing, chat, payroll/accounting integrations, billing, MFA, refresh-token rotation.
+**Scheduling**
+- Events with one phase per day (pre-made from the event dates), shifts with headcount, minimum call (4 / 5 h), lead shifts linked to the crew shifts they lead. Moving an event moves its phases and shifts.
+- Crew picker with type-ahead, star ratings, and people who are booked, unavailable or missing a certificate tucked away. Double-booking, rest and daily-hour rules need an override.
+- Open shifts, swaps, availability, schedule and calendar views, customers, quotes (PDF) and a pipeline board, Rentman sync.
+
+**Time and pay**
+- Crew clock in and out on their phone, with optional GPS geofence, or a coordinator checks them in on site.
+- **Works offline:** with no signal, a clock-in/out is saved on the phone (with the time it was tapped, GPS accuracy and a random id) and sent automatically when there is signal again, by Background Sync on Android or when the app is next opened. The server accepts it once, keeps the phone's time (up to 12 hours old) and marks it *Offline* on the timesheet.
+- Timesheets inside the scheduled hours are approved automatically; coordinators, admins and leads (during the shift + 2 h) can fix times, with the original kept.
+- **Late and no-show alerts:** crew who haven't clocked in a few minutes after the start get a nudge, and coordinators and the event's leads are told; after a set time they are flagged as no-shows (cleared if they turn up). A clock-out forgotten for some hours is closed at the shift end and left for a manager to check. All three are set under Labor rules.
+- Overtime (weekly, daily, per state), double time, night / Sunday / holiday premiums, day rates and minimum calls, priced the same in estimates, payroll and reports.
+- Payroll exports for ADP (RUN and Workforce Now, with rate codes per role), Gusto and QuickBooks, plus QuickBooks Online time activities.
+
+**Reports**
+- Per event for any period: fill rate, scheduled vs worked hours, overtime and double time, labor cost (approved time, as paid), billed (accepted quote, or hours × billing rates), margin, labor budget vs actual, no-shows and late arrivals. CSV download.
+
+**Messages and the app**
+- In-app notifications, email (Amazon SES), text messages (Twilio, Amazon SNS or Podium) and browser push. Chat with files, groups and event channels.
+- Installable web app (no native apps to maintain): an iPhone guide for *Add to Home Screen* (required there for notifications), an install button on Android, then a prompt to turn on alerts.
+- Push messages use **Declarative Web Push** (shown by Safari even if the service worker isn't running) and set the app badge. For people with push on, the text message for the same alert is held back 10 minutes and only sent if the push wasn't opened (`SMS_ESCALATE_MIN`).
+- Password-free sign-in for crew: a **one-time sign-in link** by email (and text, for people who agreed to texts), and **passkeys** (Face ID / fingerprint) added on the Profile page.
+
+**Billing (Stripe)**
+- Plans by active crew (labor coordinators and admins are free), each with a monthly text allowance; extra text packs are bought once and used after the allowance. Checkout, the Stripe customer portal and webhooks keep the plan in step.
+- The Stripe secret key, webhook secret, plan limits, prices and Stripe price ids are entered on the Platform console → Billing (saved encrypted). **Never put Stripe keys in code, `.env` or a chat.** Until a key is saved, billing is off and no limits apply.
+- Webhook endpoint: `https://<your domain>/api/billing/webhook` with the events `checkout.session.completed`, `customer.subscription.created/updated/deleted` and `invoice.payment_failed`.
+- Companies that existed before billing were moved to the *Internal* plan (no limits); change a company's plan on the Platform console when it should start paying.
+
+Not built yet: native mobile apps (not planned), MFA, refresh-token rotation, time-off requests.
 
 ## Run it on your own computer
 
@@ -61,13 +89,12 @@ docker compose logs -f api            # API logs
 docker compose exec api node dist/seed.js --reset   # rebuild the sample company (fresh dates)
 ```
 
-## Known limits of this demo build
+## Known limits
 
-- Session = one 12-hour login cookie. The spec's 15-minute tokens with refresh rotation, MFA and lockout come next.
-- No email yet: new crew get a temporary password shown once to the manager who adds them.
-- `SEED_DEMO=true` publishes demo sign-in buttons and anyone can create a company. Fine for a demo address; turn it off (`SEED_DEMO=false`) before real customers.
-- Clock-in is time-window only (no GPS/geofence yet). Times are shown in the viewer's timezone; the CSV is in UTC.
-- Single server, no automated database backups yet: turn on Lightsail snapshots.
+- Session = one 12-hour login cookie. Short tokens with refresh rotation, MFA and lockout come next.
+- `SEED_DEMO=true` keeps a sample company with demo sign-in buttons on the login page. Signup is always open (new companies start on a trial). Turn `SEED_DEMO` off on a server real customers use, once nobody relies on the demo accounts.
+- Times are shown in the viewer's time zone; payroll and reports use the company's time zone.
+- Offline clock-in needs the app to have been opened once with signal on that phone (to save the app and the shift list).
 
 ## File storage and backups (RustFS / S3)
 
