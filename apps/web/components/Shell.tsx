@@ -11,7 +11,7 @@ import NotificationBell from '@/components/NotificationBell';
 import Sidebar from '@/components/Sidebar';
 import AppTabs from '@/components/AppTabs';
 import KeepAlive, { usePageActive } from '@/components/KeepAlive';
-import { closeTab, initTabs, openTab } from '@/lib/tabs';
+import { closeOtherTabs, closeTab, initTabs, openTab } from '@/lib/tabs';
 
 const icon = (d: React.ReactNode) => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -319,6 +319,7 @@ function tabIcon(path: string) {
   return n?.icon ?? null;
 }
 
+const MOBILE_ON_PROFILE = ['/trainings', '/availability'];
 const MeContext = createContext<Me | null>(null);
 /** The signed-in person, for pages inside the app frame. */
 export const useMe = () => useContext(MeContext);
@@ -365,6 +366,8 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     if (!me) return;
     initTabs(me.id);
     openTab(path, path + window.location.search, tabTitle(path));
+    // Phones have no tab row: only the page on screen is kept.
+    if (matchMedia('(max-width: 899px)').matches) closeOtherTabs(path);
   }, [me, path]);
 
   if (!me) return <div className="center muted">Loading…</div>;
@@ -378,6 +381,8 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   const items = NAV.filter((n) => n.roles.includes(me.role) && (!n.rates || me.role === 'admin' || me.canAdjustRates) && (!n.field || !!me.fieldRoles?.length || !!me.leads));
 
   const current = items.find((n) => path.startsWith(n.href));
+  // The phone's bottom bar: Trainings and Availability live on the Profile page there.
+  const tabbarItems = items.filter((n) => !MOBILE_ON_PROFILE.includes(n.href));
 
   return (
     <MeContext.Provider value={me}>
@@ -413,9 +418,9 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
         <main className="page"><KeepAlive fallback={children} /></main>
       </div>
 
-      {items.length > 1 && (
+      {tabbarItems.length > 1 && (
         <nav className="tabbar" aria-label="Main">
-          {items.map((n) => (
+          {tabbarItems.map((n) => (
             <Link key={n.href} href={n.href} className={path.startsWith(n.href) ? 'active' : ''} aria-current={path.startsWith(n.href) ? 'page' : undefined}>
               {n.icon}
               {n.href === '/chat' && chatUnread > 0 && <span className="nav-badge" aria-label={`${chatUnread} unread conversations`}>{chatUnread > 9 ? '9+' : chatUnread}</span>}

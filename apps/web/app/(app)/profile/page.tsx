@@ -1,12 +1,14 @@
 'use client';
 import { useLoadEffect } from '@/lib/tabs';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { InstallCard } from '@/components/InstallApp';
 import Passkeys from '@/components/Passkeys';
+import TrainingsPanel from '@/components/TrainingsPanel';
+import AvailabilityPanel from '@/components/AvailabilityPanel';
 import NotificationSettings from '@/components/NotificationSettings';
 import Shell, { initials } from '@/components/Shell';
 import { Banner } from '@/components/ui';
-import { api, ApiError, roleLabel } from '@/lib/api';
+import { api, ApiError, roleLabel, type Me } from '@/lib/api';
 import SkillPicker, { useSkillNames } from '@/components/SkillPicker';
 
 type User = {
@@ -44,7 +46,30 @@ async function upload(certId: string, file: File) {
   }
 }
 
-function Body({ role }: { role: string }) {
+/** A collapsible profile section; open/closed is remembered on this device. */
+function Fold({ id, title, sub, children }: { id: string; title: string; sub: string; children: React.ReactNode }) {
+  const key = `lo_profile_open:${id}`;
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    try { setOpen(localStorage.getItem(key) === '1'); } catch { /* storage blocked */ }
+  }, [key]);
+  return (
+    <details className="card profile-fold" open={open} onToggle={(e) => {
+      const o = (e.currentTarget as HTMLDetailsElement).open;
+      setOpen(o);
+      try { localStorage.setItem(key, o ? '1' : '0'); } catch { /* ignore */ }
+    }}>
+      <summary>
+        <span><b>{title}</b><span className="muted small">{sub}</span></span>
+        <svg className="fold-chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+      </summary>
+      {open && <div className="profile-fold-body">{children}</div>}
+    </details>
+  );
+}
+
+function Body({ me }: { me: Me }) {
+  const role = me.role;
   const [u, setU] = useState<User | null>(null);
   const [certs, setCerts] = useState<Cert[]>([]);
   const [f, setF] = useState({ name: '', phone: '', address: '', emergencyName: '', emergencyPhone: '', bio: '', skills: [] as string[] });
@@ -298,6 +323,15 @@ function Body({ role }: { role: string }) {
         </section>
       )}
 
+      {isCrew && (
+        <Fold id="availability" title="Availability" sub="When you can work, and certificates">
+          <AvailabilityPanel embedded />
+        </Fold>
+      )}
+      <Fold id="trainings" title="Trainings" sub="Upcoming trainings and courses">
+        <TrainingsPanel me={me} embedded />
+      </Fold>
+
       <InstallCard />
       <Passkeys />
 
@@ -330,5 +364,5 @@ function Body({ role }: { role: string }) {
 }
 
 export default function Page() {
-  return <Shell roles={['crew', 'manager', 'admin']}>{(me) => <Body role={me.role} />}</Shell>;
+  return <Shell roles={['crew', 'manager', 'admin']}>{(me) => <Body me={me} />}</Shell>;
 }

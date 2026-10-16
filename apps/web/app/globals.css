@@ -1779,3 +1779,19 @@ th.num .th-sort { text-align: right; }
 .meter > span { display: block; height: 100%; background: var(--primary); border-radius: 6px; }
 .meter.over > span { background: var(--bad); }
 .billing-note { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+
+/* ---------- phones: no tab row; Profile holds Trainings and Availability ---------- */
+@media (max-width: 899px) {
+  .at-bar { display: none; }
+}
+.profile-fold { padding: 0; }
+.profile-fold > summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 1rem 1.1rem; min-height: 56px; }
+.profile-fold > summary::-webkit-details-marker { display: none; }
+.profile-fold > summary > span { display: grid; gap: 0.15rem; }
+.profile-fold > summary b { font-size: 1.05rem; }
+.profile-fold .fold-chev { color: var(--muted); transition: transform 0.15s; flex: none; }
+.profile-fold[open] .fold-chev { transform: rotate(180deg); }
+.profile-fold > summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: inherit; }
+.profile-fold-body { padding: 0 1.1rem 1rem; border-top: 1px solid var(--border); padding-top: 0.75rem; }
+.profile-fold-body .card { box-shadow: none; }
+details.card.profile-fold > summary::before { content: none; }
