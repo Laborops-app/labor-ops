@@ -3510,7 +3510,7 @@ test('HR accounts: invoicing, payroll, reports and timesheets, but no scheduling
   void c1;
 });
 
-test('pipeline: completed → admins and HR told it is ready to invoice; invoiced or canceled → archived, restorable, kept 2 years', async () => {
+test('pipeline: completed → admins and HR told it is ready to invoice; invoiced or canceled → archived, restorable, kept 4 years (canceled 2)', async () => {
   const a = await register('arch');
   const tid = await tenantOf(a);
   await call(a, 'POST', '/api/crew', { name: 'Harper HR', email: `hr2-${run}@test.example`, password: 'password123', role: 'hr' });
@@ -3542,7 +3542,8 @@ test('pipeline: completed → admins and HR told it is ready to invoice; invoice
   const x = arch.events.find((e: any) => e.id === ev);
   assert.equal(x.archive_reason, 'invoiced');
   assert.equal(x.invoiced, 200);
-  assert.equal(arch.keepYears, 2);
+  assert.equal(arch.keepYears, 4);
+  assert.equal(arch.keepCanceledYears, 2);
   // Still in reports
   assert.ok((await call(a, 'GET', '/api/reports?from=2026-01-01&to=2026-01-31')).json.events.some((e: any) => e.id === ev));
 
@@ -3563,7 +3564,14 @@ test('pipeline: completed → admins and HR told it is ready to invoice; invoice
   // After two years it is removed by the daily clean-up
   const { purgeArchive } = await import('../src/routes/archive');
   assert.equal(await withTenant(tid, (c) => purgeArchive(c, tid)), 0);
+  // Invoiced events are kept 4 years; canceled ones 2
   await withTenant(tid, (c) => c.query("UPDATE events SET archived_at = now() - interval '2 years 1 day' WHERE id = $1", [ev]));
+  assert.equal(await withTenant(tid, (c) => purgeArchive(c, tid)), 0);
+  const ev3 = (await call(a, 'POST', '/api/events', { name: 'Old cancel', startDate: '2024-02-01', endDate: '2024-02-01' })).json.event.id as string;
+  await call(a, 'PATCH', `/api/events/${ev3}/pipeline`, { status: 'canceled' });
+  await withTenant(tid, (c) => c.query("UPDATE events SET archived_at = now() - interval '2 years 1 day' WHERE id = $1", [ev3]));
+  assert.equal(await withTenant(tid, (c) => purgeArchive(c, tid)), 1);
+  await withTenant(tid, (c) => c.query("UPDATE events SET archived_at = now() - interval '4 years 1 day' WHERE id = $1", [ev]));
   assert.equal(await withTenant(tid, (c) => purgeArchive(c, tid)), 1);
   assert.equal((await call(a, 'GET', '/api/archive')).json.events.length, 0);
 });

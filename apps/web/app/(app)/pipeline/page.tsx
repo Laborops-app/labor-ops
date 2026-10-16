@@ -369,7 +369,7 @@ function Body({ me }: { me: Me }) {
           <button type="button" className="pm-icon-btn" title="Copy link to this board" aria-label="Copy link to this board" onClick={share}><Svg>{Ico.link}</Svg></button>
         </div>
         <div className="pm-team">
-          <Link href="/archive" className="btn small ghost" title="Invoiced and canceled events, kept 2 years">Archive</Link>
+          <Link href="/archive" className="btn small ghost" title="Invoiced events (kept 4 years) and canceled ones (kept 2 years)">Archive</Link>
           {me.role !== 'hr' && <Link href="/crew" className="pm-invite"><Svg size={18}>{Ico.plus}</Svg>Team</Link>}
           <span className="pm-team-avs">
             {team.slice(0, 4).map((t) => <span key={t.id} className={avClass(t.name)} title={`${t.name} · ${roleLabel(t.role)}`}>{initialsOf(t.name)}</span>)}

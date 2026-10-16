@@ -19,11 +19,11 @@ const nextYearName = (n: string) => (/\b20\d\d\b/.test(n) ? n.replace(/\b(20\d\d
 
 function Body({ me }: { me: Me }) {
   const [list, setList] = useState<Ev[] | null>(null);
-  const [keep, setKeep] = useState(2);
+  const [keep, setKeep] = useState({ done: 4, canceled: 2 });
   const [q, setQ] = useState('');
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
-  const load = () => api<{ events: Ev[]; keepYears: number }>(`/api/archive${q.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''}`).then((r) => { setList(r.events); setKeep(r.keepYears); }).catch((e) => setError(e.message));
+  const load = () => api<{ events: Ev[]; keepYears: number; keepCanceledYears: number }>(`/api/archive${q.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''}`).then((r) => { setList(r.events); setKeep({ done: r.keepYears, canceled: r.keepCanceledYears }); }).catch((e) => setError(e.message));
   useEffect(() => {
     const t = setTimeout(load, q ? 250 : 0);
     return () => clearTimeout(t);
@@ -42,8 +42,8 @@ function Body({ me }: { me: Me }) {
         <Link href="/pipeline" className="btn small ghost">Pipeline</Link>
       </div>
       <p className="muted">
-        Events leave the pipeline once they are invoiced, or when they are canceled. They stay here for {keep} years so you can book them again next year, then are removed
-        automatically{me.role === 'admin' ? ' (you can delete one sooner)' : ''}.
+        Events leave the pipeline once they are invoiced, or when they are canceled. They stay here so you can book them again next year: {keep.done} years for worked events (with their time and pay records), {keep.canceled} years for
+        canceled ones. Then they are removed automatically{me.role === 'admin' ? ' (you can delete one sooner)' : ''}.
       </p>
       {error && <Banner onClose={() => setError('')}>{error}</Banner>}
       {note && <Banner kind="ok" onClose={() => setNote('')}>{note}</Banner>}

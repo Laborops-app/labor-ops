@@ -3,11 +3,14 @@ import { z } from 'zod';
 import { guard } from '../auth';
 import { withTenant, audit } from '../db';
 
-export const KEEP_YEARS = 2;
+/** How long archived events are kept: canceled ones 2 years, everything else (worked, with time and pay records) 4 years. */
+export const KEEP_YEARS = 4;
+export const KEEP_CANCELED_YEARS = 2;
+const KEEP_SQL = `make_interval(years => CASE WHEN e.archive_reason = 'canceled' THEN ${KEEP_CANCELED_YEARS} ELSE ${KEEP_YEARS} END)`;
 
 /**
  * Events taken off the pipeline: invoiced after completion, canceled, or archived by hand. Kept two years so they can be
- * booked again next year (copy), then removed automatically; an admin can delete one sooner.
+ * booked again next year (copy): canceled ones 2 years, the rest 4 years, then removed automatically; an admin can delete one sooner.
  */
 export async function archiveRoutes(app: FastifyInstance) {
   const viewers = guard('admin', 'manager', 'hr');
@@ -17,18 +20,18 @@ export async function archiveRoutes(app: FastifyInstance) {
   app.get('/api/archive', { preHandler: viewers }, async (req) => {
     const { q } = z.object({ q: z.string().trim().max(100).optional() }).parse(req.query);
     return withTenant(req.user.tid, async (c) => ({
-      keepYears: KEEP_YEARS,
+      keepYears: KEEP_YEARS, keepCanceledYears: KEEP_CANCELED_YEARS,
       events: (
         await c.query(
           `SELECT e.id, e.name, e.venue, e.start_date::text, e.end_date::text, e.pipeline_status AS status, e.customer_id, cu.name AS customer_name,
                   e.archived_at, e.archive_reason, u.name AS archived_by_name,
-                  (e.archived_at + make_interval(years => $2))::date::text AS delete_on,
+                  (e.archived_at + ${KEEP_SQL})::date::text AS delete_on,
                   (SELECT sum(i.total) FROM event_invoices i WHERE i.event_id = e.id)::float AS invoiced,
                   (SELECT count(*)::int FROM shifts s WHERE s.event_id = e.id) AS shift_count
              FROM events e LEFT JOIN customers cu ON cu.id = e.customer_id LEFT JOIN users u ON u.id = e.archived_by
             WHERE e.archived_at IS NOT NULL AND ($1::text IS NULL OR e.name ILIKE '%' || $1 || '%' OR cu.name ILIKE '%' || $1 || '%')
             ORDER BY e.start_date DESC, e.name LIMIT 500`,
-          [q || null, KEEP_YEARS],
+          [q || null],
         )
       ).rows,
     }));
@@ -70,9 +73,9 @@ export async function archiveRoutes(app: FastifyInstance) {
   });
 }
 
-/** Remove archived events older than two years (daily sweep). */
+/** Remove archived events past their keep time (daily sweep). */
 export async function purgeArchive(c: import('pg').PoolClient, tenantId: string) {
-  const r = await c.query(`DELETE FROM events WHERE archived_at < now() - make_interval(years => $1) RETURNING id, name`, [KEEP_YEARS]);
+  const r = await c.query(`DELETE FROM events e WHERE e.archived_at < now() - ${KEEP_SQL} RETURNING id, name`);
   for (const e of r.rows) await audit(c, tenantId, null, 'event.purge_archived', 'event', e.id, { name: e.name });
   return r.rowCount ?? 0;
 }

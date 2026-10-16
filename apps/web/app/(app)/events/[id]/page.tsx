@@ -1138,7 +1138,7 @@ function Body({ me }: { me: Me }) {
               (ev as { archived_at?: string | null }).archived_at ? (
                 <button className="btn small" onClick={() => api(`/api/events/${id}/restore`, { body: {} }).then(() => { setNote('Back on the pipeline.'); load(); }).catch((e) => setError(e.message))}>Restore</button>
               ) : (
-                <button className="btn small" title="Take it off the pipeline (kept 2 years in the Archive)" onClick={() => api(`/api/events/${id}/archive`, { body: {} }).then(() => { setNote('Archived. It stays on the Archive page for 2 years.'); load(); }).catch((e) => setError(e.message))}>Archive</button>
+                <button className="btn small" title="Take it off the pipeline (kept in the Archive: 4 years, or 2 if canceled)" onClick={() => api(`/api/events/${id}/archive`, { body: {} }).then(() => { setNote(ev.pipeline_status === 'canceled' ? 'Archived. It stays on the Archive page for 2 years.' : 'Archived. It stays on the Archive page for 4 years.'); load(); }).catch((e) => setError(e.message))}>Archive</button>
               )
             )}
             <button className="btn-round" title="Event chat" aria-label="Event chat" onClick={() => api<{ id: string }>('/api/chat/channels', { body: { eventId: id } }).then((r) => router.push(`/chat?c=${r.id}`)).catch((e) => setError(e.message))}>
