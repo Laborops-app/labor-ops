@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { api, ApiError, homeFor, Me, Role, roleLabel } from '@/lib/api';
 import ThemeToggle from '@/components/ThemeToggle';
 import InstallApp, { InstallPopup } from '@/components/InstallApp';
@@ -382,6 +382,26 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     if (matchMedia('(max-width: 899px)').matches) closeOtherTabs(path);
   }, [me, path]);
 
+  // The bottom bar scrolls side to side on small phones: keep the current page's icon in view, and fade the edge
+  // that has more icons past it.
+  const tabbarRef = useRef<HTMLElement>(null);
+  const [tabEdges, setTabEdges] = useState({ left: false, right: false });
+  const updateTabEdges = () => {
+    const el = tabbarRef.current;
+    if (!el) return;
+    const left = el.scrollLeft > 4, right = el.scrollLeft + el.clientWidth < el.scrollWidth - 4;
+    setTabEdges((p) => (p.left === left && p.right === right ? p : { left, right }));
+  };
+  useEffect(() => {
+    const el = tabbarRef.current;
+    if (!el) return;
+    const active = el.querySelector<HTMLElement>('a.active');
+    if (active) el.scrollTo({ left: active.offsetLeft - (el.clientWidth - active.offsetWidth) / 2, behavior: 'smooth' });
+    updateTabEdges();
+    window.addEventListener('resize', updateTabEdges);
+    return () => window.removeEventListener('resize', updateTabEdges);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path, me]);
   if (!me) return <div className="center muted">Loading…</div>;
 
   const signOut = async () => {
@@ -432,7 +452,8 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
       </div>
 
       {tabbarItems.length > 1 && (
-        <nav className="tabbar" aria-label="Main">
+        <div className={`tabbar-wrap${tabEdges.left ? ' more-left' : ''}${tabEdges.right ? ' more-right' : ''}`}>
+        <nav className="tabbar" aria-label="Main" ref={tabbarRef} onScroll={updateTabEdges}>
           {tabbarItems.map((n) => (
             <Link key={n.href} href={n.href} className={path.startsWith(n.href) ? 'active' : ''} aria-current={path.startsWith(n.href) ? 'page' : undefined}>
               {n.icon}
@@ -441,6 +462,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
             </Link>
           ))}
         </nav>
+        </div>
       )}
     </div>
     </MeContext.Provider>

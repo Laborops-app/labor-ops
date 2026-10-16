@@ -133,15 +133,27 @@ p { margin: 0 0 0.75rem; }
   .mobile-only-toggle { display: inline-flex; }
   .topbar .page-title, .topbar .who .txt { display: none; }
   .page { padding: 1rem 0.9rem calc(5.5rem + env(safe-area-inset-bottom)); }
+  /* Scrolls side to side when the icons don't all fit; each icon keeps a readable width. */
   .tabbar {
-    display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+    display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; gap: 2px;
     background: var(--side-bg); border-top: 1px solid var(--border);
     padding: 0.3rem 0.4rem calc(0.3rem + env(safe-area-inset-bottom));
+    overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity; scrollbar-width: none;
   }
+  .tabbar::-webkit-scrollbar { display: none; }
   .tabbar a {
-    flex: 1; display: grid; justify-items: center; gap: 0.1rem; padding: 0.4rem 0.2rem; border-radius: 10px;
-    color: var(--muted); text-decoration: none; font-size: 0.7rem; font-weight: 600;
+    flex: 1 0 auto; min-width: 68px; display: grid; justify-items: center; gap: 0.1rem; padding: 0.4rem 0.3rem; border-radius: 10px;
+    color: var(--muted); text-decoration: none; font-size: 0.7rem; font-weight: 600; white-space: nowrap; scroll-snap-align: center;
   }
+  /* Edge fades hint that there are more icons to swipe to. */
+  .tabbar-wrap { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; }
+  .tabbar-wrap::before, .tabbar-wrap::after {
+    content: ''; position: absolute; top: 0; bottom: 0; width: 22px; z-index: 31; pointer-events: none; opacity: 0; transition: opacity .15s;
+  }
+  .tabbar-wrap::before { left: 0; background: linear-gradient(to right, var(--side-bg), transparent); }
+  .tabbar-wrap::after { right: 0; background: linear-gradient(to left, var(--side-bg), transparent); }
+  .tabbar-wrap.more-left::before, .tabbar-wrap.more-right::after { opacity: 1; }
   .tabbar a.active { color: var(--nav-active-text); background: var(--nav-active-bg); }
   h1 { font-size: 1.4rem; }
 }
