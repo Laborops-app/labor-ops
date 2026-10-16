@@ -3,6 +3,7 @@ import { respondToAssignment } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { autoApprove } from '../autoApprove';
+import { editEntry, addEntry } from '../timeEdit';
 import { notifyStaff, describeShift } from '../notify';
 import { withTenant, audit } from '../db';
 import { authenticate, guard } from '../auth';
@@ -21,14 +22,16 @@ const ENTRY_SQL = `
   SELECT t.id, t.status, t.clock_in, t.clock_out, t.approved_at, t.auto_approved, s.starts_at AS shift_starts_at, s.ends_at AS shift_ends_at, s.min_hours::float AS min_hours,
     ROUND(EXTRACT(EPOCH FROM (COALESCE(t.clock_out, now()) - t.clock_in)) / 3600.0, 2)::float AS hours,
     u.id AS user_id, u.name AS user_name, u.email AS user_email,
-    s.role_name, s.pay_rate_override AS shift_rate, cr.rate AS crew_rate, cr.pay_type AS crew_pay_type, e.name AS event_name, ap.name AS approved_by_name
+    s.role_name, s.pay_rate_override AS shift_rate, cr.rate AS crew_rate, cr.pay_type AS crew_pay_type, e.name AS event_name, ap.name AS approved_by_name,
+    t.edited_at, ed.name AS edited_by_name, t.original_clock_in, t.original_clock_out, t.payroll_exported_at
   FROM time_entries t
   JOIN users u ON u.id = t.user_id
   JOIN shift_assignments a ON a.id = t.assignment_id
   JOIN shifts s ON s.id = a.shift_id
   JOIN events e ON e.id = s.event_id
   LEFT JOIN event_crew_rates cr ON cr.event_id = e.id AND cr.user_id = u.id
-  LEFT JOIN users ap ON ap.id = t.approved_by`;
+  LEFT JOIN users ap ON ap.id = t.approved_by
+  LEFT JOIN users ed ON ed.id = t.edited_by`;
 
 /** Great-circle distance in metres. */
 export const distanceM = (lat1: number, lng1: number, lat2: number, lng2: number) => {
@@ -258,6 +261,21 @@ export async function timeRoutes(app: FastifyInstance) {
         await c.query(`${ENTRY_SQL} ${status ? 'WHERE t.status = $1' : ''} ORDER BY t.clock_in DESC LIMIT 200`, status ? [status] : [])
       ).rows,
     }));
+  });
+
+  // Coordinators and admins correct time, or add it for someone who never clocked in.
+  const timesBody = z.object({ clockIn: z.string().datetime({ offset: true }), clockOut: z.string().datetime({ offset: true }).nullable(), force: z.boolean().optional(), reason: z.string().trim().max(300).nullable().optional() });
+  app.put('/api/time-entries/:id', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const b = timesBody.parse(req.body);
+    const { code, ...body } = await withTenant(req.user.tid, (c) => editEntry(c, { tid: req.user.tid, userId: req.user.sub, field: false }, id, b));
+    return reply.code(code).send(body);
+  });
+  app.post('/api/assignments/:id/time', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const b = timesBody.parse(req.body);
+    const { code, ...body } = await withTenant(req.user.tid, (c) => addEntry(c, { tid: req.user.tid, userId: req.user.sub, field: false }, id, b));
+    return reply.code(code).send(body);
   });
 
   app.post('/api/timesheets/:id/approve', { preHandler: mgr }, async (req, reply) => {

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { autoApprove } from '../autoApprove';
+import { editEntry, addEntry } from '../timeEdit';
 import { withTenant, audit } from '../db';
 import { authenticate } from '../auth';
 import { loadDepartments } from '../leads';
@@ -112,7 +113,8 @@ export async function onsiteRoutes(app: FastifyInstance) {
       const shifts = (
         await c.query(
           `SELECT s.id, s.role_name, s.starts_at, s.ends_at,
-                  (now() BETWEEN s.starts_at - interval '2 hours' AND s.ends_at + interval '4 hours') AS can_check_in
+                  (now() BETWEEN s.starts_at - interval '2 hours' AND s.ends_at + interval '4 hours') AS can_check_in,
+                  (now() BETWEEN s.starts_at - interval '2 hours' AND s.ends_at + interval '2 hours') AS can_edit
              FROM shifts s WHERE s.event_id = $1 ORDER BY s.starts_at, s.role_name`,
           [id],
         )
@@ -122,7 +124,10 @@ export async function onsiteRoutes(app: FastifyInstance) {
             await c.query(
               `SELECT a.id AS assignment_id, a.shift_id, u.id AS user_id, u.name, u.phone,
                       (SELECT t.clock_in FROM time_entries t WHERE t.assignment_id = a.id AND t.clock_out IS NULL ORDER BY t.clock_in DESC LIMIT 1) AS clocked_in_at,
-                      (SELECT max(t.clock_out) FROM time_entries t WHERE t.assignment_id = a.id) AS last_clock_out
+                      (SELECT max(t.clock_out) FROM time_entries t WHERE t.assignment_id = a.id) AS last_clock_out,
+                      COALESCE((SELECT json_agg(json_build_object('id', t.id, 'clock_in', t.clock_in, 'clock_out', t.clock_out, 'status', t.status,
+                                  'locked', (t.status = 'approved' AND NOT t.auto_approved) OR t.payroll_exported_at IS NOT NULL, 'edited', t.edited_at IS NOT NULL) ORDER BY t.clock_in)
+                                FROM time_entries t WHERE t.assignment_id = a.id), '[]'::json) AS entries
                  FROM shift_assignments a JOIN users u ON u.id = a.user_id
                 WHERE a.shift_id = ANY($1::uuid[]) AND a.status = 'accepted' ORDER BY u.name`,
               [shifts.map((s) => s.id)],
@@ -167,6 +172,23 @@ export async function onsiteRoutes(app: FastifyInstance) {
     });
     const { code, ...rest } = r as { code: number; [k: string]: unknown };
     return reply.code(code).send(rest);
+  });
+
+  // Correct a time entry, or add one, for your crew: from 2 hours before the shift until 2 hours after it ends.
+  const timesBody = z.object({ clockIn: z.string().datetime({ offset: true }), clockOut: z.string().datetime({ offset: true }).nullable(), reason: z.string().trim().max(300).nullable().optional() });
+  app.put('/api/onsite/time-entries/:id', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const b = timesBody.parse(req.body);
+    const { code, ...body } = await withTenant(req.user.tid, (c) =>
+      editEntry(c, { tid: req.user.tid, userId: req.user.sub, field: true }, id, b, async (aid) => !!(await coveredAssignment(c, req.user.sub, aid))));
+    return reply.code(code).send(body);
+  });
+  app.post('/api/onsite/assignments/:id/time', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const b = timesBody.parse(req.body);
+    const { code, ...body } = await withTenant(req.user.tid, (c) =>
+      addEntry(c, { tid: req.user.tid, userId: req.user.sub, field: true }, id, b, async (aid) => !!(await coveredAssignment(c, req.user.sub, aid))));
+    return reply.code(code).send(body);
   });
 
   // Rating page: the crew you cover (not yourself), with your own review of each shift. No averages, and

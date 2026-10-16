@@ -1,8 +1,9 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
+import TimeEdit from '@/components/TimeEdit';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
-import { api, fmtDateTime, fmtTime } from '@/lib/api';
+import { api, ApiError, fmtDateTime, fmtTime } from '@/lib/api';
 
 type Entry = {
   id: string;
@@ -15,6 +16,10 @@ type Entry = {
   event_name: string;
   approved_by_name: string | null;
   auto_approved?: boolean;
+  edited_at?: string | null;
+  edited_by_name?: string | null;
+  original_clock_in?: string | null;
+  original_clock_out?: string | null;
   shift_starts_at?: string;
   shift_ends_at?: string;
 };
@@ -28,6 +33,22 @@ function Body() {
   const [tab, setTab] = useState<(typeof TABS)[number]['key']>('submitted');
   const [rows, setRows] = useState<Entry[] | null>(null);
   const [error, setError] = useState('');
+  const [editing, setEditing] = useState<string | null>(null);
+  const [note, setNote] = useState('');
+  const saveTime = async (id: string, t: { clockIn: string; clockOut: string | null }, force = false): Promise<void> => {
+    try {
+      const r = await api<{ entry: { status: string; auto_approved: boolean } }>(`/api/time-entries/${id}`, { method: 'PUT', body: { ...t, force: force || undefined } });
+      setEditing(null);
+      setNote(r.entry.auto_approved ? 'Time saved and approved (within the scheduled shift).' : r.entry.status === 'submitted' ? 'Time saved. It is outside the scheduled shift, so it needs approval.' : 'Time saved.');
+      load();
+    } catch (e) {
+      if (e instanceof ApiError && e.reason === 'exported' && !force) {
+        if (confirm(e.message)) return saveTime(id, t, true);
+        return;
+      }
+      throw e;
+    }
+  };
 
   const load = (t = tab) => {
     setRows(null);
@@ -59,6 +80,7 @@ function Body() {
         </a>
       </div>
       {error && <Banner onClose={() => setError('')}>{error}</Banner>}
+      {note && <Banner kind="ok" onClose={() => setNote('')}>{note}</Banner>}
       <div className="tabs" role="tablist">
         {TABS.map((t) => (
           <button key={t.key} role="tab" aria-selected={tab === t.key} className={tab === t.key ? 'active' : ''} onClick={() => setTab(t.key)}>
@@ -82,11 +104,13 @@ function Body() {
                   <th>Out</th>
                   <th>Hours</th>
                   <th></th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.id}>
+                  <Fragment key={r.id}>
+                  <tr>
                     <td>
                       <b>{r.user_name}</b>
                     </td>
@@ -94,7 +118,16 @@ function Body() {
                       {r.role_name}
                       <div className="muted">{r.event_name}</div>
                     </td>
-                    <td className="small">{fmtDateTime(r.clock_in)}</td>
+                    <td className="small">
+                      {fmtDateTime(r.clock_in)}
+                      {r.edited_at && (
+                        <div>
+                          <span className="chip small-chip" style={{ marginLeft: 0 }} title={`Changed by ${r.edited_by_name ?? 'someone'} on ${fmtDateTime(r.edited_at)}. Recorded: ${r.original_clock_in ? fmtDateTime(r.original_clock_in) : 'no clock-in'} – ${r.original_clock_out ? fmtDateTime(r.original_clock_out) : 'no clock-out'}`}>
+                            Edited
+                          </span>
+                        </div>
+                      )}
+                    </td>
                     <td className="small">{r.clock_out ? fmtDateTime(r.clock_out) : <Pill status="open" />}</td>
                     <td>{r.hours.toFixed(2)}</td>
                     <td>
@@ -113,7 +146,18 @@ function Body() {
                         r.auto_approved ? <span className="chip open" title="Within the scheduled shift, so approved automatically">Auto-approved</span> : <span className="muted small">by {r.approved_by_name ?? 'a coordinator'}</span>
                       ) : null}
                     </td>
+                    <td>
+                      <button className="btn ghost small" onClick={() => setEditing(editing === r.id ? null : r.id)} title="Correct the clock-in or clock-out">✎ Edit</button>
+                    </td>
                   </tr>
+                  {editing === r.id && (
+                    <tr>
+                      <td colSpan={7}>
+                        <TimeEdit title={`Correct ${r.user_name}'s time`} clockIn={r.clock_in} clockOut={r.clock_out} onSave={(t) => saveTime(r.id, t)} onCancel={() => setEditing(null)} />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

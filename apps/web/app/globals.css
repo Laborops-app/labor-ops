@@ -1704,3 +1704,8 @@ a.cs-co:hover b { color: var(--primary); }
 .team-opt { display: flex; gap: 8px; align-items: flex-start; }
 .team-opt input { width: auto; margin-top: 3px; }
 .min-call-select { padding: 3px 8px; font-size: 12.5px; border-radius: 999px; width: auto; }
+.os-times { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 13px; margin-top: 2px; }
+.os-time .rt-link { margin-left: 4px; padding: 0 4px; }
+.os-add-time { align-self: flex-start; font-size: 13px; padding: 2px 0; }
+.os-crew li.os-fix { display: block; border-left-color: transparent; }
+.time-entry-edit input[type="datetime-local"] { min-width: 190px; }

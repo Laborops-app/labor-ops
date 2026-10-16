@@ -3113,3 +3113,56 @@ test('minimum call: released early is still paid the shift minimum (payroll and 
   await call(a, 'PATCH', `/api/shifts/${sh}`, { minHours: null });
   assert.equal((await call(a, 'GET', '/api/payroll?from=2030-03-04&to=2030-03-10')).json.people[0].regular, 2.5);
 });
+
+test('editing time: coordinators any entry (asked if exported), leads only during the shift and 2 hours after, for their crew', async () => {
+  const a = await register('tedit');
+  const tid = await tenantOf(a);
+  const lead = await mkCrew(a, 'te-lead'), c1 = await mkCrew(a, 'te1'), c2 = await mkCrew(a, 'te2'), other = await mkCrew(a, 'te-oth');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Show', startDate: '2030-01-01', endDate: '2030-01-01' })).json.event.id as string;
+  const mk = async (roleName: string, from: number, to: number) => (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName, startsAt: start(from), endsAt: start(to), headcount: 3 })).json.shift.id as string;
+  const sLead = await mk('Pusher Lead', -6, -1), sCrew = await mk('Pusher', -6, -1), sOther = await mk('Audio', -6, -1);
+  await call(a, 'POST', `/api/shifts/${sLead}/assign`, { userId: lead.id, confirmed: true, lead: true });
+  const a1 = (await call(a, 'POST', `/api/shifts/${sCrew}/assign`, { userId: c1.id, confirmed: true })).json.assignment.id;
+  const a2 = (await call(a, 'POST', `/api/shifts/${sCrew}/assign`, { userId: c2.id, confirmed: true })).json.assignment.id;
+  const aO = (await call(a, 'POST', `/api/shifts/${sOther}/assign`, { userId: other.id, confirmed: true })).json.assignment.id;
+  await call(a, 'PUT', `/api/shifts/${sLead}/team`, { shiftIds: [sCrew] });
+  // c1 forgot to clock out: still open
+  const e1 = (await withTenant(tid, (c) => c.query("INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in) VALUES ($1,$2,$3, now() - interval '6 hours') RETURNING id", [tid, a1, c1.id]))).rows[0].id;
+  // Lead fixes it within the shift's hours: auto-approved
+  const fix = await call(lead.session, 'PUT', `/api/onsite/time-entries/${e1}`, { clockIn: start(-6), clockOut: start(-1.5) });
+  assert.equal(fix.status, 200, fix.text);
+  assert.equal(fix.json.entry.auto_approved, true);
+  // Lead adds time for c2 who never clocked in
+  const add = await call(lead.session, 'POST', `/api/onsite/assignments/${a2}/time`, { clockIn: start(-5), clockOut: start(-1) });
+  assert.equal(add.status, 201, add.text);
+  // Not their crew; not in the future; not far outside the shift; no overlaps
+  assert.equal((await call(lead.session, 'POST', `/api/onsite/assignments/${aO}/time`, { clockIn: start(-5), clockOut: start(-2) })).status, 404);
+  assert.equal((await call(lead.session, 'PUT', `/api/onsite/time-entries/${e1}`, { clockIn: start(-6), clockOut: start(2) })).status, 400);
+  assert.equal((await call(lead.session, 'PUT', `/api/onsite/time-entries/${e1}`, { clockIn: start(-10), clockOut: start(-2) })).status, 400);
+  assert.equal((await call(lead.session, 'POST', `/api/onsite/assignments/${a1}/time`, { clockIn: start(-3), clockOut: start(-2) })).status, 409);
+  // Crew cannot use the coordinator routes
+  assert.equal((await call(lead.session, 'PUT', `/api/time-entries/${e1}`, { clockIn: start(-6), clockOut: start(-2) })).status, 403);
+  // A coordinator's approval locks it for the lead
+  const out = await call(a, 'PUT', `/api/time-entries/${e1}`, { clockIn: start(-6), clockOut: start(-0.2) });
+  assert.equal(out.status, 200, out.text);
+  assert.equal(out.json.entry.status, 'submitted'); // outside the shift: waits for approval
+  await call(a, 'POST', `/api/timesheets/${e1}/approve`);
+  assert.equal((await call(lead.session, 'PUT', `/api/onsite/time-entries/${e1}`, { clockIn: start(-6), clockOut: start(-1) })).status, 403);
+  // Edits are recorded with the original times
+  const row = (await call(a, 'GET', '/api/timesheets?status=approved')).json.entries.find((x: any) => x.id === e1);
+  assert.ok(row.edited_at);
+  assert.equal(row.original_clock_out, null);
+  assert.ok(row.edited_by_name);
+  // Lead's window: more than 2 hours after the shift, no more changes
+  await withTenant(tid, (c) => c.query("UPDATE shifts SET starts_at = starts_at - interval '2 hours', ends_at = ends_at - interval '2 hours' WHERE id IN ($1, $2)", [sLead, sCrew]));
+  const late = (await withTenant(tid, (c) => c.query('SELECT id FROM time_entries WHERE assignment_id = $1', [a2]))).rows[0].id;
+  const tooLate = await call(lead.session, 'PUT', `/api/onsite/time-entries/${late}`, { clockIn: start(-7), clockOut: start(-4) });
+  assert.equal(tooLate.status, 403);
+  assert.match(tooLate.json.error, /2 hours after/);
+  // Exported time: the coordinator is asked first
+  await withTenant(tid, (c) => c.query('UPDATE time_entries SET payroll_exported_at = now() WHERE id = $1', [late]));
+  const ex = await call(a, 'PUT', `/api/time-entries/${late}`, { clockIn: start(-7), clockOut: start(-4) });
+  assert.equal(ex.status, 409);
+  assert.equal(ex.json.reason, 'exported');
+  assert.equal((await call(a, 'PUT', `/api/time-entries/${late}`, { clockIn: start(-7), clockOut: start(-4), force: true })).status, 200);
+});

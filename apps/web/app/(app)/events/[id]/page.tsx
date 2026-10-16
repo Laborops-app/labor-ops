@@ -11,6 +11,7 @@ import { EventRatings } from '@/components/Rating';
 import { PRIORITY, STATUS, STATUS_ORDER, type PipelineStatus, type Priority } from '@/lib/pipeline';
 import FillFromGroup from '@/components/FillFromGroup';
 import CrewPick, { PickOption } from '@/components/CrewPick';
+import TimeEdit from '@/components/TimeEdit';
 import InvoicePanel from '@/components/InvoicePanel';
 import TopbarAction, { PlusIcon, TrashIcon, avClass, initialsOf } from '@/components/TopbarAction';
 import CopyEvent from '@/components/CopyEvent';
@@ -125,6 +126,8 @@ function Body({ me }: { me: Me }) {
   };
   // Linking crew shifts to a lead shift: the shift being edited and the shifts ticked.
   const [teamEdit, setTeamEdit] = useState<{ id: string; picked: Set<string> } | null>(null);
+  // Adding time for someone who never clocked in (assignment id).
+  const [addTime, setAddTime] = useState<string | null>(null);
   // Who is free for the shift being added (checked against its date, time and certificates while the picker is open).
   const [newElig, setNewElig] = useState<Map<string, Elig> | null>(null);
   // "Confirm automatically": crew are put straight on the shift instead of being asked to accept. Remembered on this device.
@@ -638,7 +641,7 @@ function Body({ me }: { me: Me }) {
               {s.assignments.length > 0 && (
                 <ul className="plain">
                   {s.assignments.map((a) => (
-                    <li key={a.id} className="row space">
+                    <li key={a.id} className="row space" style={{ flexWrap: 'wrap' }}>
                       <span>
                         {a.user_name} <Pill status={a.status} />
                         {a.is_lead && a.status !== 'declined' && <span className="chip lead-chip" title="Leads their department on this event: checks the team in and out and rates them on the On site page">★ Lead</span>}
@@ -663,6 +666,11 @@ function Body({ me }: { me: Me }) {
                             {a.is_lead ? 'Remove lead' : 'Make lead'}
                           </button>
                         )}
+                        {a.status === 'accepted' && !a.clocked_in_at && new Date(s.starts_at) < new Date() && (
+                          <button className="btn ghost small" title="Enter time for someone who did not clock in" onClick={() => setAddTime(addTime === a.id ? null : a.id)}>
+                            + Add time
+                          </button>
+                        )}
                         {a.status === 'accepted' && !a.clocked_in_at && (
                           <button className="btn small" onClick={() => run(() => api(`/api/assignments/${a.id}/check-in`, { body: {} }))}>
                             Check in
@@ -680,6 +688,22 @@ function Body({ me }: { me: Me }) {
                           ✕ Remove
                         </button>
                       </span>
+                      {addTime === a.id && (
+                        <div style={{ flexBasis: '100%' }}>
+                          <TimeEdit
+                            title={`Add time for ${a.user_name}`}
+                            clockIn={s.starts_at}
+                            clockOut={new Date(s.ends_at) < new Date() ? s.ends_at : null}
+                            onSave={async (t) => {
+                              const r = await api<{ entry: { auto_approved: boolean; status: string } }>(`/api/assignments/${a.id}/time`, { body: t });
+                              setAddTime(null);
+                              setNote(r.entry.auto_approved ? `Time added for ${a.user_name} and approved.` : `Time added for ${a.user_name}. See Timesheets to approve it.`);
+                              await load();
+                            }}
+                            onCancel={() => setAddTime(null)}
+                          />
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>
