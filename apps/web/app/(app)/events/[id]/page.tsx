@@ -62,6 +62,7 @@ type Shift = {
   assignments: Assignment[];
   crew_status: Elig[];
   phase_id: string | null;
+  group_id?: string | null;
   hourly_rate?: number | null;
   role_rate?: number | null;
   pay_rate_override?: string | null;
@@ -72,7 +73,8 @@ type Shift = {
   dt_hours?: number;
 };
 type Overtime = { otAfter: number | null; state: string | null; effectiveState: string | null; stateFromAddress: boolean; companyDailyOt: number; otMult: number; dtAfter: number | null; dtMult: number };
-type Detail = { event: EventFull; shifts: Shift[]; phases: Phase[]; overtime?: Overtime; crewRates?: CrewRate[] };
+type PGroup = { id: string; phase_id: string; label: string; sort: number };
+type Detail = { event: EventFull; shifts: Shift[]; phases: Phase[]; groups?: PGroup[]; overtime?: Overtime; crewRates?: CrewRate[] };
 type Member = { id: string; name: string; role: string; skills: string[]; active: boolean; ratings?: Record<string, number>; rating_avg?: number | null; review_count?: number; no_show_count?: number; no_rehire_count?: number };
 const times = (n: number) => (n === 1 ? '' : ` ×${n}`);
 /** Short warning for the crew picker, from past reviews. */
@@ -136,6 +138,8 @@ function Body({ me }: { me: Me }) {
       /* storage blocked */
     }
   };
+  // Adding (no id) or renaming a named group inside a phase.
+  const [groupEdit, setGroupEdit] = useState<{ phaseId: string; id?: string; label: string } | null>(null);
   // Linking crew shifts to a lead shift: the shift being edited and the shifts ticked.
   const [teamEdit, setTeamEdit] = useState<{ id: string; picked: Set<string> } | null>(null);
   // Adding time for someone who never clocked in (assignment id).
@@ -172,6 +176,7 @@ function Body({ me }: { me: Me }) {
       certs: '',
       isOpen: false,
       phaseId: '',
+      groupId: '',
       payType: 'hourly' as 'hourly' | 'day',
       minHours: '' as '' | '4' | '5',
       crew: [] as string[],
@@ -313,7 +318,7 @@ function Body({ me }: { me: Me }) {
     e.preventDefault();
     const start = new Date(f.startsAt);
     const end = new Date(f.endsAt);
-    const base = { roleName: f.roleName, headcount: Number(f.headcount), isOpen: f.isOpen, requiredCerts: certs(f.certs), phaseId: f.phaseId || null, payType: f.payType, minHours: f.payType === 'hourly' && f.minHours ? Number(f.minHours) : null };
+    const base = { roleName: f.roleName, headcount: Number(f.headcount), isOpen: f.isOpen, requiredCerts: certs(f.certs), phaseId: f.phaseId || null, groupId: f.groupId || null, payType: f.payType, minHours: f.payType === 'hourly' && f.minHours ? Number(f.minHours) : null };
     let ok: boolean;
     if (f.repeat) {
       if (!f.until || f.days.length === 0) return setError('Choose the days to repeat on and an end date.');
@@ -650,6 +655,19 @@ function Body({ me }: { me: Me }) {
                       ))}
                     </select>
                   )}
+                  {s.phase_id && groupsOf(s.phase_id).length > 0 && (
+                    <select
+                      className="move-phase"
+                      value={s.group_id ?? ''}
+                      aria-label="Move shift to a group"
+                      onChange={(e) => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { groupId: e.target.value || null } }), 'Shift moved.')}
+                    >
+                      <option value="">No group</option>
+                      {groupsOf(s.phase_id).map((x) => (
+                        <option key={x.id} value={x.id}>{x.label}</option>
+                      ))}
+                    </select>
+                  )}
                   <button className="btn ghost small" onClick={() => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { isOpen: !s.is_open } }))}>
                     {s.is_open ? 'Close to claims' : 'Open for claiming'}
                   </button>
@@ -802,7 +820,7 @@ function Body({ me }: { me: Me }) {
     setF((x) => {
       const len = new Date(x.endsAt).getTime() - new Date(x.startsAt).getTime();
       const st = new Date(`${day}T${x.startsAt.slice(11)}`);
-      return { ...x, phaseId: p.id, startsAt: localInput(st), endsAt: localInput(new Date(st.getTime() + (len > 0 ? len : 8 * 3600_000))) };
+      return { ...x, phaseId: p.id, groupId: x.phaseId === p.id ? x.groupId : '', startsAt: localInput(st), endsAt: localInput(new Date(st.getTime() + (len > 0 ? len : 8 * 3600_000))) };
     });
     if (scroll) openShiftModal();
   };
@@ -811,50 +829,91 @@ function Body({ me }: { me: Me }) {
     setTplStart(p.starts_on.slice(0, 10));
     setSettings('tpl');
   };
-  // Inside a phase, shifts are grouped by position (Load In → Loaders, Pushers …); each group collapses on its own.
-  const subKey = (phaseKey: string, role: string) => `${phaseKey}:${roleKey(role)}`;
-  const addRoleToPhase = (p: Phase | null, role: string) => {
-    if (p) addToPhase(p, false);
-    else setF((x) => ({ ...x, phaseId: '' }));
-    setOtherRole(!skillNames.includes(role));
-    setF((x) => ({ ...x, roleName: role }));
+  // Named groups inside a phase (Load In → Stage hands, Loaders, Pushers …); each one collapses on its own.
+  const groupsOf = (phaseId: string) => (d.groups ?? []).filter((x) => x.phase_id === phaseId);
+  const gKey = (groupId: string) => `grp:${groupId}`;
+  const addShiftToGroup = (p: Phase, groupId: string) => {
+    addToPhase(p, false);
+    setF((x) => ({ ...x, phaseId: p.id, groupId }));
     openShiftModal();
   };
-  const roleGroups = (g: { key: string; phase: Phase | null; shifts: Shift[] }) => {
-    const byRole = new Map<string, Shift[]>();
-    for (const s of g.shifts) {
-      const k = roleKey(s.role_name);
-      byRole.set(k, [...(byRole.get(k) ?? []), s]);
-    }
-    return [...byRole.values()].map((list) => {
-      const role = list[0].role_name;
-      const k = subKey(g.key, role);
-      const open = !closed.has(k);
-      const need = list.reduce((n, x) => n + x.headcount, 0);
-      const have = list.reduce((n, x) => n + Math.min(x.headcount, x.assignments.filter((a) => a.status !== 'declined').length), 0);
-      return (
-        <div key={k} className="role-group">
-          <div className="role-head">
-            <button
-              type="button"
-              className="phase-toggle role-toggle"
-              aria-expanded={open}
-              onClick={() => { const n = new Set(closed); if (n.has(k)) n.delete(k); else n.add(k); setClosedSaved(n); }}
-            >
-              <svg className="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
-              <span>
-                <b>{role}</b>
-                <span className="muted small">{list.length} shift{list.length === 1 ? '' : 's'} · <span className={have >= need ? 'filled-ok' : ''}>{have}/{need} filled</span></span>
-              </span>
-            </button>
-            <button type="button" className="btn ghost small" title={`Add another ${role} shift${g.phase ? ` to ${g.phase.label}` : ''}`} onClick={() => addRoleToPhase(g.phase, role)}>
-              + {role}
-            </button>
-          </div>
-          {open && <div className="role-shifts">{renderShifts(list)}</div>}
-        </div>
-      );
-    });
+  const saveGroup = async () => {
+    if (!groupEdit || !groupEdit.label.trim()) return;
+    const ge = groupEdit;
+    await run(
+      () => (ge.id ? api(`/api/phase-groups/${ge.id}`, { method: 'PATCH', body: { label: ge.label.trim() } }) : api(`/api/event-phases/${ge.phaseId}/groups`, { body: { label: ge.label.trim() } })),
+      ge.id ? 'Group renamed.' : `Group “${ge.label.trim()}” added.`,
+    );
+    setGroupEdit(null);
+  };
+  const groupForm = (phaseId: string, groupId?: string) =>
+    groupEdit && groupEdit.phaseId === phaseId && (groupEdit.id ?? '') === (groupId ?? '') ? (
+      <form className="group-form" onSubmit={(e) => { e.preventDefault(); saveGroup(); }}>
+        <input autoFocus value={groupEdit.label} onChange={(e) => setGroupEdit({ ...groupEdit, label: e.target.value })} placeholder="Group name, e.g. Loaders" maxLength={80} aria-label="Group name" />
+        <button className="btn small primary">{groupId ? 'Save' : 'Add group'}</button>
+        <button type="button" className="btn ghost small" onClick={() => setGroupEdit(null)}>Cancel</button>
+      </form>
+    ) : null;
+  const fillOf = (list: Shift[]) => {
+    const need = list.reduce((n, x) => n + x.headcount, 0);
+    const have = list.reduce((n, x) => n + Math.min(x.headcount, x.assignments.filter((a) => a.status !== 'declined').length), 0);
+    return <span className={need > 0 && have >= need ? 'filled-ok' : ''}>{have}/{need} filled</span>;
+  };
+  const phaseBody = (g: { key: string; phase: Phase | null; shifts: Shift[] }) => {
+    const named = g.phase ? groupsOf(g.phase.id) : [];
+    const loose = g.shifts.filter((s) => !s.group_id || !named.some((x) => x.id === s.group_id));
+    return (
+      <>
+        {named.map((grp) => {
+          const list = g.shifts.filter((s) => s.group_id === grp.id);
+          const k = gKey(grp.id);
+          const open = !closed.has(k);
+          return (
+            <div key={grp.id} className="role-group">
+              {groupEdit?.id === grp.id ? (
+                groupForm(g.phase!.id, grp.id)
+              ) : (
+                <div className="role-head">
+                  <button
+                    type="button"
+                    className="phase-toggle role-toggle"
+                    aria-expanded={open}
+                    onClick={() => { const n = new Set(closed); if (n.has(k)) n.delete(k); else n.add(k); setClosedSaved(n); }}
+                  >
+                    <svg className="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+                    <span>
+                      <b>{grp.label}</b>
+                      <span className="muted small">
+                        {list.length} shift{list.length === 1 ? '' : 's'}
+                        {list.length > 0 && <> · {[...new Set(list.map((x) => x.role_name))].join(', ')} · {fillOf(list)}</>}
+                      </span>
+                    </span>
+                  </button>
+                  <div className="row" style={{ gap: 4 }}>
+                    <button type="button" className="btn ghost small" onClick={() => addShiftToGroup(g.phase!, grp.id)}>+ Add shift</button>
+                    <button type="button" className="btn ghost small" title="Rename this group" aria-label={`Rename ${grp.label}`} onClick={() => setGroupEdit({ phaseId: g.phase!.id, id: grp.id, label: grp.label })}>✎</button>
+                    <button
+                      type="button"
+                      className="btn ghost small danger"
+                      title="Remove this group (its shifts stay in the phase)"
+                      aria-label={`Remove ${grp.label}`}
+                      onClick={() => { if (confirm(`Remove the group “${grp.label}”? Its shifts stay in ${g.phase!.label}.`)) run(() => api(`/api/phase-groups/${grp.id}`, { method: 'DELETE' }), 'Group removed.'); }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
+              )}
+              {open && (list.length ? <div className="role-shifts">{renderShifts(list)}</div> : <p className="muted small" style={{ margin: '0 0 8px' }}>No shifts in {grp.label} yet.</p>)}
+            </div>
+          );
+        })}
+        {g.phase && groupForm(g.phase.id)}
+        {loose.length > 0 && named.length > 0 && <div className="muted small group-loose">Not in a group</div>}
+        {loose.length > 0 && renderShifts(loose)}
+        {g.shifts.length === 0 && named.length === 0 && <Empty>{g.phase ? `No shifts in ${g.phase.label} yet.` : 'No shifts yet. Add the first one above.'}</Empty>}
+      </>
+    );
   };
   const groupSection = (g: { key: string; phase: Phase | null; shifts: Shift[] }) => (
     <div key={g.key} className="phase-group">
@@ -913,6 +972,9 @@ function Body({ me }: { me: Me }) {
               <button className="btn small primary" onClick={() => addToPhase(g.phase!)}>
                 + Add shift
               </button>
+              <button className="btn small" title="Add a named group of shifts inside this phase (Loaders, Pushers …)" onClick={() => { const n = new Set(closed); n.delete(g.key); setClosedSaved(n); setGroupEdit({ phaseId: g.phase!.id, label: '' }); }}>
+                + Group
+              </button>
               <button className="btn small" onClick={() => templateForPhase(g.phase!)}>
                 Use template
               </button>
@@ -925,13 +987,14 @@ function Body({ me }: { me: Me }) {
           )}
         </div>
       )}
-      {closed.has(g.key) ? null : g.shifts.length === 0 ? <Empty>{g.phase ? `No shifts in ${g.phase.label} yet.` : 'No shifts yet. Add the first one above.'}</Empty> : roleGroups(g)}
+      {closed.has(g.key) ? null : phaseBody(g)}
     </div>
   );
 
   const shiftModalTitle = (() => {
     const ph = d.phases.find((p) => p.id === f.phaseId);
-    return ph ? `Add a shift · ${ph.label}, ${fmtDate(ph.starts_on.slice(0, 10))}` : 'Add a shift';
+    const gr = (d.groups ?? []).find((x) => x.id === f.groupId);
+    return ph ? `Add a shift · ${ph.label}${gr ? ` › ${gr.label}` : ''}, ${fmtDate(ph.starts_on.slice(0, 10))}` : 'Add a shift';
   })();
   const shiftFormBody = (
     <div className="shift-modal-body" ref={shiftForm as React.RefObject<HTMLDivElement>}>
@@ -944,8 +1007,20 @@ function Body({ me }: { me: Me }) {
                 <span className="muted small"> {fmtDate(p.starts_on.slice(0, 10))}</span>
               </button>
             ))}
-            <button type="button" role="tab" aria-selected={f.phaseId === ''} className={f.phaseId === '' ? 'tab on' : 'tab'} onClick={() => setF((x) => ({ ...x, phaseId: '' }))}>
+            <button type="button" role="tab" aria-selected={f.phaseId === ''} className={f.phaseId === '' ? 'tab on' : 'tab'} onClick={() => setF((x) => ({ ...x, phaseId: '', groupId: '' }))}>
               No phase
+            </button>
+          </div>
+        )}
+        {f.phaseId && groupsOf(f.phaseId).length > 0 && (
+          <div className="phase-tabs group-tabs" role="tablist" aria-label="Group inside the phase">
+            {groupsOf(f.phaseId).map((x) => (
+              <button key={x.id} type="button" role="tab" aria-selected={f.groupId === x.id} className={f.groupId === x.id ? 'tab on' : 'tab'} onClick={() => setF((y) => ({ ...y, groupId: x.id }))}>
+                {x.label}
+              </button>
+            ))}
+            <button type="button" role="tab" aria-selected={!f.groupId} className={!f.groupId ? 'tab on' : 'tab'} onClick={() => setF((y) => ({ ...y, groupId: '' }))}>
+              No group
             </button>
           </div>
         )}
@@ -1217,8 +1292,9 @@ function Body({ me }: { me: Me }) {
         <EventCrewSearch
           shifts={d.shifts}
           phases={d.phases}
-          onJump={(shiftId, key, role) => {
-            const sk = subKey(key, role);
+          onJump={(shiftId, key) => {
+            const gid = d.shifts.find((x) => x.id === shiftId)?.group_id;
+            const sk = gid ? gKey(gid) : '';
             if (closed.has(key) || closed.has(sk)) { const n = new Set(closed); n.delete(key); n.delete(sk); setClosedSaved(n); }
             setTimeout(() => {
               const el = document.getElementById(`shift-${shiftId}`);

@@ -221,6 +221,7 @@ export async function customerRoutes(app: FastifyInstance) {
       )).rows[0];
       const tz = (await c.query('SELECT timezone FROM tenants LIMIT 1')).rows[0].timezone;
       const phaseMap = new Map<string, string>();
+      const groupMap = new Map<string, string>();
       let phases = 0, shifts = 0;
       if (b.includePhases) {
         for (const p of (await c.query('SELECT * FROM event_phases WHERE event_id = $1 ORDER BY starts_on, created_at', [id])).rows) {
@@ -229,6 +230,11 @@ export async function customerRoutes(app: FastifyInstance) {
           phaseMap.set(p.id, np.id);
           phases++;
         }
+        for (const g of (await c.query('SELECT * FROM phase_groups WHERE event_id = $1 ORDER BY sort, created_at', [id])).rows) {
+          if (!phaseMap.get(g.phase_id)) continue;
+          const ng = (await c.query('INSERT INTO phase_groups (tenant_id, event_id, phase_id, label, sort) VALUES ($1,$2,$3,$4,$5) RETURNING id', [req.user.tid, ev.id, phaseMap.get(g.phase_id), g.label, g.sort])).rows[0];
+          groupMap.set(g.id, ng.id);
+        }
       }
       if (b.includeShifts) {
         const shiftMap = new Map<string, string>();
@@ -236,9 +242,9 @@ export async function customerRoutes(app: FastifyInstance) {
         for (const s of (await c.query('SELECT * FROM shifts WHERE event_id = $1 ORDER BY starts_at', [id])).rows) {
           // shift by calendar days in the company time zone so the wall-clock times survive daylight saving changes
           const ns = await c.query(
-            `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs, phase_id, pay_type, min_hours)
-             VALUES ($1,$2,$3, (($4::timestamptz AT TIME ZONE $9) + make_interval(days => $10)) AT TIME ZONE $9, (($5::timestamptz AT TIME ZONE $9) + make_interval(days => $10)) AT TIME ZONE $9, $6,$7,$8, $11, $12, $13) RETURNING id`,
-            [req.user.tid, ev.id, s.role_name, s.starts_at, s.ends_at, s.headcount, false, s.required_certs, tz, off, s.phase_id ? phaseMap.get(s.phase_id) ?? null : null, s.pay_type, s.min_hours],
+            `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs, phase_id, pay_type, min_hours, group_id)
+             VALUES ($1,$2,$3, (($4::timestamptz AT TIME ZONE $9) + make_interval(days => $10)) AT TIME ZONE $9, (($5::timestamptz AT TIME ZONE $9) + make_interval(days => $10)) AT TIME ZONE $9, $6,$7,$8, $11, $12, $13, $14) RETURNING id`,
+            [req.user.tid, ev.id, s.role_name, s.starts_at, s.ends_at, s.headcount, false, s.required_certs, tz, off, s.phase_id ? phaseMap.get(s.phase_id) ?? null : null, s.pay_type, s.min_hours, s.group_id ? groupMap.get(s.group_id) ?? null : null],
           );
           shiftMap.set(s.id, ns.rows[0].id);
           if (s.lead_shift_id) leadLinks.push([s.id, s.lead_shift_id]);

@@ -1869,3 +1869,7 @@ details.card.profile-fold > summary::before { content: none; }
 .role-shifts { padding-top: 0.2rem; }
 .filled-ok { color: var(--good); font-weight: 600; }
 .card[id^="shift-"], .crew-search { scroll-margin-top: 110px; }
+.group-form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 0.3rem 0 0.7rem; }
+.group-form input { flex: 1 1 200px; min-width: 0; }
+.group-loose { margin: 0.6rem 0 0.4rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; font-size: .72rem; }
+.group-tabs { margin-top: 6px; }

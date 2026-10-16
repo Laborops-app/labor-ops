@@ -34,6 +34,7 @@ export const shiftInput = z.object({
   isOpen: z.boolean().default(false),
   requiredCerts: certList.default([]),
   phaseId: z.string().uuid().nullable().optional(),
+  groupId: z.string().uuid().nullable().optional(),
   payType: z.enum(['hourly', 'day']).default('hourly'),
   minHours: z.number().min(0.5).max(12).nullable().optional(),
 });
@@ -89,9 +90,9 @@ export async function schedulingRoutes(app: FastifyInstance) {
       const ids: string[] = [];
       for (const s of shifts) {
         const r = await c.query(
-          `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs, phase_id, pay_type, min_hours)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
-          [req.user.tid, eventId, s.roleName, s.startsAt, s.endsAt, s.headcount, s.isOpen, s.requiredCerts, s.phaseId ?? null, s.payType, s.minHours ?? null],
+          `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs, phase_id, pay_type, min_hours, group_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8, COALESCE($9::uuid, (SELECT phase_id FROM phase_groups WHERE id = $12::uuid AND event_id = $2)), $10,$11,$12) RETURNING id`,
+          [req.user.tid, eventId, s.roleName, s.startsAt, s.endsAt, s.headcount, s.isOpen, s.requiredCerts, s.phaseId ?? null, s.payType, s.minHours ?? null, s.groupId ?? null],
         );
         ids.push(r.rows[0].id);
       }
@@ -108,6 +109,8 @@ export async function schedulingRoutes(app: FastifyInstance) {
     const b = z
       .object({
         isOpen: z.boolean().optional(), requiredCerts: certList.optional(), headcount: z.number().int().min(1).max(500).optional(), phaseId: z.string().uuid().nullable().optional(),
+        // Move into a named group (its phase comes with it), or null to take it out of its group.
+        groupId: z.string().uuid().nullable().optional(),
         payRate: z.number().min(0.01).max(10000).multipleOf(0.01).nullable().optional(), payType: z.enum(['hourly', 'day']).optional(),
         // New date and time (and role name); `force` saves even when someone on the shift would be double-booked.
         startsAt: z.string().datetime({ offset: true }).optional(), endsAt: z.string().datetime({ offset: true }).optional(),
@@ -131,6 +134,11 @@ export async function schedulingRoutes(app: FastifyInstance) {
         if (clashes.length) return { error: `At the new time ${clashes.length === 1 ? 'this person would be' : 'these people would be'} double-booked: ${clashes.join(', ')}.`, reason: 'clash', clashes };
       }
       if (b.phaseId && !(await c.query('SELECT 1 FROM event_phases p JOIN shifts s ON s.event_id = p.event_id WHERE p.id = $1 AND s.id = $2', [b.phaseId, id])).rowCount) return { error: 'That phase belongs to a different event' };
+      if (b.groupId) {
+        const g = (await c.query('SELECT g.phase_id FROM phase_groups g JOIN shifts s ON s.event_id = g.event_id WHERE g.id = $1 AND s.id = $2', [b.groupId, id])).rows[0];
+        if (!g) return { error: 'That group belongs to a different event' };
+        if (b.phaseId === undefined) b.phaseId = g.phase_id;
+      }
       const r = await c.query(
         `UPDATE shifts SET offer_group_id = CASE WHEN $2::boolean IS FALSE THEN NULL ELSE offer_group_id END, is_open = COALESCE($2, is_open), required_certs = COALESCE($3, required_certs), headcount = COALESCE($4, headcount),
                 phase_id = CASE WHEN $5::boolean THEN $6::uuid ELSE phase_id END,
@@ -139,10 +147,11 @@ export async function schedulingRoutes(app: FastifyInstance) {
                 starts_at = CASE WHEN $10::boolean THEN $11::timestamptz ELSE starts_at END,
                 ends_at = CASE WHEN $10::boolean THEN $12::timestamptz ELSE ends_at END,
                 role_name = COALESCE($13, role_name),
-                min_hours = CASE WHEN $14::boolean THEN $15::numeric ELSE min_hours END
+                min_hours = CASE WHEN $14::boolean THEN $15::numeric ELSE min_hours END,
+                group_id = CASE WHEN $16::boolean THEN $17::uuid ELSE group_id END
          WHERE id = $1 RETURNING *`,
         [id, b.isOpen ?? null, b.requiredCerts ?? null, b.headcount ?? null, b.phaseId !== undefined, b.phaseId ?? null, b.payRate !== undefined, b.payRate ?? null, b.payType ?? null,
-          timeChanged, ns.toISOString(), ne.toISOString(), b.roleName ?? null, b.minHours !== undefined, b.minHours ?? null],
+          timeChanged, ns.toISOString(), ne.toISOString(), b.roleName ?? null, b.minHours !== undefined, b.minHours ?? null, b.groupId !== undefined, b.groupId ?? null],
       );
       if (r.rows[0] && timeChanged) await tellTimeChange(c, req.user.tid, id);
       // People already on the shift hear about a pay change (their pay line is recalculated from the new rate).

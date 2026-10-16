@@ -3613,3 +3613,54 @@ test('pipeline: an event can only be Completed once every timesheet is in', asyn
   await withTenant(tid, (c) => c.query("UPDATE time_entries SET clock_out = now(), status = 'submitted' WHERE assignment_id = $1", [later]));
   assert.equal((await call(a, 'PATCH', `/api/events/${ev}/pipeline`, { status: 'completed' })).status, 200);
 });
+
+test('phase groups: named groups inside a phase hold any position, follow the shift to another phase, survive a copy', async () => {
+  const a = await register('groups');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Arena', startDate: '2030-06-01', endDate: '2030-06-02' })).json.event.id as string;
+  const li = (await call(a, 'POST', `/api/events/${ev}/phases`, { label: 'Load in', startDate: '2030-06-01', endDate: '2030-06-01' })).json.phase.id as string;
+  const sd = (await call(a, 'POST', `/api/events/${ev}/phases`, { label: 'Show', startDate: '2030-06-02', endDate: '2030-06-02' })).json.phase.id as string;
+  const g1 = await call(a, 'POST', `/api/event-phases/${li}/groups`, { label: 'Loaders' });
+  assert.equal(g1.status, 201, g1.text);
+  const loaders = g1.json.group.id as string;
+  const hands = (await call(a, 'POST', `/api/event-phases/${li}/groups`, { label: 'Stage hands' })).json.group.id as string;
+  assert.equal((await call(a, 'POST', `/api/event-phases/${li}/groups`, { label: '' })).status, 400);
+  // A shift added to a group lands in its phase; two positions in one group
+  const mk = (roleName: string, groupId: string | null, phaseId?: string) =>
+    call(a, 'POST', `/api/events/${ev}/shifts`, { roleName, startsAt: '2030-06-01T14:00:00Z', endsAt: '2030-06-01T20:00:00Z', headcount: 2, groupId, phaseId });
+  const s1 = (await mk('Loader', loaders)).json.shift;
+  assert.equal(s1.phase_id, li);
+  assert.equal(s1.group_id, loaders);
+  const s2 = (await mk('Pusher', loaders)).json.shift.id as string;
+  const s3 = (await mk('Stagehand', null, li)).json.shift.id as string;
+  let d = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  assert.deepEqual(d.groups.map((g: any) => g.label), ['Loaders', 'Stage hands']);
+  assert.equal(d.shifts.find((s: any) => s.id === s3).group_id, null);
+  // Move a shift into a group; rename a group
+  assert.equal((await call(a, 'PATCH', `/api/shifts/${s3}`, { groupId: hands })).json.shift.group_id, hands);
+  assert.equal((await call(a, 'PATCH', `/api/phase-groups/${hands}`, { label: 'Stagehands' })).json.group.label, 'Stagehands');
+  // Moving a shift to another phase takes it into a same-named group there (made for it)
+  const moved = (await call(a, 'PATCH', `/api/shifts/${s2}`, { phaseId: sd })).json.shift;
+  assert.equal(moved.phase_id, sd);
+  assert.notEqual(moved.group_id, loaders);
+  d = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  assert.equal(d.groups.find((g: any) => g.id === moved.group_id).label, 'Loaders');
+  assert.equal(d.groups.find((g: any) => g.id === moved.group_id).phase_id, sd);
+  // Out of a group
+  assert.equal((await call(a, 'PATCH', `/api/shifts/${s3}`, { groupId: null })).json.shift.group_id, null);
+  // Another tenant cannot touch it
+  const b = await register('groups-b');
+  assert.equal((await call(b, 'PATCH', `/api/phase-groups/${loaders}`, { label: 'x' })).status, 404);
+  assert.equal((await call(b, 'POST', `/api/event-phases/${li}/groups`, { label: 'x' })).status, 404);
+  // Copying the event keeps the groups and which shifts are in them
+  const cp = await call(a, 'POST', `/api/events/${ev}/copy`, { name: 'Arena 2031', startDate: '2031-06-01', includePhases: true, includeShifts: true });
+  assert.equal(cp.status, 201, cp.text);
+  const d2 = (await call(a, 'GET', `/api/events/${cp.json.event.id}`)).json;
+  assert.deepEqual(d2.groups.map((g: any) => g.label).sort(), ['Loaders', 'Loaders', 'Stagehands']);
+  const loader2 = d2.shifts.find((s: any) => s.role_name === 'Loader');
+  assert.equal(d2.groups.find((g: any) => g.id === loader2.group_id).label, 'Loaders');
+  // Removing a group keeps its shifts in the phase
+  assert.equal((await call(a, 'DELETE', `/api/phase-groups/${loaders}`)).status, 200);
+  const s1b = (await call(a, 'GET', `/api/events/${ev}`)).json.shifts.find((s: any) => s.id === s1.id);
+  assert.equal(s1b.group_id, null);
+  assert.equal(s1b.phase_id, li);
+});

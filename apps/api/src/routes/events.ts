@@ -55,6 +55,8 @@ const shiftBody = z.object({
   isOpen: z.boolean().default(false),
   requiredCerts: z.array(z.string().trim().min(1).max(60)).max(10).default([]),
   phaseId: z.string().uuid().nullable().optional(),
+  // A named group inside the phase (Loaders, Pushers ...); the shift goes into that group's phase.
+  groupId: z.string().uuid().nullable().optional(),
   payType: z.enum(['hourly', 'day']).default('hourly'),
   // Minimum call: paid at least this many hours (e.g. 4 or 5).
   minHours: z.number().min(0.5).max(12).nullable().optional(),
@@ -392,12 +394,13 @@ export async function eventRoutes(app: FastifyInstance) {
         });
       }
       const phases = (await c.query('SELECT id, label, starts_on, ends_on FROM event_phases WHERE event_id = $1 ORDER BY starts_on, ends_on, created_at', [eventId])).rows;
+      const groups = (await c.query('SELECT id, phase_id, label, sort FROM phase_groups WHERE event_id = $1 ORDER BY sort, created_at', [eventId])).rows;
       const rl = await loadRules(c);
       const fallback = (await c.query('SELECT default_state FROM labor_rules LIMIT 1')).rows[0]?.default_state ?? null;
       const st = eventState(ev, fallback);
       const so = await loadStateOt(c, st, rl);
       const overtime = { otAfter: ev.ot_after === null ? null : Number(ev.ot_after), state: ev.state ?? null, effectiveState: st, stateFromAddress: !ev.state && !!st && st !== fallback, companyDailyOt: rl.dailyOt, otMult: so.otMult, dtAfter: so.dtAfter, dtMult: so.dtMult };
-      return { event: ev, shifts: out, phases, overtime, ...(seePay ? { crewRates } : {}) };
+      return { event: ev, shifts: out, phases, groups, overtime, ...(seePay ? { crewRates } : {}) };
     });
     if (!out) return reply.code(404).send({ error: 'Event not found' });
     return out;
@@ -574,6 +577,42 @@ export async function eventRoutes(app: FastifyInstance) {
     return n ? { ok: true } : reply.code(404).send({ error: 'Phase not found' });
   });
 
+  // Named groups inside a phase (Load In → Stage hands, Loaders, Pushers ...).
+  const groupBody = z.object({ label: z.string().trim().min(1).max(80) });
+  app.post('/api/event-phases/:id/groups', { preHandler: mgr }, async (req, reply) => {
+    const { id: phaseId } = id.parse(req.params);
+    const b = groupBody.parse(req.body);
+    const row = await withTenant(req.user.tid, async (c) => {
+      const p = (await c.query('SELECT id, event_id FROM event_phases WHERE id = $1', [phaseId])).rows[0];
+      if (!p) return null;
+      const g = (await c.query(
+        `INSERT INTO phase_groups (tenant_id, event_id, phase_id, label, sort)
+         VALUES ($1,$2,$3,$4, COALESCE((SELECT max(sort) + 1 FROM phase_groups WHERE phase_id = $3), 0)) RETURNING id, phase_id, label, sort`,
+        [req.user.tid, p.event_id, phaseId, b.label],
+      )).rows[0];
+      await audit(c, req.user.tid, req.user.sub, 'event.group_add', 'event', p.event_id, { phaseId, label: b.label });
+      return g;
+    });
+    return row ? reply.code(201).send({ group: row }) : reply.code(404).send({ error: 'Phase not found' });
+  });
+  app.patch('/api/phase-groups/:id', { preHandler: mgr }, async (req, reply) => {
+    const { id: groupId } = id.parse(req.params);
+    const b = z.object({ label: z.string().trim().min(1).max(80).optional(), sort: z.number().int().min(0).max(1000).optional() }).parse(req.body);
+    const row = await withTenant(req.user.tid, async (c) =>
+      (await c.query('UPDATE phase_groups SET label = COALESCE($2, label), sort = COALESCE($3, sort) WHERE id = $1 RETURNING id, phase_id, label, sort', [groupId, b.label ?? null, b.sort ?? null])).rows[0]);
+    return row ? { group: row } : reply.code(404).send({ error: 'Group not found' });
+  });
+  // Removing a group keeps its shifts in the phase, just not grouped.
+  app.delete('/api/phase-groups/:id', { preHandler: mgr }, async (req, reply) => {
+    const { id: groupId } = id.parse(req.params);
+    const n = await withTenant(req.user.tid, async (c) => {
+      const r = await c.query('DELETE FROM phase_groups WHERE id = $1 RETURNING event_id, label', [groupId]);
+      if (r.rows[0]) await audit(c, req.user.tid, req.user.sub, 'event.group_remove', 'event', r.rows[0].event_id, { label: r.rows[0].label });
+      return r.rowCount;
+    });
+    return n ? { ok: true } : reply.code(404).send({ error: 'Group not found' });
+  });
+
   app.delete('/api/events/:id', { preHandler: mgr }, async (req, reply) => {
     const { id: eventId } = id.parse(req.params);
     const n = await withTenant(req.user.tid, async (c) => {
@@ -592,9 +631,9 @@ export async function eventRoutes(app: FastifyInstance) {
       if (!(await c.query('SELECT 1 FROM events WHERE id = $1', [eventId])).rowCount) return null;
       if (b.phaseId && !(await c.query('SELECT 1 FROM event_phases WHERE id = $1 AND event_id = $2', [b.phaseId, eventId])).rowCount) return { error: 'That phase belongs to a different event' };
       const r = await c.query(
-        `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs, phase_id, pay_type, min_hours)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-        [req.user.tid, eventId, b.roleName, b.startsAt, b.endsAt, b.headcount, b.isOpen, b.requiredCerts, b.phaseId ?? null, b.payType, b.minHours ?? null],
+        `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs, phase_id, pay_type, min_hours, group_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8, COALESCE($9::uuid, (SELECT phase_id FROM phase_groups WHERE id = $12::uuid AND event_id = $2)), $10,$11,$12) RETURNING *`,
+        [req.user.tid, eventId, b.roleName, b.startsAt, b.endsAt, b.headcount, b.isOpen, b.requiredCerts, b.phaseId ?? null, b.payType, b.minHours ?? null, b.groupId ?? null],
       );
       await audit(c, req.user.tid, req.user.sub, 'shift.create', 'shift', r.rows[0].id);
       return r.rows[0];

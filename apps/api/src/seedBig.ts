@@ -43,6 +43,11 @@ const PHASE_ROLES: Record<string, string[]> = {
   Strike: ['Stagehand', 'Loader', 'Forklift Operator', 'Rigger'],
   Single: ['Stagehand', 'Audio Tech', 'Lighting Tech', 'Loader', 'Security', 'Runner'],
 };
+// Named groups inside a phase (Load In → Stage hands, Loaders ...), by position.
+const GROUP_OF: Record<string, string> = {
+  Stagehand: 'Stage hands', Loader: 'Loaders & pushers', 'Forklift Operator': 'Loaders & pushers', Rigger: 'Riggers',
+  'Lighting Tech': 'Production', 'Audio Tech': 'Production', 'Camera Operator': 'Production', Security: 'Front of house', Runner: 'Front of house',
+};
 const VENUES = ['Main Stage', 'Exhibit Hall A', 'Grand Ballroom', 'North Lawn', 'Arena Floor', 'Studio 3', 'Pavilion', 'Amphitheatre', 'Hall B', 'Rooftop Terrace'];
 const DAY = 86400_000;
 const ymd = (offset: number) => new Date(Date.now() + offset * DAY).toISOString().slice(0, 10);
@@ -134,14 +139,22 @@ async function big(c: PoolClient, tid: string, hash: string) {
         [tid, eid, label, ymd(day)])).rows[0].id as string;
       const fits = PHASE_ROLES[days === 1 ? 'Single' : label];
       const roles = [...new Set(Array.from({ length: int(3, Math.min(5, fits.length)) }, () => pick(fits)))].map((n) => ROLES.find((r) => r[0] === n)!);
+      const groupIds = new Map<string, string>();
+      const groupFor = async (role: string) => {
+        const g = days === 1 ? undefined : GROUP_OF[role];
+        if (!g) return null;
+        if (!groupIds.has(g))
+          groupIds.set(g, (await c.query('INSERT INTO phase_groups (tenant_id, event_id, phase_id, label, sort) VALUES ($1,$2,$3,$4,$5) RETURNING id', [tid, eid, phaseId, g, groupIds.size])).rows[0].id);
+        return groupIds.get(g)!;
+      };
       for (const [role, , bill] of roles) {
         const startH = label === 'Load in' ? pick([6, 7, 8]) : label === 'Strike' ? pick([16, 18, 20]) : pick([8, 10, 12, 16]);
         const len = pick([4, 6, 8, 8, 10]);
         const head = int(2, 7);
         const sid = id();
         await c.query(
-          'INSERT INTO shifts (id, tenant_id, event_id, role_name, starts_at, ends_at, headcount, min_hours, phase_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
-          [sid, tid, eid, role, at(day, startH), at(day, startH + len), head, len <= 4 ? 4 : null, phaseId],
+          'INSERT INTO shifts (id, tenant_id, event_id, role_name, starts_at, ends_at, headcount, min_hours, phase_id, group_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+          [sid, tid, eid, role, at(day, startH), at(day, startH + len), head, len <= 4 ? 4 : null, phaseId, await groupFor(role)],
         );
         const fit = crew.filter((p) => p.skills.includes(role) && free(p.id, day)).sort(() => rnd() - 0.5);
         const others = crew.filter((p) => !p.skills.includes(role) && free(p.id, day)).sort(() => rnd() - 0.5);
