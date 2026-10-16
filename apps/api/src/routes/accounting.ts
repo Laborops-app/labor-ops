@@ -1,3 +1,4 @@
+import { maybeArchive } from '../pipeline';
 import crypto from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -5,13 +6,16 @@ import { roleKeyOf } from '../pay';
 import { withTenant, audit } from '../db';
 import { guard } from '../auth';
 import { config } from '../config';
-import { canAdjustRates } from '../rates';
+import { canBill } from '../rates';
 import { acctSchema, loadAcct, saveAcct, eventBilling, invoiceIif, PAYROLL_PROVIDERS, baseRole, localDate } from '../accounting';
 import { payrollSummary, payrollFile } from '../payroll';
 import { loadQbo, saveQbo, qboConnected, authorizeUrl, exchangeCode, Qbo, qboSession, appLink, QboError, QBO_REVOKE } from '../quickbooks';
 
 const adm = guard('admin');
 const mgr = guard('admin', 'manager');
+// Invoicing and payroll are also open to HR accounts.
+const billers = guard('admin', 'manager', 'hr');
+const payrollTeam = guard('admin', 'hr');
 const uuid = z.string().uuid();
 const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
@@ -176,17 +180,17 @@ export async function accountingRoutes(app: FastifyInstance) {
   // ---------- billing an event ----------
   const sourceQ = z.object({ source: z.enum(['time', 'schedule']).default('time') });
 
-  app.get('/api/events/:id/billing', { preHandler: mgr }, async (req, reply) => {
+  app.get('/api/events/:id/billing', { preHandler: billers }, async (req, reply) => {
     const { id } = z.object({ id: uuid }).parse(req.params);
     const { source } = sourceQ.parse(req.query);
     const out = await withTenant(req.user.tid, async (c) => {
       const b = await eventBilling(c, id, source);
       if (!b) return null;
       const q = await loadQbo(c);
-      const canBill = await canAdjustRates(c, req.user);
+      const allowed = await canBill(c, req.user);
       return {
         ...b,
-        canBill,
+        canBill: allowed,
         quickbooks: { connected: qboConnected(q), environment: q?.environment ?? 'sandbox' },
         invoices: b.invoices.map((i: any) => ({ ...i, url: i.provider === 'qbo' && i.external_id && q ? appLink(q.environment, 'invoice', i.external_id) : null })),
         unmapped: b.lines.filter((l) => !l.qboItemId).map((l) => l.role).filter((v, i, a) => a.indexOf(v) === i),
@@ -195,12 +199,12 @@ export async function accountingRoutes(app: FastifyInstance) {
     return out ?? reply.code(404).send({ error: 'Event not found' });
   });
 
-  app.post('/api/events/:id/billing/quickbooks', { preHandler: mgr }, async (req, reply) => {
+  app.post('/api/events/:id/billing/quickbooks', { preHandler: billers }, async (req, reply) => {
     const { id } = z.object({ id: uuid }).parse(req.params);
     const b = z.object({ source: z.enum(['time', 'schedule']), again: z.boolean().optional() }).parse(req.body);
     try {
       const out = await withTenant(req.user.tid, async (c) => {
-        if (!(await canAdjustRates(c, req.user))) return { code: 403, error: 'Only admins and coordinators allowed to adjust rates can create invoices.' };
+        if (!(await canBill(c, req.user))) return { code: 403, error: 'Only admins, HR and coordinators allowed to adjust rates can create invoices.' };
         const bill = await eventBilling(c, id, b.source);
         if (!bill) return { code: 404, error: 'Event not found' };
         if (!bill.customer) return { code: 400, error: 'Pick a customer for this event first (Event details).' };
@@ -227,6 +231,7 @@ export async function accountingRoutes(app: FastifyInstance) {
           [req.user.tid, id, 'qbo', b.source, inv.id, inv.docNumber, inv.total || bill.total, req.user.sub],
         );
         await audit(c, req.user.tid, req.user.sub, 'billing.quickbooks', 'event', id, { invoice: inv.id, total: inv.total || bill.total });
+        await maybeArchive(c, id, req.user.sub);
         return { code: 201, invoice: { ...inv, url: appLink(qb.env, 'invoice', inv.id) } };
       });
       const { code, ...body } = out as any;
@@ -237,11 +242,11 @@ export async function accountingRoutes(app: FastifyInstance) {
   });
 
   // QuickBooks Desktop: the same invoice as an .IIF file to import (File > Utilities > Import > IIF Files).
-  app.get('/api/events/:id/billing/iif', { preHandler: mgr }, async (req, reply) => {
+  app.get('/api/events/:id/billing/iif', { preHandler: billers }, async (req, reply) => {
     const { id } = z.object({ id: uuid }).parse(req.params);
     const q = sourceQ.extend({ docNumber: z.string().trim().max(21).regex(/^[\w-]*$/).optional() }).parse(req.query);
     const out = await withTenant(req.user.tid, async (c) => {
-      if (!(await canAdjustRates(c, req.user))) return { code: 403 as const };
+      if (!(await canBill(c, req.user))) return { code: 403 as const };
       const bill = await eventBilling(c, id, q.source);
       if (!bill) return { code: 404 as const };
       if (!bill.lines.length) return { code: 400 as const };
@@ -255,6 +260,7 @@ export async function accountingRoutes(app: FastifyInstance) {
       });
       await c.query('INSERT INTO event_invoices (tenant_id, event_id, provider, source, doc_number, total, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7)', [req.user.tid, id, 'iif', q.source, q.docNumber || null, bill.total, req.user.sub]);
       await audit(c, req.user.tid, req.user.sub, 'billing.iif', 'event', id, { total: bill.total });
+      await maybeArchive(c, id, req.user.sub);
       return { code: 200 as const, body, name: `${slug(bill.event.name)}-invoice.iif` };
     });
     if (out.code === 403) return reply.code(403).send({ error: 'Only admins and coordinators allowed to adjust rates can export invoices.' });
@@ -266,7 +272,7 @@ export async function accountingRoutes(app: FastifyInstance) {
   // ---------- payroll ----------
   const period = z.object({ from: ymd, to: ymd }).refine((p) => p.from <= p.to, 'The period ends before it starts').refine((p) => (+new Date(p.to) - +new Date(p.from)) / 86400000 <= 62, 'Choose a period of two months or less');
 
-  app.get('/api/payroll', { preHandler: adm }, async (req) => {
+  app.get('/api/payroll', { preHandler: payrollTeam }, async (req) => {
     const p = period.parse(req.query);
     return withTenant(req.user.tid, async (c) => {
       const sum = await payrollSummary(c, p.from, p.to);
@@ -286,7 +292,7 @@ export async function accountingRoutes(app: FastifyInstance) {
     await audit(c, tid, sub, 'payroll.export', 'tenant', tid, { provider, ...p, entries: ids.length });
   };
 
-  app.get('/api/payroll/export', { preHandler: adm }, async (req, reply) => {
+  app.get('/api/payroll/export', { preHandler: payrollTeam }, async (req, reply) => {
     const q = z.object({ provider: z.enum([...PAYROLL_PROVIDERS, 'csv']), mark: z.enum(['0', '1']).default('1') }).and(period).parse(req.query);
     const out = await withTenant(req.user.tid, async (c) => {
       const s = await loadAcct(c);
@@ -322,7 +328,7 @@ export async function accountingRoutes(app: FastifyInstance) {
 
   // QuickBooks Payroll: send each worked entry as a time activity on the employee. QuickBooks Payroll works out
   // overtime itself from the week's hours; the split LaborOps calculated is written in the note.
-  app.post('/api/payroll/quickbooks', { preHandler: adm }, async (req, reply) => {
+  app.post('/api/payroll/quickbooks', { preHandler: payrollTeam }, async (req, reply) => {
     const p = { ...period.parse(req.body), ...z.object({ addMissing: z.boolean().default(true), includeExported: z.boolean().default(false) }).parse(req.body ?? {}) };
     try {
       const out = await withTenant(req.user.tid, async (c) => {
@@ -426,7 +432,7 @@ export async function accountingRoutes(app: FastifyInstance) {
   });
 
   // Remove extra copies of the same worked entry that LaborOps sent to QuickBooks more than once in a period.
-  app.post('/api/payroll/quickbooks/dedupe', { preHandler: adm }, async (req, reply) => {
+  app.post('/api/payroll/quickbooks/dedupe', { preHandler: payrollTeam }, async (req, reply) => {
     const p = period.parse(req.body);
     try {
       const out = await withTenant(req.user.tid, async (c) => {
@@ -469,7 +475,7 @@ export async function accountingRoutes(app: FastifyInstance) {
   });
 
   // Each person's ID in the payroll systems (ADP File #, Gusto employee ID, QuickBooks employee).
-  app.put('/api/crew/:id/payroll-ids', { preHandler: adm }, async (req, reply) => {
+  app.put('/api/crew/:id/payroll-ids', { preHandler: payrollTeam }, async (req, reply) => {
     const { id } = z.object({ id: uuid }).parse(req.params);
     const v = z.string().trim().max(40).regex(/^[\w .@-]*$/, 'Use letters, numbers, dots, dashes or @').optional();
     const b = z.object({ adp: v, gusto: v, quickbooks: v }).strict().parse(req.body);

@@ -7,3 +7,8 @@ export async function canAdjustRates(c: PoolClient, u: SessionUser): Promise<boo
   if (u.role !== 'manager') return false;
   return !!(await c.query('SELECT 1 FROM users WHERE id = $1 AND can_adjust_rates AND active', [u.sub])).rowCount;
 }
+
+/** Who may send an event's invoice: anyone who may adjust rates, and HR accounts. */
+export async function canBill(c: PoolClient, u: SessionUser): Promise<boolean> {
+  return u.role === 'hr' || canAdjustRates(c, u);
+}

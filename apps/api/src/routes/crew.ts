@@ -13,7 +13,7 @@ const createBody = z.object({
   email: z.string().trim().email().max(200),
   phone: z.string().trim().max(40).optional().nullable(),
   skills: z.array(z.string().trim().min(1).max(40)).max(30).default([]),
-  role: z.enum(['crew', 'manager', 'admin']).default('crew'),
+  role: z.enum(['crew', 'manager', 'admin', 'hr']).default('crew'),
   password: z.string().min(8).max(200).optional(),
 });
 const patchBody = z.object({
@@ -92,7 +92,7 @@ export async function crewRoutes(app: FastifyInstance) {
   app.post('/api/crew', { preHandler: guard('admin', 'manager') }, async (req, reply) => {
     const body = createBody.parse(req.body);
     if (body.role !== 'crew' && req.user.role !== 'admin')
-      return reply.code(403).send({ error: body.role === 'admin' ? 'Only an admin can add admins' : 'Only an admin can add labor coordinators' });
+      return reply.code(403).send({ error: body.role === 'admin' ? 'Only an admin can add admins' : body.role === 'hr' ? 'Only an admin can add HR accounts' : 'Only an admin can add labor coordinators' });
     if ((await pool.query('SELECT 1 FROM auth_find_user($1)', [body.email])).rowCount)
       return reply.code(409).send({ error: 'That email is already registered' });
     if (body.role === 'crew') {
@@ -213,7 +213,7 @@ export async function crewRoutes(app: FastifyInstance) {
   // Change someone's role. Only admins, and never your own (so a company always keeps an admin).
   app.put('/api/crew/:id/role', { preHandler: guard('admin') }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
-    const { role } = z.object({ role: z.enum(['crew', 'manager', 'admin']) }).parse(req.body);
+    const { role } = z.object({ role: z.enum(['crew', 'manager', 'admin', 'hr']) }).parse(req.body);
     if (id === req.user.sub) return reply.code(400).send({ error: 'You cannot change your own role. Ask another admin.' });
     const row = await withTenant(req.user.tid, async (c) => {
       const prev = (await c.query('SELECT role FROM users WHERE id = $1', [id])).rows[0];

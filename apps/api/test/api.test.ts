@@ -3488,3 +3488,82 @@ test('my shifts: this pay period only (offers always shown), past shifts listed 
   assert.equal(past.shifts[0].worked, 4);
   assert.equal(past.shifts[0].time_status, 'approved');
 });
+
+test('HR accounts: invoicing, payroll, reports and timesheets, but no scheduling', async () => {
+  const a = await register('hracc');
+  const c1 = await mkCrew(a, 'hrc1');
+  const mgr = await call(a, 'POST', '/api/crew', { name: 'Lee Coord', email: `hrmgr-${run}@test.example`, password: 'password123', role: 'manager' });
+  const m = await login(`hrmgr-${run}@test.example`, 'password123');
+  assert.equal((await call(m, 'POST', '/api/crew', { name: 'No', email: `hrno-${run}@test.example`, role: 'hr' })).status, 403, 'only admins add HR');
+  void mgr;
+  const made = await call(a, 'POST', '/api/crew', { name: 'Harper HR', email: `hr-${run}@test.example`, password: 'password123', role: 'hr' });
+  assert.equal(made.status, 201, made.text);
+  const hr = await login(`hr-${run}@test.example`, 'password123');
+  assert.equal((await call(hr, 'GET', '/api/auth/me')).json.user.role, 'hr');
+  const ev = await mkEvent(a);
+  for (const url of ['/api/pipeline', `/api/events/${ev}`, `/api/events/${ev}/billing`, '/api/payroll?from=2030-01-01&to=2030-01-14', '/api/reports?from=2030-01-01&to=2030-01-14', '/api/timesheets', '/api/archive'])
+    assert.equal((await call(hr, 'GET', url)).status, 200, url);
+  assert.equal((await call(hr, 'POST', '/api/events', { name: 'X', startDate: '2030-01-01', endDate: '2030-01-01' })).status, 403);
+  assert.equal((await call(hr, 'POST', `/api/events/${ev}/shifts`, { roleName: 'X', startsAt: start(5), endsAt: start(6), headcount: 1 })).status, 403);
+  assert.equal((await call(hr, 'GET', '/api/crew')).status, 403);
+  assert.equal((await call(hr, 'GET', '/api/accounting')).status, 403, 'accounting settings stay with admins');
+  void c1;
+});
+
+test('pipeline: completed → admins and HR told it is ready to invoice; invoiced or canceled → archived, restorable, kept 2 years', async () => {
+  const a = await register('arch');
+  const tid = await tenantOf(a);
+  await call(a, 'POST', '/api/crew', { name: 'Harper HR', email: `hr2-${run}@test.example`, password: 'password123', role: 'hr' });
+  const hr = await login(`hr2-${run}@test.example`, 'password123');
+  assert.equal((await call(a, 'POST', '/api/skills', { name: 'Stagehand', payRate: 20, billRate: 50 })).status, 201);
+  const c1 = await mkCrew(a, 'arc1');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Gala', startDate: '2026-01-10', endDate: '2026-01-10' })).json.event.id as string;
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: start(-6), endsAt: start(-2), headcount: 1 })).json.shift.id;
+  const asg = (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, confirmed: true })).json.assignment.id;
+  await withTenant(tid, (c) => c.query("INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in, clock_out, status, approved_at) SELECT $1, a.id, a.user_id, s.starts_at, s.ends_at, 'approved', now() FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE a.id = $2", [tid, asg]));
+
+  assert.equal((await call(hr, 'PATCH', `/api/events/${ev}/pipeline`, { status: 'completed' })).status, 200);
+  const told = async (uid: string) => (await withTenant(tid, (c) => c.query("SELECT title FROM notifications WHERE user_id = $1 AND category = 'billing'", [uid]))).rows;
+  assert.equal((await told(a.id)).length, 1);
+  assert.match((await told(a.id))[0].title, /Ready to invoice: Gala/);
+  assert.equal((await told(hr.id)).length, 0, 'not told about their own move');
+  // Moving back and forward again does not repeat it
+  await call(a, 'PATCH', `/api/events/${ev}/pipeline`, { status: 'in_progress' });
+  await call(a, 'PATCH', `/api/events/${ev}/pipeline`, { status: 'completed' });
+  assert.equal((await told(a.id)).length, 1);
+  assert.ok((await call(a, 'GET', '/api/pipeline?range=all')).json.events.some((e: any) => e.id === ev), 'still on the board until invoiced');
+
+  // HR sends the invoice (QuickBooks Desktop file) → off the board, into the archive
+  const iif = await call(hr, 'GET', `/api/events/${ev}/billing/iif?source=time`);
+  assert.equal(iif.status, 200, iif.text);
+  assert.equal((await call(a, 'GET', '/api/pipeline?range=all')).json.events.some((e: any) => e.id === ev), false);
+  assert.equal((await call(a, 'GET', '/api/events')).json.events.some((e: any) => e.id === ev), false);
+  let arch = (await call(hr, 'GET', '/api/archive')).json;
+  const x = arch.events.find((e: any) => e.id === ev);
+  assert.equal(x.archive_reason, 'invoiced');
+  assert.equal(x.invoiced, 200);
+  assert.equal(arch.keepYears, 2);
+  // Still in reports
+  assert.ok((await call(a, 'GET', '/api/reports?from=2026-01-01&to=2026-01-31')).json.events.some((e: any) => e.id === ev));
+
+  // Canceled → archived straight away; restore puts it back
+  const ev2 = (await call(a, 'POST', '/api/events', { name: 'Rained out', startDate: '2026-02-01', endDate: '2026-02-01' })).json.event.id as string;
+  await call(a, 'PATCH', `/api/events/${ev2}/pipeline`, { status: 'canceled' });
+  arch = (await call(a, 'GET', '/api/archive')).json;
+  assert.equal(arch.events.find((e: any) => e.id === ev2).archive_reason, 'canceled');
+  assert.equal((await call(a, 'POST', `/api/events/${ev2}/restore`)).status, 200);
+  assert.ok((await call(a, 'GET', '/api/pipeline?range=all')).json.events.some((e: any) => e.id === ev2));
+  assert.equal((await call(a, 'POST', `/api/events/${ev2}/archive`)).status, 200);
+
+  // Only admins delete early
+  assert.equal((await call(hr, 'DELETE', `/api/archive/${ev2}`)).status, 403);
+  assert.equal((await call(a, 'DELETE', `/api/archive/${ev2}`)).status, 200);
+  assert.equal((await call(a, 'DELETE', `/api/archive/${ev2}`)).status, 404);
+
+  // After two years it is removed by the daily clean-up
+  const { purgeArchive } = await import('../src/routes/archive');
+  assert.equal(await withTenant(tid, (c) => purgeArchive(c, tid)), 0);
+  await withTenant(tid, (c) => c.query("UPDATE events SET archived_at = now() - interval '2 years 1 day' WHERE id = $1", [ev]));
+  assert.equal(await withTenant(tid, (c) => purgeArchive(c, tid)), 1);
+  assert.equal((await call(a, 'GET', '/api/archive')).json.events.length, 0);
+});

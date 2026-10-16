@@ -3,7 +3,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
 import { createContext, useContext, useEffect, useState } from 'react';
-import { api, ApiError, Me, Role, roleLabel } from '@/lib/api';
+import { api, ApiError, homeFor, Me, Role, roleLabel } from '@/lib/api';
 import ThemeToggle from '@/components/ThemeToggle';
 import InstallApp, { InstallPopup } from '@/components/InstallApp';
 import PunchSync from '@/components/PunchSync';
@@ -58,7 +58,7 @@ const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; field?
   {
     href: '/pipeline',
     label: 'Pipeline',
-    roles: ['admin', 'manager'],
+    roles: ['admin', 'manager', 'hr'],
     icon: icon(
       <>
         <rect x="3" y="3" width="18" height="18" rx="3" />
@@ -111,7 +111,7 @@ const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; field?
   {
     href: '/timesheets',
     label: 'Timesheets',
-    roles: ['admin', 'manager'],
+    roles: ['admin', 'manager', 'hr'],
     icon: icon(
       <>
         <circle cx="12" cy="12" r="9" />
@@ -154,7 +154,7 @@ const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; field?
   {
     href: '/payroll',
     label: 'Payroll',
-    roles: ['admin'],
+    roles: ['admin', 'hr'],
     icon: icon(
       <>
         <rect x="3" y="6" width="18" height="12" rx="2" />
@@ -166,10 +166,21 @@ const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; field?
   {
     href: '/reports',
     label: 'Reports',
-    roles: ['admin', 'manager'],
+    roles: ['admin', 'manager', 'hr'],
     icon: icon(
       <>
         <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
+      </>,
+    ),
+  },
+  {
+    href: '/archive',
+    label: 'Archive',
+    roles: ['admin', 'manager', 'hr'],
+    icon: icon(
+      <>
+        <rect x="3" y="4" width="18" height="5" rx="1" />
+        <path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4" />
       </>,
     ),
   },
@@ -447,7 +458,7 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
   useEffect(() => {
     if (!me || allowed || !active) return;
     closeTab(here, ''); // no tab for a page this person cannot open
-    router.replace(me.role === 'crew' ? '/my-shifts' : '/dashboard');
+    router.replace(homeFor(me.role));
   }, [me, allowed, active, router, here]);
   if (!me) return <div className="center muted">Loading…</div>;
   if (!allowed) return null;

@@ -15,12 +15,13 @@ docker-compose.yml   The whole stack on one server: Postgres, API, web, Caddy.
 
 **Companies and people**
 - Companies sign up and get a free trial; each company's data is isolated by PostgreSQL Row-Level Security (enforced by the database, not just app code).
-- Roles: Admin, Labor Coordinator, Crew. Only admins add admins. Field permissions: an *On-site Labor Coordinator* checks crew in and out and rates them for the whole event; *leads* (chosen per event, one lead role per department) do the same for their own team.
+- Roles: Admin, Labor Coordinator, HR, Crew. Only admins add admins and HR accounts. **HR** handles invoicing and payroll: pipeline, events (read-only) with their invoice, timesheets (view and export), payroll and reports; no scheduling. Field permissions: an *On-site Labor Coordinator* checks crew in and out and rates them for the whole event; *leads* (chosen per event, one lead role per department) do the same for their own team.
 - Roles & rates (pay, day and bill rates), certificates with expiry, crew groups, trainings and an academy, crew reviews and star ratings.
 
 **Scheduling**
 - Events with one phase per day (pre-made from the event dates), shifts with headcount, minimum call (4 / 5 h), lead shifts linked to the crew shifts they lead. Moving an event moves its phases and shifts.
 - Crew picker with type-ahead, star ratings, and people who are booked, unavailable or missing a certificate tucked away. Double-booking, rest and daily-hour rules need an override.
+- Pipeline: when an event is moved to Completed, admins and HR get a "Ready to invoice" message (in-app and email). Once its invoice is sent (QuickBooks Online or the Desktop file), or when it is canceled, the event leaves the pipeline for the **Archive**, where it can be restored or booked again next year. Archived events are deleted automatically after 2 years; admins can delete one sooner.
 - Open shifts, swaps, availability, schedule and calendar views, customers, quotes (PDF) and a pipeline board, Rentman sync.
 
 **Time and pay**

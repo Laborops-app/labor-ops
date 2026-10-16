@@ -11,6 +11,7 @@ import { authenticate, guard } from '../auth';
 
 const uuid = z.string().uuid();
 const mgr = guard('admin', 'manager');
+const viewers = guard('admin', 'manager', 'hr'); // HR sees and exports timesheets, but does not approve them
 
 // Spreadsheet apps run text starting with these characters as formulas.
 const csvCell = (v: unknown) => {
@@ -310,7 +311,7 @@ export async function timeRoutes(app: FastifyInstance) {
   );
 
   // ----- managers: timesheets -----
-  app.get('/api/timesheets', { preHandler: mgr }, async (req) => {
+  app.get('/api/timesheets', { preHandler: viewers }, async (req) => {
     const { status } = z.object({ status: z.enum(['open', 'submitted', 'approved']).optional() }).parse(req.query);
     return withTenant(req.user.tid, async (c) => ({
       entries: (
@@ -348,7 +349,7 @@ export async function timeRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  app.get('/api/timesheets/export.csv', { preHandler: mgr }, async (req, reply) => {
+  app.get('/api/timesheets/export.csv', { preHandler: viewers }, async (req, reply) => {
     const rows = await withTenant(req.user.tid, async (c) => {
       const r = (await c.query(`${ENTRY_SQL} WHERE t.status = 'approved' ORDER BY t.clock_in`)).rows;
       await audit(c, req.user.tid, req.user.sub, 'export.timesheets', 'time_entry', null, { rows: r.length });

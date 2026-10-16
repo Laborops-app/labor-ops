@@ -317,13 +317,14 @@ function Body({ me }: { me: Me }) {
                 <select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>
                   <option value="crew">Crew</option>
                   <option value="manager">Labor Coordinator</option>
-                  <option value="admin">Admin</option>
+                  <option value="hr">HR (invoicing &amp; payroll)</option>
+                <option value="admin">Admin</option>
                 </select>
               </label>
             )}
             <div className="acts">
               <button type="button" className="btn" onClick={() => setAdding(false)}>Cancel</button>
-              <button className="btn primary">Add {f.role === 'manager' ? 'Coordinator' : f.role === 'admin' ? 'Admin' : 'Crew Member'}</button>
+              <button className="btn primary">Add {f.role === 'manager' ? 'Coordinator' : f.role === 'admin' ? 'Admin' : f.role === 'hr' ? 'HR' : 'Crew Member'}</button>
             </div>
           </form>
         </Modal>

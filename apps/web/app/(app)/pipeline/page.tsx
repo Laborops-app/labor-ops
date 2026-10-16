@@ -359,9 +359,9 @@ function Body({ me }: { me: Me }) {
 
   return (
     <div className="pm">
-      <TopbarAction>
+      {me.role !== 'hr' && <TopbarAction>
         <button className="btn primary pm-new" onClick={() => setCreating('pending')} aria-label="New event"><span className="pm-new-txt">New Event</span><PlusIcon /></button>
-      </TopbarAction>
+      </TopbarAction>}
 
       <div className="pm-head">
         <div className="pm-title">
@@ -369,7 +369,8 @@ function Body({ me }: { me: Me }) {
           <button type="button" className="pm-icon-btn" title="Copy link to this board" aria-label="Copy link to this board" onClick={share}><Svg>{Ico.link}</Svg></button>
         </div>
         <div className="pm-team">
-          <Link href="/crew" className="pm-invite"><Svg size={18}>{Ico.plus}</Svg>Team</Link>
+          <Link href="/archive" className="btn small ghost" title="Invoiced and canceled events, kept 2 years">Archive</Link>
+          {me.role !== 'hr' && <Link href="/crew" className="pm-invite"><Svg size={18}>{Ico.plus}</Svg>Team</Link>}
           <span className="pm-team-avs">
             {team.slice(0, 4).map((t) => <span key={t.id} className={avClass(t.name)} title={`${t.name} · ${roleLabel(t.role)}`}>{initialsOf(t.name)}</span>)}
             {team.length > 4 && <span className="av pm-av-more">+{team.length - 4}</span>}
@@ -435,7 +436,7 @@ function Body({ me }: { me: Me }) {
                   <i className="pm-dot" />
                   <b>{STATUS[s].label}</b>
                   <span className="pm-count">{list.length}</span>
-                  {s !== 'canceled' && s !== 'completed' && (
+                  {s !== 'canceled' && s !== 'completed' && me.role !== 'hr' && (
                     <button type="button" className="pm-add" title={`New event in ${STATUS[s].label}`} aria-label={`New event in ${STATUS[s].label}`} onClick={() => setCreating(s)}><Svg size={14}><path d="M12 6v12M6 12h12" /></Svg></button>
                   )}
                 </header>
@@ -492,5 +493,5 @@ function Body({ me }: { me: Me }) {
 }
 
 export default function Page() {
-  return <Shell roles={['admin', 'manager']}>{(me) => <Body me={me} />}</Shell>;
+  return <Shell roles={['admin', 'manager', 'hr']}>{(me) => <Body me={me} />}</Shell>;
 }

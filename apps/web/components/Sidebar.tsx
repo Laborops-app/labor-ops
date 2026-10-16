@@ -8,7 +8,7 @@ export type NavItem = { href: string; label: string; icon: React.ReactNode };
 
 /** How the menu is grouped. Items not listed fall into "More"; children sit under their parent with a tree line. */
 const SECTIONS: { title: string; items: string[] }[] = [
-  { title: 'Main', items: ['/dashboard', '/schedule', '/events', '/pipeline', '/requests', '/timesheets', '/reports', '/chat'] },
+  { title: 'Main', items: ['/dashboard', '/schedule', '/events', '/pipeline', '/requests', '/timesheets', '/reports', '/archive', '/chat'] },
   { title: 'My work', items: ['/onsite', '/my-shifts', '/my-calendar', '/open-shifts', '/availability'] },
   { title: 'Sales', items: ['/customers', '/quotes'] },
   { title: 'People', items: ['/crew', '/skills', '/trainings'] },
@@ -60,7 +60,7 @@ export default function Sidebar({ items, me, path, chatUnread }: { items: NavIte
     if (!by.has(parent)) for (const h of list) if (by.has(h) && !sections.some((s) => s.items.some((i) => i.href === h))) sections[sections.length - 1]?.items.push(by.get(h)!);
 
   const manager = me.role !== 'crew';
-  const cta = manager ? { title: 'Plan a show', text: 'Set up a new event and its shifts in a few steps.', label: 'New event', href: '/events' } : { title: 'Pick up work', text: 'See shifts that are open for you to claim.', label: 'Open shifts', href: '/open-shifts' };
+  const cta = me.role === 'hr' ? { title: 'Ready to invoice', text: 'Completed events waiting for an invoice are on the pipeline.', label: 'Open pipeline', href: '/pipeline' } : manager ? { title: 'Plan a show', text: 'Set up a new event and its shifts in a few steps.', label: 'New event', href: '/events' } : { title: 'Pick up work', text: 'See shifts that are open for you to claim.', label: 'Open shifts', href: '/open-shifts' };
   const badge = (href: string) => (href === '/chat' && chatUnread > 0 ? <span className="sb-badge" aria-label={`${chatUnread} unread conversations`}>{chatUnread > 9 ? '9+' : chatUnread}</span> : null);
   const initials = me.name.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]!.toUpperCase()).join('');
 

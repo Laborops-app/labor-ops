@@ -61,6 +61,7 @@ const shiftBody = z.object({
 });
 
 const mgr = guard('admin', 'manager');
+const viewers = guard('admin', 'manager', 'hr'); // HR can open events (read-only) to invoice them
 
 // ---------- phases are one day each ----------
 /** YYYY-MM-DD plus n days. */
@@ -168,7 +169,7 @@ export async function assignCrew(c: PoolClient, tid: string, actorId: string, sh
 }
 
 export async function eventRoutes(app: FastifyInstance) {
-  app.get('/api/events', { preHandler: mgr }, async (req) =>
+  app.get('/api/events', { preHandler: viewers }, async (req) =>
     withTenant(req.user.tid, async (c) => ({
       events: (
         await c.query(`
@@ -184,7 +185,7 @@ export async function eventRoutes(app: FastifyInstance) {
             (SELECT count(*)::int FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id
                WHERE s.event_id = e.id AND a.status = 'accepted' AND s.ends_at < now()
                  AND NOT EXISTS (SELECT 1 FROM crew_reviews r WHERE r.user_id = a.user_id AND r.shift_id = s.id)) AS to_rate
-          FROM events e ORDER BY e.start_date DESC, e.name`)
+          FROM events e WHERE e.archived_at IS NULL ORDER BY e.start_date DESC, e.name`)
       ).rows,
     })),
   );
@@ -325,7 +326,7 @@ export async function eventRoutes(app: FastifyInstance) {
     return reply.code(201).send({ event: row, rentman, warning });
   });
 
-  app.get('/api/events/:id', { preHandler: mgr }, async (req, reply) => {
+  app.get('/api/events/:id', { preHandler: viewers }, async (req, reply) => {
     const { id: eventId } = id.parse(req.params);
     const out = await withTenant(req.user.tid, async (c) => {
       const ev = (await c.query('SELECT * FROM events WHERE id = $1', [eventId])).rows[0];

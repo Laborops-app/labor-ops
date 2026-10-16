@@ -21,8 +21,10 @@ export async function api<T = any>(path: string, init: { method?: string; body?:
   return data as T;
 }
 
-export type Role = 'admin' | 'manager' | 'crew';
-export const roleLabel = (r: string) => (r === 'manager' ? 'Labor Coordinator' : r === 'admin' ? 'Admin' : r === 'crew' ? 'Crew' : r);
+export type Role = 'admin' | 'manager' | 'crew' | 'hr';
+/** Where each kind of account lands after signing in. */
+export const homeFor = (role: string) => (role === 'crew' ? '/my-shifts' : role === 'hr' ? '/pipeline' : '/dashboard');
+export const roleLabel = (r: string) => (r === 'manager' ? 'Labor Coordinator' : r === 'admin' ? 'Admin' : r === 'crew' ? 'Crew' : r === 'hr' ? 'HR' : r);
 export type FieldRole = 'onsite_coordinator';
 export const FIELD_ROLES: { key: FieldRole; label: string; help: string }[] = [
   { key: 'onsite_coordinator', label: 'On-site Labor Coordinator', help: 'On every event they work: sees all the crew, checks them in and out, and rates them.' },

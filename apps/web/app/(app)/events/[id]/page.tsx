@@ -14,6 +14,7 @@ import CrewPick, { PickOption } from '@/components/CrewPick';
 import TimeEdit from '@/components/TimeEdit';
 import Modal from '@/components/Modal';
 import InvoicePanel from '@/components/InvoicePanel';
+import HrEventView from '@/components/HrEventView';
 import TopbarAction, { PlusIcon, TrashIcon, avClass, initialsOf } from '@/components/TopbarAction';
 import CopyEvent from '@/components/CopyEvent';
 import { api, ApiError, Me, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
@@ -193,6 +194,8 @@ function Body({ me }: { me: Me }) {
   useEffect(() => {
     loadRateInfo();
     if (new URLSearchParams(window.location.search).get('rate')) setSettings('rate');
+    // From the "Ready to invoice" message.
+    else if (window.location.hash === '#invoice' && (me.role === 'admin' || me.canAdjustRates)) setSettings('invoice');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
   // Rentman lives in the same side panel, opened from its own button next to Event settings.
@@ -1131,6 +1134,13 @@ function Body({ me }: { me: Me }) {
               </>
             )}
             <CopyEvent eventId={id} name={ev.name} customerId={ev.customer_id ?? null} onError={setError} label="Copy" />
+            {(ev.pipeline_status === 'completed' || ev.pipeline_status === 'canceled') && (
+              (ev as { archived_at?: string | null }).archived_at ? (
+                <button className="btn small" onClick={() => api(`/api/events/${id}/restore`, { body: {} }).then(() => { setNote('Back on the pipeline.'); load(); }).catch((e) => setError(e.message))}>Restore</button>
+              ) : (
+                <button className="btn small" title="Take it off the pipeline (kept 2 years in the Archive)" onClick={() => api(`/api/events/${id}/archive`, { body: {} }).then(() => { setNote('Archived. It stays on the Archive page for 2 years.'); load(); }).catch((e) => setError(e.message))}>Archive</button>
+              )
+            )}
             <button className="btn-round" title="Event chat" aria-label="Event chat" onClick={() => api<{ id: string }>('/api/chat/channels', { body: { eventId: id } }).then((r) => router.push(`/chat?c=${r.id}`)).catch((e) => setError(e.message))}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z" /></svg>
             </button>
@@ -1262,7 +1272,7 @@ function Body({ me }: { me: Me }) {
 }
 
 export default function Page() {
-  return <Shell roles={['admin', 'manager']}>{(me) => <Body me={me} />}</Shell>;
+  return <Shell roles={['admin', 'manager', 'hr']}>{(me) => (me.role === 'hr' ? <HrEventView /> : <Body me={me} />)}</Shell>;
 }
 
 const US_STATES = 'AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' ');

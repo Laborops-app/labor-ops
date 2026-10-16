@@ -3,6 +3,7 @@ import { notify } from './index';
 import { loadSettings } from './settings';
 import { snsOptedOut } from './providers';
 import { fmtWhen } from './templates';
+import { purgeArchive } from '../routes/archive';
 
 /** Periodic jobs: 24-hour shift reminders and certificate expiry notices. Safe to run repeatedly (de-duplicated). */
 export async function runSweeps(): Promise<{ reminders: number; certs: number }> {
@@ -15,6 +16,8 @@ export async function runSweeps(): Promise<{ reminders: number; certs: number }>
     if (cfg?.smsProvider === 'sns')
       for (const digits of await snsOptedOut(cfg)) if (digits.length === 10) await pool.query('SELECT notify_sms_stop($1)', [digits]);
     await withTenant(t.id, async (c) => {
+      // Archived events are kept two years.
+      await purgeArchive(c, t.id);
       const shifts = await c.query(
         `SELECT a.id, a.user_id, s.role_name, s.starts_at, e.name AS event_name, e.venue
            FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id

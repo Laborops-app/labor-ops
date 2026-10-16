@@ -3,7 +3,7 @@ import { Fragment, useEffect, useState } from 'react';
 import TimeEdit from '@/components/TimeEdit';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
-import { api, ApiError, fmtDateTime, fmtTime } from '@/lib/api';
+import { api, ApiError, fmtDateTime, fmtTime, type Me } from '@/lib/api';
 
 type Entry = {
   id: string;
@@ -32,7 +32,9 @@ const TABS = [
   { key: 'open', label: 'On the clock' },
 ] as const;
 
-function Body() {
+function Body({ me }: { me: Me }) {
+  // HR sees and exports timesheets; approving and fixing time stays with coordinators.
+  const readOnly = me.role === 'hr';
   const [tab, setTab] = useState<(typeof TABS)[number]['key']>('submitted');
   const [rows, setRows] = useState<Entry[] | null>(null);
   const [error, setError] = useState('');
@@ -144,9 +146,11 @@ function Body() {
                     <td>
                       {r.status === 'submitted' ? (
                         <span className="row" style={{ gap: 6 }}>
-                          <button className="btn small primary" onClick={() => approve(r.id)}>
-                            Approve
-                          </button>
+                          {readOnly ? <span className="pill">Waiting for approval</span> : (
+                            <button className="btn small primary" onClick={() => approve(r.id)}>
+                              Approve
+                            </button>
+                          )}
                           {r.shift_starts_at && r.shift_ends_at && (
                             <span className="muted small" title="Time outside the scheduled shift waits for a coordinator">
                               scheduled {fmtTime(r.shift_starts_at)}–{fmtTime(r.shift_ends_at)}
@@ -158,7 +162,7 @@ function Body() {
                       ) : null}
                     </td>
                     <td>
-                      <button className="btn ghost small" onClick={() => setEditing(editing === r.id ? null : r.id)} title="Correct the clock-in or clock-out">✎ Edit</button>
+                      {!readOnly && <button className="btn ghost small" onClick={() => setEditing(editing === r.id ? null : r.id)} title="Correct the clock-in or clock-out">✎ Edit</button>}
                     </td>
                   </tr>
                   {editing === r.id && (
@@ -180,5 +184,5 @@ function Body() {
 }
 
 export default function Page() {
-  return <Shell roles={['admin', 'manager']}>{() => <Body />}</Shell>;
+  return <Shell roles={['admin', 'manager', 'hr']}>{(me) => <Body me={me} />}</Shell>;
 }

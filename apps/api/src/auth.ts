@@ -2,7 +2,7 @@ import { adminPool } from './storage';
 import { withTenant } from './db';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
-export type Role = 'admin' | 'manager' | 'crew';
+export type Role = 'admin' | 'manager' | 'crew' | 'hr';
 export type SessionUser = { sub: string; tid: string; role: Role; name: string };
 
 declare module '@fastify/jwt' {

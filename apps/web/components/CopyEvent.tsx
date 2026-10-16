@@ -5,13 +5,13 @@ import { api } from '@/lib/api';
 import CustomerSelect from '@/components/CustomerSelect';
 
 /** Start a new event from an old one: same details, phases and shifts, moved to a new date. Crew are not copied. */
-export default function CopyEvent({ eventId, name, customerId = null, onError, label = 'Copy into new event' }: { eventId: string; name: string; customerId?: string | null; onError?: (m: string) => void; label?: string }) {
+export default function CopyEvent({ eventId, name, customerId = null, onError, label = 'Copy into new event', defaultName, defaultStart = '' }: { eventId: string; name: string; customerId?: string | null; onError?: (m: string) => void; label?: string; defaultName?: string; defaultStart?: string }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [f, setF] = useState({ name: '', startDate: '', includePhases: true, includeShifts: true, customerId: customerId as string | null });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const show = () => { setF({ name: `${name} (copy)`, startDate: '', includePhases: true, includeShifts: true, customerId }); setErr(''); setOpen(true); };
+  const show = () => { setF({ name: defaultName ?? `${name} (copy)`, startDate: defaultStart, includePhases: true, includeShifts: true, customerId }); setErr(''); setOpen(true); };
   const go = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);

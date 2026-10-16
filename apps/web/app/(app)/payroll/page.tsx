@@ -291,5 +291,5 @@ function Body() {
 }
 
 export default function Page() {
-  return <Shell roles={['admin']}>{() => <Body />}</Shell>;
+  return <Shell roles={['admin', 'hr']}>{() => <Body />}</Shell>;
 }

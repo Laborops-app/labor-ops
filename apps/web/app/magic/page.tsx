@@ -4,7 +4,7 @@ import ThemeToggle from '@/components/ThemeToggle';
 import Link from 'next/link';
 import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { api } from '@/lib/api';
+import { api, homeFor } from '@/lib/api';
 import { Banner } from '@/components/ui';
 
 /** Landing page for an emailed / texted sign-in link. Signing in needs a tap, so link scanners in mail apps can't use it up. */
@@ -18,7 +18,7 @@ function Body() {
     setError('');
     try {
       const { user } = await api<{ user: { role: string } }>('/api/auth/magic/verify', { body: { token } });
-      router.replace(user.role === 'crew' ? '/my-shifts' : '/dashboard');
+      router.replace(homeFor(user.role));
     } catch (e) {
       setError((e as Error).message);
       setBusy(false);

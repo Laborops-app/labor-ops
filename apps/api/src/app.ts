@@ -2,6 +2,7 @@ import { signinRoutes } from './routes/signin';
 import { billingRoutes } from './routes/billing';
 import { reportRoutes } from './routes/reports';
 import { earningsRoutes } from './routes/earnings';
+import { archiveRoutes } from './routes/archive';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import jwt from '@fastify/jwt';
@@ -101,5 +102,6 @@ export async function buildApp() {
   await app.register(signinRoutes);
   await app.register(reportRoutes);
   await app.register(earningsRoutes);
+  await app.register(archiveRoutes);
   return app;
 }

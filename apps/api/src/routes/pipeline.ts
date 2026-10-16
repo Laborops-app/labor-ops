@@ -4,7 +4,7 @@ import { withTenant, audit } from '../db';
 import { guard } from '../auth';
 import { STATUSES, autoAdvance, setStatus } from '../pipeline';
 
-const mgr = guard('admin', 'manager');
+const mgr = guard('admin', 'manager', 'hr');
 
 /**
  * The event pipeline board: every event as a card in its column (Pending, Quote, Confirmed, In progress, Completed,
@@ -17,7 +17,8 @@ export async function pipelineRoutes(app: FastifyInstance) {
       .parse(req.query);
     return withTenant(req.user.tid, async (c) => {
       await autoAdvance(c, req.user.tid);
-      const where: string[] = [];
+      // Archived events (invoiced or canceled) live on the Archive page, not the board.
+      const where: string[] = ['e.archived_at IS NULL'];
       const args: unknown[] = [];
       // "Upcoming" keeps anything still open (not completed or canceled) plus what finished in the last two weeks.
       if (q.range === 'upcoming') where.push("(e.end_date >= current_date - 14 OR e.pipeline_status NOT IN ('completed', 'canceled'))");
@@ -57,7 +58,7 @@ export async function pipelineRoutes(app: FastifyInstance) {
           args,
         )
       ).rows;
-      const team = (await c.query("SELECT id, name, role FROM users WHERE role IN ('admin', 'manager') AND active ORDER BY role, name")).rows;
+      const team = (await c.query("SELECT id, name, role FROM users WHERE role IN ('admin', 'manager', 'hr') AND active ORDER BY role, name")).rows;
       return { events, team };
     });
   });

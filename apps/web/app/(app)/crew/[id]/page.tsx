@@ -269,6 +269,7 @@ function Body({ me }: { me: Me }) {
               >
                 <option value="crew">Crew</option>
                 <option value="manager">Labor Coordinator</option>
+                <option value="hr">HR (invoicing &amp; payroll)</option>
                 <option value="admin">Admin</option>
               </select>
               <span className="muted small">Only admins can change roles or add admins. Changes apply right away.</span>

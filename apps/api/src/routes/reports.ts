@@ -128,15 +128,16 @@ function totalsOf(list: EventReport[]) {
 
 export async function reportRoutes(app: FastifyInstance) {
   const staff = guard('admin', 'manager');
+  const viewers = guard('admin', 'manager', 'hr');
   const range = z.object({ from: ymd, to: ymd }).refine((r) => r.from <= r.to, 'The start must be before the end');
 
-  app.get('/api/reports', { preHandler: staff }, async (req, reply) => {
+  app.get('/api/reports', { preHandler: viewers }, async (req, reply) => {
     const q = range.safeParse(req.query);
     if (!q.success) return reply.code(400).send({ error: q.error.issues[0]?.message ?? 'Pick a date range' });
     return withTenant(req.user.tid, (c) => buildReport(c, q.data.from, q.data.to));
   });
 
-  app.get('/api/reports/events.csv', { preHandler: staff }, async (req, reply) => {
+  app.get('/api/reports/events.csv', { preHandler: viewers }, async (req, reply) => {
     const q = range.safeParse(req.query);
     if (!q.success) return reply.code(400).send({ error: 'Pick a date range' });
     const r = await withTenant(req.user.tid, (c) => buildReport(c, q.data.from, q.data.to));

@@ -4,7 +4,7 @@ import ThemeToggle from '@/components/ThemeToggle';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { api } from '@/lib/api';
+import { api, homeFor } from '@/lib/api';
 import { Banner } from '@/components/ui';
 
 type Demo = { enabled: boolean; password?: string; accounts?: { label: string; email: string }[] };
@@ -29,7 +29,7 @@ export default function Login() {
   }, []);
   const go = (role: string) => {
     const next = new URLSearchParams(location.search).get('next');
-    router.replace(next && /^\/(?!\/)/.test(next) ? next : role === 'crew' ? '/my-shifts' : '/dashboard');
+    router.replace(next && /^\/(?!\/)/.test(next) ? next : homeFor(role));
   };
   const sendLink = async () => {
     setBusy(true);
