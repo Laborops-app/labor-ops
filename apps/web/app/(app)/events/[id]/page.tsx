@@ -12,6 +12,7 @@ import { PRIORITY, STATUS, STATUS_ORDER, type PipelineStatus, type Priority } fr
 import FillFromGroup from '@/components/FillFromGroup';
 import CrewPick, { PickOption } from '@/components/CrewPick';
 import TimeEdit from '@/components/TimeEdit';
+import Modal from '@/components/Modal';
 import InvoicePanel from '@/components/InvoicePanel';
 import TopbarAction, { PlusIcon, TrashIcon, avClass, initialsOf } from '@/components/TopbarAction';
 import CopyEvent from '@/components/CopyEvent';
@@ -148,9 +149,10 @@ function Body({ me }: { me: Me }) {
     }
   };
   const [f, setF] = useState(() => {
+    // New shifts start at 8:00 AM for 8 hours (the date follows the event or phase you add to).
     const s = new Date();
-    s.setMinutes(0, 0, 0);
-    s.setHours(s.getHours() + 24);
+    s.setDate(s.getDate() + 1);
+    s.setHours(8, 0, 0, 0);
     return {
       roleName: '',
       startsAt: localInput(s),
@@ -207,7 +209,14 @@ function Body({ me }: { me: Me }) {
     document.addEventListener('keydown', esc);
     return () => document.removeEventListener('keydown', esc);
   }, [settings]);
-  const shiftForm = useRef<HTMLElement>(null);
+  const shiftForm = useRef<HTMLElement | HTMLDivElement>(null);
+  // The add-shift form opens in a window.
+  const [shiftModal, setShiftModal] = useState(false);
+  const openShiftModal = () => {
+    setError('');
+    setShiftModal(true);
+    setTimeout(() => (shiftForm.current?.querySelector('select, input') as HTMLElement | null)?.focus(), 80);
+  };
   const [tplStart, setTplStart] = useState('');
   const [tplName, setTplName] = useState('');
 
@@ -325,7 +334,10 @@ function Body({ me }: { me: Me }) {
         else setNote(`Shift added with ${picked.length} crew.`);
       }
     }
-    if (ok) setF((x) => ({ ...x, roleName: '', crew: [] }));
+    if (ok) {
+      setF((x) => ({ ...x, roleName: '', crew: [] }));
+      setShiftModal(false);
+    }
   };
 
   const applyTemplate = () => {
@@ -773,9 +785,13 @@ function Body({ me }: { me: Me }) {
   // Pick a phase for the new shift: it goes into that phase and the dates start on the phase's first day (times are kept).
   const addToPhase = (p: Phase, scroll = true) => {
     const day = p.starts_on.slice(0, 10);
-    const swap = (v: string) => `${day}T${v.slice(11)}`;
-    setF((x) => ({ ...x, phaseId: p.id, startsAt: swap(x.startsAt), endsAt: swap(x.endsAt) }));
-    if (scroll) shiftForm.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // Same time of day on the phase's day, and the same length (an overnight shift still ends the next morning).
+    setF((x) => {
+      const len = new Date(x.endsAt).getTime() - new Date(x.startsAt).getTime();
+      const st = new Date(`${day}T${x.startsAt.slice(11)}`);
+      return { ...x, phaseId: p.id, startsAt: localInput(st), endsAt: localInput(new Date(st.getTime() + (len > 0 ? len : 8 * 3600_000))) };
+    });
+    if (scroll) openShiftModal();
   };
   const templateForPhase = (p: Phase) => {
     setTplPhase(p.id);
@@ -855,139 +871,13 @@ function Body({ me }: { me: Me }) {
     </div>
   );
 
-  return (
-    <div className="split">
-      <datalist id="role-names">{skillNames.map((n) => <option key={n} value={n} />)}</datalist>
-      <div className="split-main">
-      <TopbarAction>
-        <button className="btn primary" onClick={() => { shiftForm.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); setTimeout(() => (shiftForm.current?.querySelector('select, input') as HTMLElement | null)?.focus(), 350); }}>
-          Add Shift
-          <PlusIcon />
-        </button>
-      </TopbarAction>
-      <p className="small" style={{ margin: '0 0 16px' }}>
-        <Link href="/events">← All events</Link>
-      </p>
-      {custInfo && (
-        <dl className="strip">
-          <div className="who">
-            <span className={avClass(custInfo.name)} aria-hidden="true">{initialsOf(custInfo.name)}</span>
-            <div>
-              <dt>Customer</dt>
-              <dd><Link href={`/customers/${custInfo.id}`} style={{ color: 'inherit', textDecoration: 'none' }}>{custInfo.name}</Link></dd>
-            </div>
-          </div>
-          {custInfo.contact && <div><dt>Contact</dt><dd>{custInfo.contact}</dd></div>}
-          {custInfo.email && <div><dt>Email</dt><dd><a href={`mailto:${custInfo.email}`} style={{ color: 'inherit', textDecoration: 'none' }}>{custInfo.email}</a></dd></div>}
-          {custInfo.phone && <div><dt>Phone</dt><dd><a href={`tel:${custInfo.phone}`} style={{ color: 'inherit', textDecoration: 'none' }}>{custInfo.phone}</a></dd></div>}
-        </dl>
-      )}
-      <div className="title-row">
-        <div style={{ minWidth: 0 }}>
-          <h1>{ev.name}</h1>
-          <div className="sub">
-            {[ev.client, ev.venue].filter(Boolean).join(' · ')}
-            {(ev.client || ev.venue) && ' · '}
-            {fmtDate(ev.start_date.slice(0, 10))}
-            {ev.end_date.slice(0, 10) !== ev.start_date.slice(0, 10) && <> – {fmtDate(ev.end_date.slice(0, 10))}</>}
-          </div>
-          <div className="row small" style={{ gap: '.35rem', marginTop: '.35rem', flexWrap: 'wrap' }}>
-            {(() => {
-              const slots = d.shifts.reduce((n, s) => n + s.headcount, 0);
-              const filled = d.shifts.reduce((n, s) => n + Math.min(s.headcount, s.assignments.filter((a) => a.status !== 'declined').length), 0);
-              if (!slots) return <span className="pill">No shifts yet</span>;
-              const cls = filled >= slots ? 'staff-good' : filled > 0 ? 'staff-warn' : 'staff-bad';
-              return <span className={`pill ${cls}`} title="Seats with crew on them (offered, pending or accepted)">{filled >= slots ? 'Fully staffed' : filled > 0 ? 'Partly staffed' : 'No crew yet'} · {filled}/{slots}</span>;
-            })()}
-            {ev.pipeline_status && (
-              <select
-                className="pm-stage"
-                value={ev.pipeline_status}
-                style={{ ['--c' as string]: STATUS[ev.pipeline_status as PipelineStatus]?.color }}
-                title="Where this event is in the pipeline"
-                aria-label="Pipeline stage"
-                onChange={(e) => api(`/api/events/${id}/pipeline`, { method: 'PATCH', body: { status: e.target.value } }).then(() => { setNote(`Moved to ${STATUS[e.target.value as PipelineStatus].label}.`); load(); }).catch((x) => setError(x.message))}
-              >
-                {STATUS_ORDER.map((s) => <option key={s} value={s}>{STATUS[s].label}</option>)}
-              </select>
-            )}
-            {ev.priority && (
-              <select
-                className={`pm-stage prio ${PRIORITY[ev.priority as Priority]?.tone}`}
-                value={ev.priority}
-                aria-label="Priority"
-                onChange={(e) => api(`/api/events/${id}/pipeline`, { method: 'PATCH', body: { priority: e.target.value } }).then(load).catch((x) => setError(x.message))}
-              >
-                {(['low', 'medium', 'high'] as Priority[]).map((p) => <option key={p} value={p}>{PRIORITY[p].label} priority</option>)}
-              </select>
-            )}
-            <Link href="/pipeline" className="chip" style={{ textDecoration: 'none' }}>View pipeline</Link>
-            <button type="button" className="chip" style={{ border: 0, cursor: 'pointer' }} onClick={() => setSettings('clock')}>
-              {ev.clock_mode === 'coordinator' ? 'Coordinator clocks crew in' : 'Crew clock themselves in'}
-              {ev.geofence_m ? ` · within ${ev.geofence_m} m` : ''}
-            </button>
-            {d.overtime && (
-              <button type="button" className="chip" style={{ border: 0, cursor: 'pointer' }} onClick={() => setSettings('ot')}>
-                {d.overtime.otAfter ? `OT after ${d.overtime.otAfter} h` : 'Company overtime'}
-                {d.overtime.effectiveState ? ` · ${d.overtime.effectiveState}` : ''}
-              </button>
-            )}
-          </div>
-                </div>
-          <div className="acts">
-            <button className={rateInfo?.due ? 'btn small rt-due-btn' : 'btn small'} onClick={() => setSettings('rate')} aria-haspopup="dialog" title="Rate the crew who worked this event">
-              ★ Rate crew{rateInfo?.due ? ` · ${rateInfo.due}` : rateInfo?.total ? ` · ${rateInfo.rated}/${rateInfo.total}` : ''}
-            </button>
-            <button className="btn small" onClick={() => setSettings('clock')} aria-haspopup="dialog">⚙ Settings</button>
-            {rm && (rm.connected || rm.linked) && (
-              <button className="btn small" onClick={() => setSettings('rentman')} aria-haspopup="dialog" title={rm.project ? rm.project.name : 'Link a Rentman project'}>
-                Rentman{rm.linked && rm.project ? ` · ${rm.project.number ? `#${rm.project.number}` : rm.project.name}` : ''}
-              </button>
-            )}
-            {(me.role === 'admin' || me.canAdjustRates) && (
-              <>
-                <button className="btn small" onClick={() => setSettings('pay')} aria-haspopup="dialog">Crew pay</button>
-                <button className="btn small" onClick={() => setSettings('invoice')} aria-haspopup="dialog">Invoice</button>
-              </>
-            )}
-            <CopyEvent eventId={id} name={ev.name} customerId={ev.customer_id ?? null} onError={setError} label="Copy" />
-            <button className="btn-round" title="Event chat" aria-label="Event chat" onClick={() => api<{ id: string }>('/api/chat/channels', { body: { eventId: id } }).then((r) => router.push(`/chat?c=${r.id}`)).catch((e) => setError(e.message))}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z" /></svg>
-            </button>
-            <button className="btn-round" title="Create a quote" aria-label="Create a quote" onClick={() => api<{ quote: { id: string } }>('/api/quotes', { body: { eventId: id } }).then((r) => router.push(`/quotes/${r.quote.id}`)).catch((e) => setError(e.message))}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4" /></svg>
-            </button>
-            <button className="btn-round danger" title="Delete event" aria-label="Delete event" onClick={() => { if (confirm(`Delete "${ev.name}" and all its shifts?`)) api(`/api/events/${id}`, { method: 'DELETE' }).then(() => router.replace('/events')); }}>
-              <TrashIcon />
-            </button>
-          </div>
-      </div>
-      {!!rateInfo?.due && settings !== 'rate' && (
-        <div className="rt-prompt" role="status">
-          <span className="rt-prompt-ico" aria-hidden="true">★</span>
-          <span><b>How did the crew do?</b> <span className="muted">{rateInfo.due} {rateInfo.due === 1 ? 'person has' : 'people have'} finished a shift here without a rating. It takes a few seconds and helps you pick the best people next time.</span></span>
-          <button className="btn primary small" onClick={() => setSettings('rate')}>Rate crew</button>
-        </div>
-      )}
+  const shiftModalTitle = (() => {
+    const ph = d.phases.find((p) => p.id === f.phaseId);
+    return ph ? `Add a shift · ${ph.label}, ${fmtDate(ph.starts_on.slice(0, 10))}` : 'Add a shift';
+  })();
+  const shiftFormBody = (
+    <div className="shift-modal-body" ref={shiftForm as React.RefObject<HTMLDivElement>}>
       {error && <Banner onClose={() => setError('')}>{error}</Banner>}
-      {note && (
-        <Banner kind="ok" onClose={() => setNote('')}>
-          {note}
-        </Banner>
-      )}
-
-      <EventDetails ev={ev} hasPhases={d.phases.length > 0} shiftCount={d.shifts.length} onSaved={load} onError={setError} />
-      {groups.length > 1 && (
-        <div className="row phase-all">
-          <button type="button" className="btn ghost small" onClick={() => setClosedSaved(new Set())} disabled={closed.size === 0}>Expand all</button>
-          <button type="button" className="btn ghost small" onClick={() => setClosedSaved(new Set(groups.map((g) => g.key)))}>Collapse all</button>
-        </div>
-      )}
-      {groups.map((g) => groupSection(g))}
-      </div>
-      <aside className="split-aside">
-      <section className="card aside-form" ref={shiftForm}>
-        <h2>Add a shift</h2>
         {d.phases.length > 0 && (
           <div className="phase-tabs" role="tablist" aria-label="Phase for the new shift">
             {d.phases.map((p) => (
@@ -1132,6 +1022,145 @@ function Body({ me }: { me: Me }) {
             <button className="btn primary">{f.repeat ? 'Add repeating shifts' : 'Add shift'}</button>
           </div>
         </form>
+    </div>
+  );
+
+  return (
+    <div className="split">
+      {shiftModal && <Modal title={shiftModalTitle} onClose={() => { setShiftModal(false); setAdding(null); }} wide>{shiftFormBody}</Modal>}
+      <datalist id="role-names">{skillNames.map((n) => <option key={n} value={n} />)}</datalist>
+      <div className="split-main">
+      <TopbarAction>
+        <button className="btn primary" onClick={() => openShiftModal()}>
+          Add Shift
+          <PlusIcon />
+        </button>
+      </TopbarAction>
+      <p className="small" style={{ margin: '0 0 16px' }}>
+        <Link href="/events">← All events</Link>
+      </p>
+      {custInfo && (
+        <dl className="strip">
+          <div className="who">
+            <span className={avClass(custInfo.name)} aria-hidden="true">{initialsOf(custInfo.name)}</span>
+            <div>
+              <dt>Customer</dt>
+              <dd><Link href={`/customers/${custInfo.id}`} style={{ color: 'inherit', textDecoration: 'none' }}>{custInfo.name}</Link></dd>
+            </div>
+          </div>
+          {custInfo.contact && <div><dt>Contact</dt><dd>{custInfo.contact}</dd></div>}
+          {custInfo.email && <div><dt>Email</dt><dd><a href={`mailto:${custInfo.email}`} style={{ color: 'inherit', textDecoration: 'none' }}>{custInfo.email}</a></dd></div>}
+          {custInfo.phone && <div><dt>Phone</dt><dd><a href={`tel:${custInfo.phone}`} style={{ color: 'inherit', textDecoration: 'none' }}>{custInfo.phone}</a></dd></div>}
+        </dl>
+      )}
+      <div className="title-row">
+        <div style={{ minWidth: 0 }}>
+          <h1>{ev.name}</h1>
+          <div className="sub">
+            {[ev.client, ev.venue].filter(Boolean).join(' · ')}
+            {(ev.client || ev.venue) && ' · '}
+            {fmtDate(ev.start_date.slice(0, 10))}
+            {ev.end_date.slice(0, 10) !== ev.start_date.slice(0, 10) && <> – {fmtDate(ev.end_date.slice(0, 10))}</>}
+          </div>
+          <div className="row small" style={{ gap: '.35rem', marginTop: '.35rem', flexWrap: 'wrap' }}>
+            {(() => {
+              const slots = d.shifts.reduce((n, s) => n + s.headcount, 0);
+              const filled = d.shifts.reduce((n, s) => n + Math.min(s.headcount, s.assignments.filter((a) => a.status !== 'declined').length), 0);
+              if (!slots) return <span className="pill">No shifts yet</span>;
+              const cls = filled >= slots ? 'staff-good' : filled > 0 ? 'staff-warn' : 'staff-bad';
+              return <span className={`pill ${cls}`} title="Seats with crew on them (offered, pending or accepted)">{filled >= slots ? 'Fully staffed' : filled > 0 ? 'Partly staffed' : 'No crew yet'} · {filled}/{slots}</span>;
+            })()}
+            {ev.pipeline_status && (
+              <select
+                className="pm-stage"
+                value={ev.pipeline_status}
+                style={{ ['--c' as string]: STATUS[ev.pipeline_status as PipelineStatus]?.color }}
+                title="Where this event is in the pipeline"
+                aria-label="Pipeline stage"
+                onChange={(e) => api(`/api/events/${id}/pipeline`, { method: 'PATCH', body: { status: e.target.value } }).then(() => { setNote(`Moved to ${STATUS[e.target.value as PipelineStatus].label}.`); load(); }).catch((x) => setError(x.message))}
+              >
+                {STATUS_ORDER.map((s) => <option key={s} value={s}>{STATUS[s].label}</option>)}
+              </select>
+            )}
+            {ev.priority && (
+              <select
+                className={`pm-stage prio ${PRIORITY[ev.priority as Priority]?.tone}`}
+                value={ev.priority}
+                aria-label="Priority"
+                onChange={(e) => api(`/api/events/${id}/pipeline`, { method: 'PATCH', body: { priority: e.target.value } }).then(load).catch((x) => setError(x.message))}
+              >
+                {(['low', 'medium', 'high'] as Priority[]).map((p) => <option key={p} value={p}>{PRIORITY[p].label} priority</option>)}
+              </select>
+            )}
+            <Link href="/pipeline" className="chip" style={{ textDecoration: 'none' }}>View pipeline</Link>
+            <button type="button" className="chip" style={{ border: 0, cursor: 'pointer' }} onClick={() => setSettings('clock')}>
+              {ev.clock_mode === 'coordinator' ? 'Coordinator clocks crew in' : 'Crew clock themselves in'}
+              {ev.geofence_m ? ` · within ${ev.geofence_m} m` : ''}
+            </button>
+            {d.overtime && (
+              <button type="button" className="chip" style={{ border: 0, cursor: 'pointer' }} onClick={() => setSettings('ot')}>
+                {d.overtime.otAfter ? `OT after ${d.overtime.otAfter} h` : 'Company overtime'}
+                {d.overtime.effectiveState ? ` · ${d.overtime.effectiveState}` : ''}
+              </button>
+            )}
+          </div>
+                </div>
+          <div className="acts">
+            <button className={rateInfo?.due ? 'btn small rt-due-btn' : 'btn small'} onClick={() => setSettings('rate')} aria-haspopup="dialog" title="Rate the crew who worked this event">
+              ★ Rate crew{rateInfo?.due ? ` · ${rateInfo.due}` : rateInfo?.total ? ` · ${rateInfo.rated}/${rateInfo.total}` : ''}
+            </button>
+            <button className="btn small" onClick={() => setSettings('clock')} aria-haspopup="dialog">⚙ Settings</button>
+            {rm && (rm.connected || rm.linked) && (
+              <button className="btn small" onClick={() => setSettings('rentman')} aria-haspopup="dialog" title={rm.project ? rm.project.name : 'Link a Rentman project'}>
+                Rentman{rm.linked && rm.project ? ` · ${rm.project.number ? `#${rm.project.number}` : rm.project.name}` : ''}
+              </button>
+            )}
+            {(me.role === 'admin' || me.canAdjustRates) && (
+              <>
+                <button className="btn small" onClick={() => setSettings('pay')} aria-haspopup="dialog">Crew pay</button>
+                <button className="btn small" onClick={() => setSettings('invoice')} aria-haspopup="dialog">Invoice</button>
+              </>
+            )}
+            <CopyEvent eventId={id} name={ev.name} customerId={ev.customer_id ?? null} onError={setError} label="Copy" />
+            <button className="btn-round" title="Event chat" aria-label="Event chat" onClick={() => api<{ id: string }>('/api/chat/channels', { body: { eventId: id } }).then((r) => router.push(`/chat?c=${r.id}`)).catch((e) => setError(e.message))}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z" /></svg>
+            </button>
+            <button className="btn-round" title="Create a quote" aria-label="Create a quote" onClick={() => api<{ quote: { id: string } }>('/api/quotes', { body: { eventId: id } }).then((r) => router.push(`/quotes/${r.quote.id}`)).catch((e) => setError(e.message))}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4" /></svg>
+            </button>
+            <button className="btn-round danger" title="Delete event" aria-label="Delete event" onClick={() => { if (confirm(`Delete "${ev.name}" and all its shifts?`)) api(`/api/events/${id}`, { method: 'DELETE' }).then(() => router.replace('/events')); }}>
+              <TrashIcon />
+            </button>
+          </div>
+      </div>
+      {!!rateInfo?.due && settings !== 'rate' && (
+        <div className="rt-prompt" role="status">
+          <span className="rt-prompt-ico" aria-hidden="true">★</span>
+          <span><b>How did the crew do?</b> <span className="muted">{rateInfo.due} {rateInfo.due === 1 ? 'person has' : 'people have'} finished a shift here without a rating. It takes a few seconds and helps you pick the best people next time.</span></span>
+          <button className="btn primary small" onClick={() => setSettings('rate')}>Rate crew</button>
+        </div>
+      )}
+      {error && <Banner onClose={() => setError('')}>{error}</Banner>}
+      {note && (
+        <Banner kind="ok" onClose={() => setNote('')}>
+          {note}
+        </Banner>
+      )}
+
+      <EventDetails ev={ev} hasPhases={d.phases.length > 0} shiftCount={d.shifts.length} onSaved={load} onError={setError} />
+      {groups.length > 1 && (
+        <div className="row phase-all">
+          <button type="button" className="btn ghost small" onClick={() => setClosedSaved(new Set())} disabled={closed.size === 0}>Expand all</button>
+          <button type="button" className="btn ghost small" onClick={() => setClosedSaved(new Set(groups.map((g) => g.key)))}>Collapse all</button>
+        </div>
+      )}
+      {groups.map((g) => groupSection(g))}
+      </div>
+      <aside className="split-aside">
+      <section className="card aside-form">
+        <h2>Add a shift</h2>
+        <p className="muted small" style={{ marginTop: 0 }}>Opens a window to set the role, times, pay, minimum call and crew.</p>
+        <button type="button" className="btn primary block" onClick={() => openShiftModal()}>+ Add shift</button>
       </section>
       <Phases eventId={id} phases={d.phases} onChanged={load} onError={setError} />
       </aside>

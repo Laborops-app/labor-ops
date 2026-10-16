@@ -1719,3 +1719,4 @@ a.cs-co:hover b { color: var(--primary); }
 .phase-plan-row.off .phase-plan-day { color: var(--muted); text-decoration: line-through; }
 .phase-plan-day { font-size: 14px; font-weight: 600; }
 .phase-plan-row input:not([type]) { padding: 0.4rem 0.6rem; background: var(--surface); }
+.phase-tabs .tab.on .muted { color: inherit; opacity: .85; }
