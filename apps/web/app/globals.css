@@ -1709,3 +1709,13 @@ a.cs-co:hover b { color: var(--primary); }
 .os-add-time { align-self: flex-start; font-size: 13px; padding: 2px 0; }
 .os-crew li.os-fix { display: block; border-left-color: transparent; }
 .time-entry-edit input[type="datetime-local"] { min-width: 190px; }
+/* new event: phases per day */
+.phase-plan { display: grid; gap: 8px; margin: 4px 0 8px; }
+.phase-plan .check { display: flex; gap: 8px; align-items: flex-start; }
+.phase-plan .check input { width: auto; margin-top: 3px; }
+.phase-plan-list { display: grid; gap: 6px; max-height: 280px; overflow-y: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
+.phase-plan-row { display: grid; grid-template-columns: auto 8.5rem 1fr; gap: 10px; align-items: center; }
+.phase-plan-row > input[type="checkbox"] { width: auto; }
+.phase-plan-row.off .phase-plan-day { color: var(--muted); text-decoration: line-through; }
+.phase-plan-day { font-size: 14px; font-weight: 600; }
+.phase-plan-row input:not([type]) { padding: 0.4rem 0.6rem; background: var(--surface); }

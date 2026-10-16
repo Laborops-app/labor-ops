@@ -1,4 +1,5 @@
 'use client';
+import PhasePlanner, { type PlannedPhase } from '@/components/PhasePlanner';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -52,6 +53,7 @@ function Body() {
   const customers = useCustomerList();
   const rmSend = useRentmanSend();
   const [made, setMade] = useState<{ id: string; warning: string } | null>(null);
+  const [plan, setPlan] = useState<PlannedPhase[] | null>(null);
 
   useEffect(() => {
     api<{ events: Ev[] }>('/api/events')
@@ -64,7 +66,7 @@ function Body() {
     setError('');
     try {
       const r = await api<{ event: { id: string }; warning?: string }>('/api/events', {
-        body: { ...f, ...customerBody(cust), venue: f.venue || null, address: f.address || null, rentmanProjectId: rm, pushToRentman: !rm && rmSend.on ? true : undefined },
+        body: { ...f, ...customerBody(cust), venue: f.venue || null, address: f.address || null, rentmanProjectId: rm, pushToRentman: !rm && rmSend.on ? true : undefined, phases: plan ? plan.filter((p) => p.on && p.label.trim()).map((p) => ({ label: p.label.trim(), date: p.date })) : undefined },
       });
       // Rentman trouble does not stop the event; say so before moving on.
       if (r.warning) setMade({ id: r.event.id, warning: r.warning });
@@ -232,6 +234,7 @@ function Body() {
                 <input type="date" value={f.endDate} min={f.startDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} required />
               </label>
             </div>
+            <PhasePlanner start={f.startDate} end={f.endDate} value={plan} onChange={setPlan} />
             <RentmanSend state={rmSend} disabled={!!rm} note="This event is already linked to the Rentman project picked above." />
             <div className="acts">
               <button type="button" className="btn" onClick={() => setAdding(false)}>Cancel</button>

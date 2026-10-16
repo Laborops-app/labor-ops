@@ -44,6 +44,8 @@ const eventBody = z.object({
     .optional(),
   // Also send the new event to Rentman as a project request (with the customer created there if needed).
   pushToRentman: z.boolean().optional(),
+  // New event only: phases to create straight away, one per day (e.g. Load in, Show, Strike).
+  phases: z.array(z.object({ label: z.string().trim().min(1).max(80), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })).max(62).optional(),
 });
 const shiftBody = z.object({
   roleName: z.string().trim().min(1).max(100),
@@ -264,6 +266,7 @@ export async function eventRoutes(app: FastifyInstance) {
     if (b.endDate < b.startDate) return reply.code(400).send({ error: 'End date is before the start date' });
     if (b.newCustomer && b.customerId) return reply.code(400).send({ error: 'Pick an existing customer or make a new one, not both' });
     if (b.pushToRentman && b.rentmanProjectId) return reply.code(400).send({ error: 'This event is already linked to a Rentman project' });
+    if (b.phases?.some((p) => p.date < b.startDate || p.date > b.endDate)) return reply.code(400).send({ error: 'Every phase must be within the event dates' });
     let row;
     try {
       row = await withTenant(req.user.tid, async (c) => {
@@ -291,8 +294,10 @@ export async function eventRoutes(app: FastifyInstance) {
         const token = await getToken(c);
         if (token) await syncEquipment(c, req.user.tid, token, rentmanId).catch(() => {});
       }
+      for (const p of [...(b.phases ?? [])].sort((x, y) => x.date.localeCompare(y.date)))
+        await addDayPhases(c, req.user.tid, r.rows[0].id, p.label, p.date, p.date);
       await advanceStage(c, custId, 'active');
-      await audit(c, req.user.tid, req.user.sub, 'event.create', 'event', r.rows[0].id);
+      await audit(c, req.user.tid, req.user.sub, 'event.create', 'event', r.rows[0].id, b.phases?.length ? { phases: b.phases.length } : undefined);
       return { ...r.rows[0], new_customer: made };
     });
     } catch (e) {

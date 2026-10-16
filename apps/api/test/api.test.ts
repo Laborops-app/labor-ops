@@ -3166,3 +3166,12 @@ test('editing time: coordinators any entry (asked if exported), leads only durin
   assert.equal(ex.json.reason, 'exported');
   assert.equal((await call(a, 'PUT', `/api/time-entries/${late}`, { clockIn: start(-7), clockOut: start(-4), force: true })).status, 200);
 });
+
+test('new event: phases can be made with it, one per day within the dates', async () => {
+  const a = await register('newph');
+  const r = await call(a, 'POST', '/api/events', { name: 'Expo', startDate: '2035-04-01', endDate: '2035-04-03', phases: [{ label: 'Strike', date: '2035-04-03' }, { label: 'Load in', date: '2035-04-01' }, { label: 'Show', date: '2035-04-02' }] });
+  assert.equal(r.status, 201, r.text);
+  const d = (await call(a, 'GET', `/api/events/${r.json.event.id}`)).json;
+  assert.deepEqual(d.phases.map((p: any) => [p.label, p.starts_on.slice(0, 10), p.ends_on.slice(0, 10)]), [['Load in', '2035-04-01', '2035-04-01'], ['Show', '2035-04-02', '2035-04-02'], ['Strike', '2035-04-03', '2035-04-03']]);
+  assert.equal((await call(a, 'POST', '/api/events', { name: 'Bad', startDate: '2035-04-01', endDate: '2035-04-01', phases: [{ label: 'Show', date: '2035-04-05' }] })).status, 400);
+});
