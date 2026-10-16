@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
  * kind: ok = can work it · busy = already on another shift that day · soft = time off / outside availability
  * (needs an override) · blocked = missing a required certificate.
  */
-export type PickOption = { id: string; name: string; sub?: string; stars?: number; kind?: 'ok' | 'busy' | 'soft' | 'blocked'; note?: string; flag?: string };
+export type PickOption = { id: string; name: string; sub?: string; stars?: number; starsOverall?: boolean; kind?: 'ok' | 'busy' | 'soft' | 'blocked'; note?: string; flag?: string };
 
 // ---------- "guess what you're typing" ----------
 const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -43,8 +43,14 @@ export function matchScore(name: string, sub: string | undefined, typed: string)
   return 0;
 }
 
-const Stars = ({ v }: { v?: number }) =>
-  v ? <span className="rt-inline" title={`Rated ${v.toFixed(1)} of 5 for this position`}>★ {v.toFixed(1)}</span> : <span className="pick-unrated" title="No rating for this position yet">☆ new</span>;
+const Stars = ({ v, overall }: { v?: number; overall?: boolean }) =>
+  v ? (
+    <span className={`pick-stars${overall ? ' overall' : ''}`} title={overall ? `Rated ${v.toFixed(1)} of 5 overall (no rating for this position yet)` : `Rated ${v.toFixed(1)} of 5 for this position`}>
+      ★ {v.toFixed(1)}{overall && <span className="pick-stars-note"> overall</span>}
+    </span>
+  ) : (
+    <span className="pick-unrated" title="Not rated yet">☆ not rated</span>
+  );
 
 /** Highlights the part of the name that matches what was typed. */
 function Hl({ name, q }: { name: string; q: string }) {
@@ -154,7 +160,7 @@ export default function CrewPick({ options, onPick, onClose, title = 'Add crew',
                 return (
                   <button key={o.id} type="button" role="option" aria-selected={on} className={`crew-pick-item${on ? ' on' : ''}`} disabled={busy || k === 'blocked'} onClick={() => choose(o)} onMouseEnter={() => { const i = pickable.indexOf(o); if (i >= 0) setActive(i); }}>
                     <span className="pick-name">
-                      <b aria-hidden="true">+</b> <Hl name={o.name} q={q} /> <Stars v={o.stars} />
+                      <b aria-hidden="true">+</b> <Hl name={o.name} q={q} /> <Stars v={o.stars} overall={o.starsOverall} />
                       {o.flag ? <span className="rt-flag pick" title={`Tagged in past reviews: ${o.flag}. You will be asked to confirm.`}>⚠ {o.flag}</span> : null}
                     </span>
                     <span className="muted small pick-sub">{o.note ?? o.sub}</span>

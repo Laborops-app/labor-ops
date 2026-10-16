@@ -25,18 +25,26 @@ type CrewRate = { user_id: string; user_name: string; pay_type: 'hourly' | 'day'
 type Elig = { user_id: string; missing_certs: string[]; time_off: boolean; outside_availability: boolean; booked?: { role_name: string; event_name: string; starts_at: string; ends_at: string } | null };
 /** Stars for a position; on a lead role ("Audio Lead") the rating as that position ("Audio") counts. */
 const starsFor = (m: { ratings?: Record<string, number> }, role: string) => {
+  if (!role) return 0;
   const k = roleKey(role);
   return m.ratings?.[k] ?? m.ratings?.[k.replace(/\s*\blead$/, '').trim()] ?? 0;
 };
+/** Stars to show and sort by: their rating for this position, else their overall average (marked "overall"). */
+const starsShown = (m: Member, role: string): { v: number; overall: boolean } => {
+  const pos = starsFor(m, role);
+  if (pos) return { v: pos, overall: false };
+  return m.rating_avg ? { v: Number(m.rating_avg), overall: true } : { v: 0, overall: false };
+};
 /** One crew member as an option in the crew picker: why they can or cannot work it, and their stars for the position. */
-const pickOption = (m: Member, e: Elig | undefined, stars: number, sub?: string, eventName?: string): PickOption => {
+const pickOption = (m: Member, e: Elig | undefined, stars: { v: number; overall: boolean } | number, sub?: string, eventName?: string): PickOption => {
+  const st = typeof stars === 'number' ? { v: stars, overall: false } : stars;
   const kind = e?.missing_certs.length ? 'blocked' : e?.booked ? 'busy' : e?.time_off || e?.outside_availability ? 'soft' : 'ok';
   const note =
     kind === 'blocked' ? `needs ${e!.missing_certs.join(', ')}`
     : kind === 'busy' ? `Booked: ${e!.booked!.role_name}${e!.booked!.event_name === eventName ? ' on this event' : ` at ${e!.booked!.event_name}`}, ${fmtTime(e!.booked!.starts_at)}–${fmtTime(e!.booked!.ends_at)}`
     : kind === 'soft' ? (e?.time_off ? 'time off' : 'not available then')
     : undefined;
-  return { id: m.id, name: m.name, sub: sub ?? m.skills.join(', '), stars: stars || undefined, kind, note, flag: kind === 'blocked' ? undefined : flagOf(m) };
+  return { id: m.id, name: m.name, sub: sub ?? m.skills.join(', '), stars: st.v || undefined, starsOverall: st.overall, kind, note, flag: kind === 'blocked' ? undefined : flagOf(m) };
 };
 type Shift = {
   id: string;
@@ -62,7 +70,7 @@ type Shift = {
 };
 type Overtime = { otAfter: number | null; state: string | null; effectiveState: string | null; stateFromAddress: boolean; companyDailyOt: number; otMult: number; dtAfter: number | null; dtMult: number };
 type Detail = { event: EventFull; shifts: Shift[]; phases: Phase[]; overtime?: Overtime; crewRates?: CrewRate[] };
-type Member = { id: string; name: string; role: string; skills: string[]; active: boolean; ratings?: Record<string, number>; no_show_count?: number; no_rehire_count?: number };
+type Member = { id: string; name: string; role: string; skills: string[]; active: boolean; ratings?: Record<string, number>; rating_avg?: number | null; review_count?: number; no_show_count?: number; no_rehire_count?: number };
 const times = (n: number) => (n === 1 ? '' : ` ×${n}`);
 /** Short warning for the crew picker, from past reviews. */
 const LEAD_ROLE = /(\(\s*lead\s*\)|\blead)\s*$/i;
@@ -506,9 +514,9 @@ function Body({ me }: { me: Me }) {
           const full = active.length >= s.headcount;
           const st = new Map(s.crew_status.map((x) => [x.user_id, x]));
           const candidates = crew.filter((m) => !assignedIds.has(m.id)).map((m) => ({ m, e: st.get(m.id) }));
-          const stars = (m: Member) => starsFor(m, s.role_name);
+          const stars = (m: Member) => starsShown(m, s.role_name).v;
           const best = (a: { m: Member }, b: { m: Member }) => Number(!!flagOf(a.m)) - Number(!!flagOf(b.m)) || stars(b.m) - stars(a.m) || a.m.name.localeCompare(b.m.name);
-          const options = [...candidates].sort(best).map(({ m, e }) => pickOption(m, e, stars(m), undefined, d.event.name));
+          const options = [...candidates].sort(best).map(({ m, e }) => pickOption(m, e, starsShown(m, s.role_name), undefined, d.event.name));
           return (
             <section className="card" key={s.id}>
               <div className="row space">
@@ -978,8 +986,8 @@ function Body({ me }: { me: Me }) {
                     loading={!newElig}
                     options={crew
                       .filter((m) => !f.crew.includes(m.id))
-                      .map((m) => ({ m, fit: !!f.roleName && m.skills.some((k) => roleKey(k) === roleKey(f.roleName)), st: f.roleName ? starsFor(m, f.roleName) : 0 }))
-                      .sort((a, b) => Number(!!flagOf(a.m)) - Number(!!flagOf(b.m)) || b.st - a.st || Number(b.fit) - Number(a.fit) || a.m.name.localeCompare(b.m.name))
+                      .map((m) => ({ m, fit: !!f.roleName && m.skills.some((k) => roleKey(k) === roleKey(f.roleName)), st: starsShown(m, f.roleName) }))
+                      .sort((a, b) => Number(!!flagOf(a.m)) - Number(!!flagOf(b.m)) || b.st.v - a.st.v || Number(b.fit) - Number(a.fit) || a.m.name.localeCompare(b.m.name))
                       .map(({ m, fit, st }) => pickOption(m, newElig?.get(m.id), st, fit ? `${m.skills.join(', ')} · matches role` : m.skills.join(', '), d.event.name))}
                     onPick={(o) => setF((x) => ({ ...x, crew: [...x.crew, o.id] }))}
                   />

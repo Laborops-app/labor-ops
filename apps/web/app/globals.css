@@ -723,7 +723,7 @@ button.star:hover, button.star:focus-visible { color: #e5a50a; }
 
 /* quick add / remove crew on shifts */
 .crew-slots { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin: 0.25rem 0 0.5rem; }
-.slot-add { appearance: none; border: 1.5px dashed var(--border-strong); background: transparent; color: var(--link); border-radius: 999px; padding: 0.2rem 0.75rem; font-weight: 600; font-size: 0.85rem; cursor: pointer; }
+.slot-add { appearance: none; border: 1.5px dashed var(--border-strong); background: transparent; color: var(--link); border-radius: 999px; padding: 0.45rem 1.1rem; font-weight: 600; font-size: 0.95rem; cursor: pointer; min-height: 38px; }
 .slot-add:hover { border-color: var(--primary); background: var(--primary-soft); }
 .crew-chip { display: inline-flex; align-items: center; gap: 0.3rem; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 0.15rem 0.35rem 0.15rem 0.7rem; font-size: 0.85rem; }
 .crew-pick-anchor { position: relative; }
@@ -1720,3 +1720,13 @@ a.cs-co:hover b { color: var(--primary); }
 .phase-plan-day { font-size: 14px; font-weight: 600; }
 .phase-plan-row input:not([type]) { padding: 0.4rem 0.6rem; background: var(--surface); }
 .phase-tabs .tab.on .muted { color: inherit; opacity: .85; }
+
+/* bigger crew picker, stars always visible */
+.crew-pick { width: min(480px, calc(100vw - 32px)); padding: 12px; }
+.crew-pick-list { max-height: 420px; }
+.crew-pick .crew-pick-item { padding: 9px 10px; font-size: 15px; }
+.crew-pick .pick-search input { font-size: 15px; padding-top: .7rem; padding-bottom: .7rem; }
+.pick-stars { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: var(--warn-bg); color: var(--warn); font-size: 13px; font-weight: 700; }
+.pick-stars.overall { background: transparent; border: 1px solid var(--warn); }
+.pick-stars-note { font-weight: 500; font-size: 11px; opacity: .9; }
+.pick-unrated { color: var(--muted); font-size: 12px; margin-left: 6px; }
