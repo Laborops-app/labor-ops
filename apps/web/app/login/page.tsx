@@ -6,8 +6,9 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, homeFor } from '@/lib/api';
 import { Banner } from '@/components/ui';
+import DemoBanner from '@/components/DemoBanner';
 
-type Demo = { enabled: boolean; password?: string; accounts?: { label: string; email: string }[] };
+type Demo = { enabled: boolean; signupOpen?: boolean; password?: string; accounts?: { label: string; email: string }[] };
 
 export default function Login() {
   const router = useRouter();
@@ -73,6 +74,7 @@ export default function Login() {
 
   return (
     <div className="auth">
+      <DemoBanner />
       <div className="auth-theme">
         <ThemeToggle />
       </div>
@@ -125,9 +127,11 @@ export default function Login() {
         <p className="muted small center-text">
           <Link href="/forgot">Forgot your password?</Link>
         </p>
-        <p className="muted small center-text">
-          New company? <Link href="/signup">Create an account</Link>
-        </p>
+        {demo.signupOpen !== false && (
+          <p className="muted small center-text">
+            New company? <Link href="/signup">Create an account</Link>
+          </p>
+        )}
         {demo.enabled && (
           <div className="demo-box">
             <div className="small muted">This is a demo with sample data. Jump in as:</div>
@@ -138,6 +142,17 @@ export default function Login() {
                 </button>
               ))}
             </div>
+            <details className="demo-logins">
+              <summary className="small">Show the sign-in details</summary>
+              <table className="small">
+                <tbody>
+                  {demo.accounts?.map((a) => (
+                    <tr key={a.email}><td className="muted">{a.label}</td><td><code>{a.email}</code></td></tr>
+                  ))}
+                  <tr><td className="muted">Password</td><td><code>{demo.password}</code></td></tr>
+                </tbody>
+              </table>
+            </details>
           </div>
         )}
       </div>

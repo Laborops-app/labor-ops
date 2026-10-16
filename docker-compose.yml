@@ -56,6 +56,7 @@ services:
       - "127.0.0.1:9001:9001"
 
   api:
+    image: laborops-api:latest
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -109,6 +110,7 @@ services:
       PLATFORM_URL: https://${PLATFORM_DOMAIN:-sysadmin.laborops.app}
 
   web:
+    image: laborops-web:latest
     build:
       context: .
       dockerfile: apps/web/Dockerfile
@@ -116,20 +118,82 @@ services:
     depends_on:
       - api
 
+  # ---------- Public demo (demoapp.laborops.app) ----------
+  # Started on demand by the demo gate, wiped and restarted every 2 hours, stopped after an hour with nobody using it.
+  # It has its own throwaway database (in memory) and never sends real email or texts.
+  demo-gate:
+    build: ./infra/demo-gate
+    restart: unless-stopped
+    environment:
+      COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-laborops}
+      PROJECT_DIR: /project
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-LaborOps-Demo-1}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./:/project:ro
+
+  demo-db:
+    image: postgres:16-alpine
+    profiles: ["demo"]
+    environment:
+      POSTGRES_USER: laborops
+      POSTGRES_PASSWORD: demo-only
+      POSTGRES_DB: laborops
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U laborops -d laborops"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  demo-api:
+    image: laborops-api:latest
+    profiles: ["demo"]
+    depends_on:
+      demo-db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_ADMIN_URL: postgres://laborops:demo-only@demo-db:5432/laborops
+      DATABASE_URL: postgres://laborops_app:demo-only-app@demo-db:5432/laborops
+      APP_DB_PASSWORD: demo-only-app
+      JWT_SECRET: demo-${JWT_SECRET}
+      SETTINGS_ENCRYPTION_KEY: demo-${JWT_SECRET}
+      COOKIE_SECURE: "true"
+      SEED_DEMO: "true"
+      DEMO_BIG: "true"
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-LaborOps-Demo-1}
+      APP_URL: https://${DEMO_DOMAIN:-demoapp.laborops.app}
+      PLATFORM_URL: https://${DEMO_DOMAIN:-demoapp.laborops.app}
+      BACKUPS_ENABLED: "false"
+      # No email or text providers: messages are only logged.
+
+  demo-web:
+    image: laborops-web:latest
+    profiles: ["demo"]
+    depends_on:
+      - demo-api
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
     depends_on:
       - web
       - api
+      - demo-gate
     ports:
       - "80:80"
       - "443:443"
     environment:
       DOMAIN: ${DOMAIN:?set DOMAIN in .env}
       PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:-sysadmin.laborops.app}
+      SITE_DOMAIN: ${SITE_DOMAIN:-laborops.app}
+      DEMO_DOMAIN: ${DEMO_DOMAIN:-demoapp.laborops.app}
     volumes:
       - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./infra/site:/srv/site:ro
       - caddy_data:/data
       - caddy_config:/config
 

@@ -65,13 +65,21 @@ export async function buildApp() {
     config.seedDemo
       ? {
           enabled: true,
+          signupOpen: config.signupOpen,
           password: config.demoPassword,
-          accounts: [
-            { label: 'Labor Coordinator', email: 'manager@demo.laborops.app' },
-            { label: 'Crew member', email: 'crew1@demo.laborops.app' },
-          ],
+          accounts: config.demoBig
+            ? [
+                { label: 'Admin', email: 'admin@demo.laborops.app' },
+                { label: 'HR', email: 'hr@demo.laborops.app' },
+                { label: 'Labor Coordinator', email: 'manager@demo.laborops.app' },
+                { label: 'Crew member', email: 'crew1@demo.laborops.app' },
+              ]
+            : [
+                { label: 'Labor Coordinator', email: 'manager@demo.laborops.app' },
+                { label: 'Crew member', email: 'crew1@demo.laborops.app' },
+              ],
         }
-      : { enabled: false },
+      : { enabled: false, signupOpen: config.signupOpen },
   );
 
   await app.register(authRoutes);

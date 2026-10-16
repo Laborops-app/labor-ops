@@ -7,6 +7,7 @@ import { api, ApiError, homeFor, Me, Role, roleLabel } from '@/lib/api';
 import ThemeToggle from '@/components/ThemeToggle';
 import InstallApp, { InstallPopup } from '@/components/InstallApp';
 import PunchSync from '@/components/PunchSync';
+import DemoBanner from '@/components/DemoBanner';
 import NotificationBell from '@/components/NotificationBell';
 import Sidebar from '@/components/Sidebar';
 import AppTabs from '@/components/AppTabs';
@@ -397,6 +398,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
 
   return (
     <MeContext.Provider value={me}>
+    <DemoBanner />
     <div className="app">
       <Sidebar items={items} me={me} path={path} chatUnread={chatUnread} />
 

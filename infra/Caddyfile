@@ -3,6 +3,9 @@
 #   {$DOMAIN}            the app companies use:   /api/* -> API, everything else -> web
 #   {$PLATFORM_DOMAIN}   the platform console:    /platform pages and /api/platform/* only
 #
+#   {$SITE_DOMAIN}        the public website (static files in infra/site); www. redirects to it
+#   {$DEMO_DOMAIN}        the public demo, through the demo gate (starts it on demand)
+#
 # The console is only reachable on its own address, so its sign-in cookie never touches the company app.
 
 (common) {
@@ -56,5 +59,28 @@
 
 	handle {
 		redir * /platform 302
+	}
+}
+
+{$SITE_DOMAIN} {
+	import common
+	root * /srv/site
+	try_files {path} {path}.html {path}/index.html
+	file_server
+	handle_errors {
+		rewrite * /index.html
+		file_server
+	}
+}
+
+www.{$SITE_DOMAIN} {
+	redir https://{$SITE_DOMAIN}{uri} 301
+}
+
+{$DEMO_DOMAIN} {
+	import common
+	header X-Robots-Tag "noindex, nofollow"
+	reverse_proxy demo-gate:8080 {
+		flush_interval -1
 	}
 }

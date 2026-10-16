@@ -18,6 +18,10 @@ export const config = {
   jwtSecret: jwtSecret(),
   cookieSecure: process.env.COOKIE_SECURE === 'true',
   seedDemo: process.env.SEED_DEMO === 'true',
+  // The public demo (demoapp.laborops.app): a much bigger sample company, and all four logins shown on the sign-in page.
+  demoBig: process.env.DEMO_BIG === 'true',
+  // New companies may sign up. Off in production unless SIGNUP_OPEN=true (always on when developing and testing).
+  signupOpen: process.env.SIGNUP_OPEN === 'true' || (process.env.NODE_ENV !== 'production' && process.env.SIGNUP_OPEN !== 'false'),
   demoPassword: process.env.DEMO_PASSWORD ?? 'LaborOps-Demo-1',
   // Public base URL, used for links in emails/SMS and for verifying Twilio webhooks.
   appUrl: (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/+$/, ''),

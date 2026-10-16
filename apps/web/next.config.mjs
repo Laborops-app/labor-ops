@@ -2,6 +2,8 @@
 const nextConfig = {
   output: 'standalone',
   poweredByHeader: false,
+  // Local testing of the demo gate (dev server only).
+  allowedDevOrigins: ['demoapp.laborops.app'],
   // Skip the image optimiser (needs extra native libraries in the container); our logos are already small.
   images: { unoptimized: true },
   // In production Caddy sends /api/* straight to the API container.

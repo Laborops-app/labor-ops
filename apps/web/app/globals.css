@@ -1829,3 +1829,16 @@ details.card.profile-fold > summary::before { content: none; }
 .archive-list li { flex-wrap: wrap; }
 .archive-acts { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: flex-start; justify-content: flex-end; }
 .archive-acts > .card { flex-basis: 100%; }
+
+/* ---------- public demo ---------- */
+.demo-banner { position: sticky; top: 0; z-index: 70; display: flex; align-items: center; justify-content: center; gap: 0.6rem; flex-wrap: wrap;
+  background: var(--primary); color: var(--on-primary); font-size: 0.86rem; padding: 0.4rem 1rem; text-align: center; }
+.demo-banner.soon { background: var(--danger-solid); }
+.demo-banner a { color: inherit; opacity: 0.85; }
+.demo-clock { font-variant-numeric: tabular-nums; font-weight: 700; }
+.auth .demo-banner { position: fixed; left: 0; right: 0; }
+.demo-logins { margin-top: 0.6rem; text-align: left; }
+.demo-logins summary { cursor: pointer; color: var(--link); }
+.demo-logins table { margin-top: 0.4rem; width: 100%; }
+.demo-logins td { padding: 0.15rem 0.3rem; }
+.auth:has(.demo-banner) { padding-top: 56px; }

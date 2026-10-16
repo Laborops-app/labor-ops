@@ -35,6 +35,7 @@ export async function authRoutes(app: FastifyInstance) {
   const limit = { config: { rateLimit: { max: Number(process.env.AUTH_RATE_MAX ?? 10), timeWindow: '1 minute' } } };
 
   app.post('/api/auth/register', limit, async (req, reply) => {
+    if (!config.signupOpen) return reply.code(403).send({ error: 'LaborOps is not taking new companies right now. Try the live demo at laborops.app.', reason: 'signup_closed' });
     const body = registerBody.parse(req.body);
     const existing = await pool.query('SELECT 1 FROM auth_find_user($1)', [body.email]);
     if (existing.rowCount) return reply.code(409).send({ error: 'That email is already registered' });

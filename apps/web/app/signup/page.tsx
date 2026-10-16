@@ -2,7 +2,7 @@
 import Logo from '@/components/Logo';
 import ThemeToggle from '@/components/ThemeToggle';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { Banner } from '@/components/ui';
@@ -12,6 +12,10 @@ export default function Signup() {
   const [f, setF] = useState({ company: '', name: '', email: '', password: '' });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState<boolean | null>(null);
+  useEffect(() => {
+    api<{ signupOpen?: boolean }>('/api/demo').then((r) => setOpen(r.signupOpen !== false)).catch(() => setOpen(true));
+  }, []);
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
 
   const submit = async (e: React.FormEvent) => {
@@ -35,6 +39,15 @@ export default function Signup() {
       <div className="auth-card">
         <Logo width={160} className="auth-logo" />
         <h1>Create your company account</h1>
+        {open === false ? (
+          <div className="banner info" role="status">
+            <div>
+              <p style={{ marginTop: 0 }}>LaborOps isn&apos;t taking new companies just yet. Try the live demo in the meantime: it has a full sample company to explore.</p>
+              <a className="btn primary" href="https://laborops.app/#demo">Try the live demo</a>
+            </div>
+          </div>
+        ) : (
+        <>
         {error && <Banner>{error}</Banner>}
         <form onSubmit={submit}>
           <label>
@@ -57,6 +70,8 @@ export default function Signup() {
             {busy ? 'Creating…' : 'Create account'}
           </button>
         </form>
+        </>
+        )}
         <p className="muted small center-text">
           Already have an account? <Link href="/login">Sign in</Link>
         </p>

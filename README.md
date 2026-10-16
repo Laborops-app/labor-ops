@@ -112,6 +112,17 @@ read, creates the buckets and moves any files still in Postgres. Storage, bucket
 schedule are changed on the **Platform** page (settings are saved encrypted in the database). `S3_*` / `BACKUP_S3_*` in `.env`
 still work as a fallback when nothing is saved on the page.
 
+## Website and public demo
+
+- **laborops.app** is the public website: static pages in `infra/site` (home, `/subscribe` pricing, `/signup`), served by Caddy. New companies can't sign up yet (`SIGNUP_OPEN` is off in production; the app's sign-up page and API say so), so every "Try the demo" button opens a window with the demo sign-ins and a link to the demo.
+- **demoapp.laborops.app** is the public demo. Caddy sends it to the **demo gate** (`infra/demo-gate`), a small always-on service that:
+  - starts the demo stack (`demo-db`, `demo-api`, `demo-web`, compose profile `demo`) when someone opens it, showing a spinning logo and an estimated percentage while it boots (about 10–40 s);
+  - seeds a big sample company (`DEMO_BIG`): 45 crew, a dozen customers, ~40 events with phases, shifts, approved time, ratings, quotes, invoices and an archive, plus Admin, HR, Labor Coordinator and Crew sign-ins (password `LaborOps-Demo-1`);
+  - shows a countdown banner in the app and wipes and restarts the demo every 2 hours (the demo database lives in memory);
+  - shuts the demo down after an hour with nobody using it.
+  The demo never sends email or texts and has its own database and secrets. The gate controls Docker through the Docker socket, so it only runs those fixed commands for the three demo services.
+- DNS: `laborops.app`, `www.laborops.app` and `demoapp.laborops.app` point at the server (DNS only, so Caddy can get certificates). Change the names with `SITE_DOMAIN` and `DEMO_DOMAIN` in `.env`.
+
 ## Platform console
 
 The platform console runs on its own address (`PLATFORM_DOMAIN`, default `sysadmin.laborops.app`; point its DNS at the same
