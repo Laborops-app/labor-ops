@@ -35,6 +35,11 @@ function Body() {
   const [error, setError] = useState('');
   const [ok, setOk] = useState('');
   const [busy, setBusy] = useState(false);
+  // The company's pay periods (Labor rules): the page opens on the last full one.
+  const [pp, setPp] = useState<{ kind: string; current: { from: string; to: string }; previous: { from: string; to: string } } | null>(null);
+  useEffect(() => {
+    api<NonNullable<typeof pp>>('/api/pay-periods').then((r) => { setPp(r); setPeriod({ from: r.previous.from, to: r.previous.to }); }).catch(() => undefined);
+  }, []);
 
   const load = () => {
     setError('');
@@ -79,7 +84,15 @@ function Body() {
             To
             <input type="date" value={period.to} min={period.from} onChange={(e) => e.target.value && setPeriod({ ...period, to: e.target.value })} />
           </label>
-          <button type="button" className="btn ghost small" onClick={() => setPeriod(lastWeek())}>Last week</button>
+          {pp ? (
+            <>
+              <button type="button" className={`btn small ${period.from === pp.previous.from && period.to === pp.previous.to ? '' : 'ghost'}`} onClick={() => setPeriod({ ...pp.previous })}>Last pay period</button>
+              <button type="button" className={`btn small ${period.from === pp.current.from && period.to === pp.current.to ? '' : 'ghost'}`} onClick={() => setPeriod({ ...pp.current })}>This pay period</button>
+              <span className="muted small">Pay periods are {pp.kind === 'weekly' ? 'weekly' : 'every two weeks'} (Labor rules).</span>
+            </>
+          ) : (
+            <button type="button" className="btn ghost small" onClick={() => setPeriod(lastWeek())}>Last week</button>
+          )}
         </div>
       </section>
 

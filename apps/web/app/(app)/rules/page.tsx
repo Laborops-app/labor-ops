@@ -6,7 +6,7 @@ import { api } from '@/lib/api';
 
 type Rules = {
   minRestHours: number; maxDailyHours: number; dailyOtAfter: number; weeklyOtAfter: number; otMultiplier: number;
-  nightStart: string; nightEnd: string; nightPremiumPct: number; sundayPremiumPct: number; holidayPremiumPct: number; holidays: string[]; defaultState: string | null; autoApprove?: boolean; autoApproveGraceMin?: number; lateAlertMin?: number; noShowMin?: number; autoClockoutH?: number;
+  nightStart: string; nightEnd: string; nightPremiumPct: number; sundayPremiumPct: number; holidayPremiumPct: number; holidays: string[]; defaultState: string | null; autoApprove?: boolean; autoApproveGraceMin?: number; lateAlertMin?: number; noShowMin?: number; autoClockoutH?: number; payPeriod?: 'weekly' | 'biweekly'; payPeriodStart?: string;
 };
 type StateRule = { state: string; otMult: number; dtAfter: number | null; dtMult: number; custom: boolean };
 
@@ -72,6 +72,24 @@ function Body() {
             <Num label="Grace either side" suffix="minutes" step={1} value={r.autoApproveGraceMin ?? 10} onChange={(n) => set({ autoApproveGraceMin: n })} hint="Clocking in this much before the start, or out this much after the end, still counts as on schedule. Leaving early always counts." />
           </div>
           <p className="muted">Anything outside that waits on the Timesheets page for a coordinator to approve.</p>
+        </section>
+        <section className="card">
+          <h2>Pay periods</h2>
+          <div className="grid2">
+            <label>
+              How often you run payroll
+              <select value={r.payPeriod ?? 'biweekly'} onChange={(e) => set({ payPeriod: e.target.value as 'weekly' | 'biweekly' })}>
+                <option value="biweekly">Every two weeks</option>
+                <option value="weekly">Every week</option>
+              </select>
+            </label>
+            <label>
+              First day of a pay period
+              <input type="date" value={r.payPeriodStart ?? '2026-01-05'} onChange={(e) => e.target.value && set({ payPeriodStart: e.target.value })} />
+              <span className="muted small">Any period you have run; the rest follow from it.</span>
+            </label>
+          </div>
+          <p className="muted">Crew see their earnings for each pay period on My shifts, and Payroll opens on the last full period.</p>
         </section>
         <section className="card">
           <h2>Late, no-shows and forgotten clock-outs</h2>

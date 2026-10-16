@@ -1795,3 +1795,15 @@ th.num .th-sort { text-align: right; }
 .profile-fold-body { padding: 0 1.1rem 1rem; border-top: 1px solid var(--border); padding-top: 0.75rem; }
 .profile-fold-body .card { box-shadow: none; }
 details.card.profile-fold > summary::before { content: none; }
+
+/* ---------- my earnings ---------- */
+.earnings-head { align-items: flex-start; margin-bottom: 0.75rem; }
+.earnings .icon-btn { font-size: 1.3rem; line-height: 1; }
+.earn-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.6rem; }
+.earn-tile { background: var(--surface-2); border-radius: 12px; padding: 0.7rem 0.85rem; }
+.earn-tile.main { background: var(--primary-soft); }
+.earn-label { font-size: 0.75rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.earn-value { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 0.15rem; }
+.earn-tile.main .earn-value { color: var(--primary); }
+.earn-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (max-width: 599px) { .earn-grid { grid-template-columns: 1fr 1fr; } }

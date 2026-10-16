@@ -452,7 +452,7 @@ test('profile: edit details, change password, upload certificates that a manager
   const prof = (await call(c1.session, 'GET', '/api/my/profile')).json;
   assert.equal(prof.user.name, 'Pat Crew');
   assert.equal(prof.user.emergency_name, 'Kim');
-  assert.deepEqual(prof.user.skills, ['Audio', 'Stage']);
+  assert.deepEqual(prof.user.skills, [], 'crew cannot set their own skills');
   assert.equal((await call(c1.session, 'GET', '/api/auth/me')).json.user.name, 'Pat Crew');
   // the manager sees the details
   const seen = (await call(a, 'GET', '/api/crew')).json.crew.find((m: any) => m.id === c1.id);
@@ -3415,4 +3415,51 @@ test('reports: fill rate, scheduled vs worked, cost vs billed, margin, labor bud
   assert.match(csv.text, /^Event,Customer,Start/);
   assert.match(csv.text, /Gala/);
   assert.equal((await call(a, 'GET', '/api/reports?from=2030-02-01&to=2030-01-01')).status, 400);
+});
+
+test('crew cannot change their own skills; coordinators still can', async () => {
+  const a = await register('selfsk');
+  const c1 = await mkCrew(a, 'ssk1');
+  const r = await call(c1.session, 'PATCH', '/api/my/profile', { skills: ['Rigger'], bio: 'Hi' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json.user.skills, []);
+  assert.equal(r.json.user.bio, 'Hi');
+  assert.equal((await call(a, 'PATCH', '/api/my/profile', { skills: ['Producer'] })).json.user.skills[0], 'Producer');
+});
+
+test('earnings: pay periods (every two weeks), payroll, waiting for approval and scheduled, per period', async () => {
+  const a = await register('earn');
+  const tid = await tenantOf(a);
+  const c1 = await mkCrew(a, 'earn1');
+  assert.equal((await call(a, 'POST', '/api/skills', { name: 'Pusher', payRate: 20 })).status, 201);
+  const rules = (await call(a, 'GET', '/api/labor-rules')).json;
+  assert.equal(rules.payPeriod, 'biweekly');
+  const tz = (await withTenant(tid, (c) => c.query('SELECT timezone FROM tenants'))).rows[0].timezone;
+  const local = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(d);
+  const startDay = local(new Date(Date.now() - 7 * 86400_000));
+  assert.equal((await call(a, 'PUT', '/api/labor-rules', { ...rules, payPeriodStart: startDay })).json.payPeriodStart, startDay);
+  const pp = (await call(c1.session, 'GET', '/api/pay-periods')).json;
+  assert.equal(pp.current.from, startDay);
+  assert.equal(pp.previous.to < pp.current.from, true);
+  const ev = await mkEvent(a);
+  const mk = async (s: number, e: number) => {
+    const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Pusher', startsAt: start(s), endsAt: start(e), headcount: 1 })).json.shift.id;
+    return (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, confirmed: true, override: true })).json.assignment.id as string;
+  };
+  const done = await mk(-30, -26), waiting = await mk(-10, -8);
+  await mk(24, 27);
+  await withTenant(tid, async (c) => {
+    await c.query("INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in, clock_out, status, approved_at) SELECT $1, a.id, a.user_id, s.starts_at, s.ends_at, 'approved', now() FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE a.id = $2", [tid, done]);
+    await c.query("INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in, clock_out, status) SELECT $1, a.id, a.user_id, s.starts_at, s.ends_at, 'submitted' FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE a.id = $2", [tid, waiting]);
+  });
+  const e = (await call(c1.session, 'GET', '/api/my/earnings')).json;
+  assert.equal(e.period.from, startDay);
+  assert.equal(e.payroll.gross, 80);
+  assert.equal(e.payroll.hours, 4);
+  assert.equal(e.pending.pay, 40);
+  assert.equal(e.scheduled.pay, 60);
+  assert.equal(e.estimated.pay, 180);
+  const before = (await call(c1.session, 'GET', '/api/my/earnings?offset=-1')).json;
+  assert.equal(before.period.to < startDay, true);
+  assert.equal(before.estimated.pay, 0);
 });

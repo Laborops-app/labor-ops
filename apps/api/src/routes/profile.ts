@@ -69,7 +69,8 @@ export async function profileRoutes(app: FastifyInstance) {
           has('emergencyName'), b.emergencyName || null,
           has('emergencyPhone'), b.emergencyPhone || null,
           has('bio'), b.bio || null,
-          b.skills ?? null,
+          // Crew can't change their own skills: their labor coordinator sets them.
+          req.user.role === 'crew' ? null : b.skills ?? null,
         ],
       );
       await audit(c, req.user.tid, req.user.sub, 'profile.update', 'user', req.user.sub, { fields: Object.keys(b) });

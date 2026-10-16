@@ -23,6 +23,8 @@ const body = z.object({
   lateAlertMin: z.number().int().min(0).max(240).optional(),
   noShowMin: z.number().int().min(0).max(720).optional(),
   autoClockoutH: z.number().min(0).max(24).optional(),
+  payPeriod: z.enum(['weekly', 'biweekly']).optional(),
+  payPeriodStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 const stateCode = z.string().trim().toUpperCase().refine((x) => US_STATES.includes(x));
 const stateBody = z.object({ otMult: z.number().min(1).max(4), dtAfter: z.number().min(1).max(24).nullable(), dtMult: z.number().min(1).max(4) });
@@ -39,10 +41,12 @@ const view = (r: any) => ({
   lateAlertMin: r.late_alert_min == null ? 10 : Number(r.late_alert_min),
   noShowMin: r.no_show_min == null ? 60 : Number(r.no_show_min),
   autoClockoutH: r.auto_clockout_h == null ? 3 : Number(r.auto_clockout_h),
+  payPeriod: (r.pay_period ?? 'biweekly') as 'weekly' | 'biweekly',
+  payPeriodStart: (r.pay_period_start ?? '2026-01-05') as string,
 });
 
 const SEL = `SELECT min_rest_hours, max_daily_hours, daily_ot_after, weekly_ot_after, ot_multiplier, night_start::text, night_end::text,
-  night_premium_pct, sunday_premium_pct, holiday_premium_pct, ARRAY(SELECT to_char(d,'YYYY-MM-DD') FROM unnest(holidays) d ORDER BY d) AS holidays, default_state, auto_approve, auto_approve_grace_min, late_alert_min, no_show_min, auto_clockout_h FROM labor_rules`;
+  night_premium_pct, sunday_premium_pct, holiday_premium_pct, ARRAY(SELECT to_char(d,'YYYY-MM-DD') FROM unnest(holidays) d ORDER BY d) AS holidays, default_state, auto_approve, auto_approve_grace_min, late_alert_min, no_show_min, auto_clockout_h, pay_period, to_char(pay_period_start, 'YYYY-MM-DD') AS pay_period_start FROM labor_rules`;
 
 export async function rulesRoutes(app: FastifyInstance) {
   app.get('/api/labor-rules', { preHandler: guard('admin', 'manager') }, async (req) =>
@@ -57,14 +61,15 @@ export async function rulesRoutes(app: FastifyInstance) {
     return withTenant(req.user.tid, async (c) => {
       await c.query(
         `INSERT INTO labor_rules (tenant_id, min_rest_hours, max_daily_hours, daily_ot_after, weekly_ot_after, ot_multiplier, night_start, night_end,
-           night_premium_pct, sunday_premium_pct, holiday_premium_pct, holidays, default_state, auto_approve, auto_approve_grace_min, late_alert_min, no_show_min, auto_clockout_h)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::date[],$13, COALESCE($14, true), COALESCE($15, 10), COALESCE($16, 10), COALESCE($17, 60), COALESCE($18, 3))
+           night_premium_pct, sunday_premium_pct, holiday_premium_pct, holidays, default_state, auto_approve, auto_approve_grace_min, late_alert_min, no_show_min, auto_clockout_h, pay_period, pay_period_start)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::date[],$13, COALESCE($14, true), COALESCE($15, 10), COALESCE($16, 10), COALESCE($17, 60), COALESCE($18, 3), COALESCE($19, 'biweekly'), COALESCE($20::date, '2026-01-05'))
          ON CONFLICT (tenant_id) DO UPDATE SET min_rest_hours=$2, max_daily_hours=$3, daily_ot_after=$4, weekly_ot_after=$5, ot_multiplier=$6,
            night_start=$7, night_end=$8, night_premium_pct=$9, sunday_premium_pct=$10, holiday_premium_pct=$11, holidays=$12::date[], default_state=$13,
            auto_approve = COALESCE($14, labor_rules.auto_approve), auto_approve_grace_min = COALESCE($15, labor_rules.auto_approve_grace_min),
            late_alert_min = COALESCE($16, labor_rules.late_alert_min), no_show_min = COALESCE($17, labor_rules.no_show_min),
-           auto_clockout_h = COALESCE($18, labor_rules.auto_clockout_h), updated_at=now()`,
-        [req.user.tid, b.minRestHours, b.maxDailyHours, b.dailyOtAfter, b.weeklyOtAfter, b.otMultiplier, b.nightStart, b.nightEnd, b.nightPremiumPct, b.sundayPremiumPct, b.holidayPremiumPct, b.holidays, b.defaultState ?? null, b.autoApprove ?? null, b.autoApproveGraceMin ?? null, b.lateAlertMin ?? null, b.noShowMin ?? null, b.autoClockoutH ?? null],
+           auto_clockout_h = COALESCE($18, labor_rules.auto_clockout_h),
+           pay_period = COALESCE($19, labor_rules.pay_period), pay_period_start = COALESCE($20::date, labor_rules.pay_period_start), updated_at=now()`,
+        [req.user.tid, b.minRestHours, b.maxDailyHours, b.dailyOtAfter, b.weeklyOtAfter, b.otMultiplier, b.nightStart, b.nightEnd, b.nightPremiumPct, b.sundayPremiumPct, b.holidayPremiumPct, b.holidays, b.defaultState ?? null, b.autoApprove ?? null, b.autoApproveGraceMin ?? null, b.lateAlertMin ?? null, b.noShowMin ?? null, b.autoClockoutH ?? null, b.payPeriod ?? null, b.payPeriodStart ?? null],
       );
       await audit(c, req.user.tid, req.user.sub, 'labor_rules.update', 'tenant', req.user.tid, b);
       return view((await c.query(SEL)).rows[0]);

@@ -6,6 +6,7 @@ import { Banner, Empty, Pill } from '@/components/ui';
 import { api, ApiError, fmtDateTime, fmtTime, getPosition, money } from '@/lib/api';
 import { onPunchesChanged, pendingPunches, punch, type Punch } from '@/lib/punchQueue';
 import IosInstallHint from '@/components/IosInstallHint';
+import MyEarnings from '@/components/MyEarnings';
 
 /** Offline, the server can't say whether clock-in is open, so the window is worked out on the phone (1 h before start to 2 h after end). */
 const canClock = (s: { can_clock_in: boolean; starts_at: string; ends_at: string }) =>
@@ -114,6 +115,7 @@ function Body() {
       {error && <Banner onClose={() => setError('')}>{error}</Banner>}
       {notice && <Banner kind="info" onClose={() => setNotice('')}>{notice}</Banner>}
       {offline && <p className="muted small">Offline: showing your shifts as of the last time they loaded.</p>}
+      {!offline && <MyEarnings />}
       {!shifts ? (
         <div className="muted">Loading…</div>
       ) : shifts.length === 0 ? (
