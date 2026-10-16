@@ -147,7 +147,7 @@ export async function estimateShift(c: PoolClient, rules: Rules, rates: Map<stri
   // A rate set for this person on this event wins over the shift's rate and the role's rate.
   const sh = shiftId
     ? (await c.query(
-        `SELECT s.event_id, s.pay_type, s.pay_rate_override, e.ot_after, e.state, e.address, cr.pay_type AS cr_type, cr.rate AS cr_rate
+        `SELECT s.event_id, s.pay_type, s.pay_rate_override, s.min_hours, e.ot_after, e.state, e.address, cr.pay_type AS cr_type, cr.rate AS cr_rate
            FROM shifts s JOIN events e ON e.id = s.event_id
            LEFT JOIN event_crew_rates cr ON cr.event_id = s.event_id AND cr.user_id = $2::uuid
           WHERE s.id = $1`, [shiftId, userId ?? null])).rows[0]
@@ -168,6 +168,13 @@ export async function estimateShift(c: PoolClient, rules: Rules, rates: Map<stri
     otMult: st?.otMult, dtAfter: st?.dtAfter, dtMult: st?.dtMult, priorDay,
   });
   if (personal) priced.notes.push('personal rate for this event');
+  // Minimum call: a shorter shift is still paid this many hours (as regular time).
+  const min = Number(sh?.min_hours ?? 0);
+  if (min > 0 && priced.hours < min) {
+    const rate = override > 0 ? override : rateFor(rates, role);
+    if (priced.estimate !== null && rate) priced.estimate = Math.round((priced.estimate + (min - priced.hours) * rate) * 100) / 100;
+    priced.notes.push(`${min} h minimum call`);
+  }
   return priced;
 }
 

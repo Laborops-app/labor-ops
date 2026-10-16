@@ -54,6 +54,8 @@ const shiftBody = z.object({
   requiredCerts: z.array(z.string().trim().min(1).max(60)).max(10).default([]),
   phaseId: z.string().uuid().nullable().optional(),
   payType: z.enum(['hourly', 'day']).default('hourly'),
+  // Minimum call: paid at least this many hours (e.g. 4 or 5).
+  minHours: z.number().min(0.5).max(12).nullable().optional(),
 });
 
 const mgr = guard('admin', 'manager');
@@ -584,9 +586,9 @@ export async function eventRoutes(app: FastifyInstance) {
       if (!(await c.query('SELECT 1 FROM events WHERE id = $1', [eventId])).rowCount) return null;
       if (b.phaseId && !(await c.query('SELECT 1 FROM event_phases WHERE id = $1 AND event_id = $2', [b.phaseId, eventId])).rowCount) return { error: 'That phase belongs to a different event' };
       const r = await c.query(
-        `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs, phase_id, pay_type)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-        [req.user.tid, eventId, b.roleName, b.startsAt, b.endsAt, b.headcount, b.isOpen, b.requiredCerts, b.phaseId ?? null, b.payType],
+        `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs, phase_id, pay_type, min_hours)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        [req.user.tid, eventId, b.roleName, b.startsAt, b.endsAt, b.headcount, b.isOpen, b.requiredCerts, b.phaseId ?? null, b.payType, b.minHours ?? null],
       );
       await audit(c, req.user.tid, req.user.sub, 'shift.create', 'shift', r.rows[0].id);
       return r.rows[0];

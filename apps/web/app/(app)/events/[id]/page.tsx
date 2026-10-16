@@ -39,6 +39,7 @@ const pickOption = (m: Member, e: Elig | undefined, stars: number, sub?: string,
 type Shift = {
   id: string;
   lead_shift_id?: string | null;
+  min_hours?: string | number | null;
   role_name: string;
   starts_at: string;
   ends_at: string;
@@ -156,6 +157,7 @@ function Body({ me }: { me: Me }) {
       isOpen: false,
       phaseId: '',
       payType: 'hourly' as 'hourly' | 'day',
+      minHours: '' as '' | '4' | '5',
       crew: [] as string[],
       repeat: false,
       days: [] as number[],
@@ -286,7 +288,7 @@ function Body({ me }: { me: Me }) {
     e.preventDefault();
     const start = new Date(f.startsAt);
     const end = new Date(f.endsAt);
-    const base = { roleName: f.roleName, headcount: Number(f.headcount), isOpen: f.isOpen, requiredCerts: certs(f.certs), phaseId: f.phaseId || null, payType: f.payType };
+    const base = { roleName: f.roleName, headcount: Number(f.headcount), isOpen: f.isOpen, requiredCerts: certs(f.certs), phaseId: f.phaseId || null, payType: f.payType, minHours: f.payType === 'hourly' && f.minHours ? Number(f.minHours) : null };
     let ok: boolean;
     if (f.repeat) {
       if (!f.until || f.days.length === 0) return setError('Choose the days to repeat on and an end date.');
@@ -574,6 +576,20 @@ function Body({ me }: { me: Me }) {
                     </div>
                   )}
                   <div className="shift-flags">
+                    {s.pay_type !== 'day' && (
+                      <select
+                        className="min-call-select"
+                        value={s.min_hours ? String(Number(s.min_hours)) : ''}
+                        aria-label="Minimum call"
+                        title="Minimum hours paid, even if crew are released earlier"
+                        onChange={(e) => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { minHours: e.target.value ? Number(e.target.value) : null } }), e.target.value ? `${e.target.value} h minimum call set.` : 'Minimum call removed.')}
+                      >
+                        <option value="">No minimum call</option>
+                        <option value="4">4 h minimum call</option>
+                        <option value="5">5 h minimum call</option>
+                        {s.min_hours && ![4, 5].includes(Number(s.min_hours)) && <option value={String(Number(s.min_hours))}>{Number(s.min_hours)} h minimum call</option>}
+                      </select>
+                    )}
                     {s.is_open && <span className="chip open">Open for claiming</span>}
                     {s.required_certs?.map((c) => (
                       <span key={c} className="chip">
@@ -1014,6 +1030,19 @@ function Body({ me }: { me: Me }) {
             </div>
             {f.payType === 'day' && <div className="small muted">One flat amount for the day (the role&apos;s day rate), no overtime.</div>}
           </div>
+          {f.payType === 'hourly' && (
+            <div role="group" aria-label="Minimum call" style={{ gridColumn: '1 / -1' }}>
+              <div className="small muted" style={{ marginBottom: 4 }}>Minimum call</div>
+              <div className="phase-tabs">
+                {([['', 'None'], ['4', '4 h'], ['5', '5 h']] as const).map(([k, label]) => (
+                  <button key={k} type="button" aria-pressed={f.minHours === k} className={f.minHours === k ? 'tab on' : 'tab'} onClick={() => setF({ ...f, minHours: k })}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {f.minHours && <div className="small muted">Crew are paid at least {f.minHours} hours, even if released earlier.</div>}
+            </div>
+          )}
           {!f.repeat && (
             <div style={{ gridColumn: '1 / -1' }}>
               <div className="small muted" style={{ marginBottom: 4 }}>Crew (optional)</div>

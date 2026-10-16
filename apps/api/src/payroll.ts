@@ -6,7 +6,9 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 
 export type PayEntry = { id: string; date: string; event: string; eventId: string; role: string; hours: number; reg: number; ot: number; dt: number; premium: number; pay: number | null;
   /** Base hourly rate; for a day-rate shift, the day rate divided by the hours worked. */
-  rate: number | null; day: boolean; exported: boolean };
+  rate: number | null; day: boolean; exported: boolean;
+  /** Hours added to reach the shift's minimum call (already included in hours, reg and pay). */
+  minCall?: number };
 export type PayPerson = {
   userId: string; name: string; email: string; payrollIds: Record<string, string>;
   regular: number; overtime: number; double: number; hours: number; days: number; dayPay: number; gross: number | null; missingRate: boolean;
@@ -34,7 +36,7 @@ export async function payrollSummary(c: PoolClient, from: string, to: string) {
   const rows = (
     await c.query(
       `SELECT t.id, t.user_id, t.assignment_id, t.clock_in, t.clock_out, t.payroll_exported_at,
-              u.name, u.email, u.payroll_ids, s.role_name, COALESCE(cr.pay_type, s.pay_type) AS pay_type,
+              u.name, u.email, u.payroll_ids, s.role_name, s.min_hours, COALESCE(cr.pay_type, s.pay_type) AS pay_type,
               COALESCE(cr.rate, s.pay_rate_override) AS pay_rate_override, s.event_id,
               e.name AS event_name, e.ot_after, e.state, e.address
          FROM time_entries t JOIN users u ON u.id = t.user_id
@@ -60,6 +62,7 @@ export async function payrollSummary(c: PoolClient, from: string, to: string) {
   const week = new Map<string, number>(); // user|monday -> hours so far
   const jobDay = new Map<string, number>(); // user|event|date -> hours so far
   const dayPaid = new Set<string>();
+  const minCall = new Map<string, { worked: number; min: number; rate: number; entry: PayEntry; person: PayPerson }>();
   for (const r of rows) {
     const date = localDate(rules.tz, r.clock_in);
     const inPeriod = date >= from && date <= to;
@@ -102,7 +105,27 @@ export async function payrollSummary(c: PoolClient, from: string, to: string) {
     p.overtime = r2(p.overtime + priced.otHours);
     p.double = r2(p.double + priced.dtHours);
     p.hours = r2(p.hours + priced.hours);
-    p.entries.push({ id: r.id, date, event: r.event_name, eventId: r.event_id, role: r.role_name, hours: priced.hours, reg, ot: priced.otHours, dt: priced.dtHours, premium: priced.premiumHours, pay, rate: rate || null, day: false, exported: !!r.payroll_exported_at });
+    const entry: PayEntry = { id: r.id, date, event: r.event_name, eventId: r.event_id, role: r.role_name, hours: priced.hours, reg, ot: priced.otHours, dt: priced.dtHours, premium: priced.premiumHours, pay, rate: rate || null, day: false, exported: !!r.payroll_exported_at };
+    p.entries.push(entry);
+    // Minimum call is per person per shift per day: remember the hours worked and the last entry.
+    if (Number(r.min_hours) > 0) {
+      const k = `${r.assignment_id}|${date}`;
+      const m = minCall.get(k) ?? { worked: 0, min: Number(r.min_hours), rate: rate ?? 0, entry, person: p };
+      m.worked += priced.hours;
+      m.entry = entry;
+      minCall.set(k, m);
+    }
+  }
+  // Released before the minimum call: the missing hours are paid as regular time (they do not count toward overtime).
+  for (const m of minCall.values()) {
+    const add = r2(m.min - m.worked);
+    if (add <= 0) continue;
+    m.entry.minCall = add;
+    m.entry.hours = r2(m.entry.hours + add);
+    m.entry.reg = r2(m.entry.reg + add);
+    if (m.entry.pay !== null && m.rate) m.entry.pay = r2(m.entry.pay + add * m.rate);
+    m.person.regular = r2(m.person.regular + add);
+    m.person.hours = r2(m.person.hours + add);
   }
   const list = [...people.values()].sort((a, b) => a.name.localeCompare(b.name));
   for (const p of list) p.gross = p.missingRate ? null : r2(p.entries.reduce((s, e) => s + (e.pay ?? 0), 0));

@@ -35,6 +35,7 @@ export const shiftInput = z.object({
   requiredCerts: certList.default([]),
   phaseId: z.string().uuid().nullable().optional(),
   payType: z.enum(['hourly', 'day']).default('hourly'),
+  minHours: z.number().min(0.5).max(12).nullable().optional(),
 });
 
 /** A crew member asks for an open shift (held as pending until a coordinator approves). Shared by the app and the email links. */
@@ -88,9 +89,9 @@ export async function schedulingRoutes(app: FastifyInstance) {
       const ids: string[] = [];
       for (const s of shifts) {
         const r = await c.query(
-          `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs, phase_id, pay_type)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
-          [req.user.tid, eventId, s.roleName, s.startsAt, s.endsAt, s.headcount, s.isOpen, s.requiredCerts, s.phaseId ?? null, s.payType],
+          `INSERT INTO shifts (tenant_id, event_id, role_name, starts_at, ends_at, headcount, is_open, required_certs, phase_id, pay_type, min_hours)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+          [req.user.tid, eventId, s.roleName, s.startsAt, s.endsAt, s.headcount, s.isOpen, s.requiredCerts, s.phaseId ?? null, s.payType, s.minHours ?? null],
         );
         ids.push(r.rows[0].id);
       }
@@ -111,6 +112,7 @@ export async function schedulingRoutes(app: FastifyInstance) {
         // New date and time (and role name); `force` saves even when someone on the shift would be double-booked.
         startsAt: z.string().datetime({ offset: true }).optional(), endsAt: z.string().datetime({ offset: true }).optional(),
         roleName: z.string().trim().min(1).max(100).optional(), force: z.boolean().optional(),
+        minHours: z.number().min(0.5).max(12).nullable().optional(),
       })
       .parse(req.body);
     const row = await withTenant(req.user.tid, async (c) => {
@@ -136,10 +138,11 @@ export async function schedulingRoutes(app: FastifyInstance) {
                 pay_type = COALESCE($9, pay_type),
                 starts_at = CASE WHEN $10::boolean THEN $11::timestamptz ELSE starts_at END,
                 ends_at = CASE WHEN $10::boolean THEN $12::timestamptz ELSE ends_at END,
-                role_name = COALESCE($13, role_name)
+                role_name = COALESCE($13, role_name),
+                min_hours = CASE WHEN $14::boolean THEN $15::numeric ELSE min_hours END
          WHERE id = $1 RETURNING *`,
         [id, b.isOpen ?? null, b.requiredCerts ?? null, b.headcount ?? null, b.phaseId !== undefined, b.phaseId ?? null, b.payRate !== undefined, b.payRate ?? null, b.payType ?? null,
-          timeChanged, ns.toISOString(), ne.toISOString(), b.roleName ?? null],
+          timeChanged, ns.toISOString(), ne.toISOString(), b.roleName ?? null, b.minHours !== undefined, b.minHours ?? null],
       );
       if (r.rows[0] && timeChanged) await tellTimeChange(c, req.user.tid, id);
       // People already on the shift hear about a pay change (their pay line is recalculated from the new rate).

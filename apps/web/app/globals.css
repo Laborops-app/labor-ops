@@ -1703,3 +1703,4 @@ a.cs-co:hover b { color: var(--primary); }
 .team-list { display: grid; gap: 4px; max-height: 260px; overflow-y: auto; }
 .team-opt { display: flex; gap: 8px; align-items: flex-start; }
 .team-opt input { width: auto; margin-top: 3px; }
+.min-call-select { padding: 3px 8px; font-size: 12.5px; border-radius: 999px; width: auto; }

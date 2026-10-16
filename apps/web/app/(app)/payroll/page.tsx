@@ -5,7 +5,7 @@ import { Banner, Empty } from '@/components/ui';
 import { api, money } from '@/lib/api';
 
 type Provider = 'adp' | 'gusto' | 'quickbooks';
-type Entry = { id: string; date: string; event: string; role: string; hours: number; reg: number; ot: number; dt: number; pay: number | null; rate: number | null; day: boolean; exported: boolean };
+type Entry = { id: string; date: string; event: string; role: string; hours: number; reg: number; ot: number; dt: number; pay: number | null; rate: number | null; day: boolean; exported: boolean; minCall?: number };
 type Person = { userId: string; name: string; email: string; payrollIds: Record<string, string>; regular: number; overtime: number; double: number; hours: number; days: number; dayPay: number; gross: number | null; entries: Entry[] };
 type Data = {
   from: string; to: string; people: Person[]; warnings: string[]; totals: { people: number; hours: number; gross: number };
@@ -230,7 +230,7 @@ function Body() {
                                       <td>{e.date}</td>
                                       <td>{e.event}</td>
                                       <td>{e.role}</td>
-                                      <td>{e.day ? `day rate · ${e.hours.toFixed(2)} h` : `${e.hours.toFixed(2)} h${e.ot ? ` · ${e.ot} OT` : ''}${e.dt ? ` · ${e.dt} DT` : ''}`}</td>
+                                      <td>{e.day ? `day rate · ${e.hours.toFixed(2)} h` : `${e.hours.toFixed(2)} h${e.ot ? ` · ${e.ot} OT` : ''}${e.dt ? ` · ${e.dt} DT` : ''}${e.minCall ? ` · incl. ${e.minCall} h minimum call` : ''}`}</td>
                                       <td className="muted">{e.rate ? `${money(e.rate)}/h` : ''}</td>
                                       <td>{e.pay === null ? '—' : money(e.pay)}</td>
                                       <td>{e.exported && <span className="chip warn">exported</span>}</td>

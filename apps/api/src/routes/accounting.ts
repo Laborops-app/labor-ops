@@ -309,14 +309,14 @@ export async function accountingRoutes(app: FastifyInstance) {
   // What a worked entry is called in QuickBooks. The hours split at the end is extra detail, not part of what identifies it.
   const qbBase = (e: { event: string; role: string; day: boolean }) => `${e.event} · ${baseRole(e.role)}${e.day ? ' · day rate' : ''}`;
   // The detail in brackets at the end: hours, the hourly rate (a day rate divided by the hours) and the overtime split.
-  const qbNote = (e: { event: string; role: string; day: boolean; hours: number; reg: number; ot: number; dt: number; rate: number | null; pay: number | null }) => {
+  const qbNote = (e: { event: string; role: string; day: boolean; hours: number; reg: number; ot: number; dt: number; rate: number | null; pay: number | null; minCall?: number }) => {
     const h = (n: number) => String(Math.round(n * 100) / 100);
     const $ = (n: number) => `$${(Math.round(n * 100) / 100).toFixed(2).replace(/\.00$/, '')}`;
     const at = e.rate ? ` @ ${$(e.rate)}/h` : '';
     const detail = e.day
       ? `${h(e.hours)} h${at}${e.pay ? ` = ${$(e.pay)} day rate` : ''}`
       : `${h(e.hours)} h${at}${e.ot || e.dt ? `: ${h(e.reg)} reg + ${h(e.ot)} OT${e.dt ? ` + ${h(e.dt)} DT` : ''}` : ''}`;
-    return `${qbBase(e)} (${detail})`;
+    return `${qbBase(e)} (${detail}${e.minCall ? `; incl. ${h(e.minCall)} h minimum call` : ''})`;
   };
   const qbKey = (emp: string | null, date: string, hours: number, desc: string) => `${emp}|${date}|${hours.toFixed(2)}|${desc.replace(/ \([\d.]+ h\b[^)]*\)$/, '')}`;
 

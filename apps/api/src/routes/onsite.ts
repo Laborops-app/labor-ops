@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
+import { autoApprove } from '../autoApprove';
 import { withTenant, audit } from '../db';
 import { authenticate } from '../auth';
 import { loadDepartments } from '../leads';
@@ -162,7 +163,7 @@ export async function onsiteRoutes(app: FastifyInstance) {
       const row = (await c.query("UPDATE time_entries SET clock_out = now(), status = 'submitted', out_by = $2 WHERE assignment_id = $1 AND clock_out IS NULL RETURNING id, clock_in, clock_out", [id, req.user.sub])).rows[0];
       if (!row) return { code: 409, error: 'This person is not checked in' };
       await audit(c, req.user.tid, req.user.sub, 'time.check_out', 'time_entry', row.id, { assignmentId: id, onsite: true });
-      return { code: 200, entry: row };
+      return { code: 200, entry: { ...row, auto_approved: await autoApprove(c, row.id) } };
     });
     const { code, ...rest } = r as { code: number; [k: string]: unknown };
     return reply.code(code).send(rest);

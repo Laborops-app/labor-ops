@@ -176,6 +176,7 @@ test('scheduling: double-booking and overfilling are blocked', async () => {
 
 test('time: accept, clock in/out, approve, export CSV', async () => {
   const a = await register('time');
+  await manualApproval(a);
   const mem = await call(a, 'POST', '/api/crew', { name: '=Evil Name', email: `t1-${run}@test.example`, password: 'password123' });
   const crew = await login(`t1-${run}@test.example`, 'password123');
   const ev = (await call(a, 'POST', '/api/events', { name: 'Load-out', startDate: '2030-01-01', endDate: '2030-01-01' })).json.event.id;
@@ -220,6 +221,12 @@ test('time: accept, clock in/out, approve, export CSV', async () => {
   assert.equal(dash.pendingApprovals, 0);
   assert.equal(dash.crewCount, 1);
 });
+
+/** Tests of the manual approval flow: switch off auto-approve for this company. */
+async function manualApproval(a: Session) {
+  const rules = (await call(a, 'GET', '/api/labor-rules')).json;
+  assert.equal((await call(a, 'PUT', '/api/labor-rules', { ...rules, autoApprove: false })).status, 200);
+}
 
 async function mkCrew(a: Session, tag: string) {
   const m = await call(a, 'POST', '/api/crew', { name: `Crew ${tag}`, email: `${tag}-${run}@test.example`, password: 'password123' });
@@ -545,6 +552,7 @@ test('labor coordinator can view and edit a crew member profile, certs and passw
 
 test('skills and pay rates: admin manages them, coordinators and crew only see names, export shows pay to admins', async () => {
   const a = await register('skills');
+  await manualApproval(a);
   const coord = await mkCrew(a, 'sk0'); // placeholder crew to test crew visibility
   const mgrRes = await call(a, 'POST', '/api/crew', { name: 'Coord', email: `coord-sk-${run}@test.example`, password: 'password123', role: 'manager' });
   assert.equal(mgrRes.status, 201, mgrRes.text);
@@ -1917,6 +1925,7 @@ test('rentman push: a refused contact does not block the request, and Rentman\'s
 
 test('clocking: geofence, coordinator mode and on-site check-in', async () => {
   const a = await register('geo');
+  await manualApproval(a);
   const c1 = await mkCrew(a, 'geo1');
   const ev = await mkEvent(a);
   const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Tech', startsAt: start(-1), endsAt: start(5), headcount: 1 })).json.shift.id;
@@ -3038,4 +3047,69 @@ test('phases are one day each; a lead shift can be linked to the crew shifts it 
   await call(a, 'PUT', `/api/shifts/${sLead}/team`, { shiftIds: [sPush] });
   assert.deepEqual(await names(), ['Crew ds-lead', 'Crew ds-push']);
   assert.equal((await call(lead.session, 'POST', `/api/onsite/assignments/${det2.shifts.find((s: any) => s.id === sLoad).assignments[0].id}/check-in`)).status, 404);
+});
+
+test('auto-approve: time within the scheduled hours is approved on clock-out; outside it waits; can be turned off', async () => {
+  const a = await register('autoap');
+  const c1 = await mkCrew(a, 'aa1');
+  const tid = await tenantOf(a);
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Show', startDate: '2030-01-01', endDate: '2030-01-01' })).json.event.id as string;
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Loader', startsAt: start(-1), endsAt: start(6), headcount: 2 })).json.shift.id as string;
+  const asg = (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, confirmed: true })).json.assignment.id as string;
+  // Within the hours (clocked in after the start, out before the end): approved straight away
+  assert.equal((await call(c1.session, 'POST', '/api/time/clock-in', { assignmentId: asg })).status, 201);
+  const out = await call(c1.session, 'POST', '/api/time/clock-out');
+  assert.equal(out.json.entry.auto_approved, true);
+  let t = (await call(a, 'GET', '/api/timesheets?status=approved')).json.entries;
+  assert.equal(t.length, 1);
+  assert.equal(t[0].auto_approved, true);
+  // Clocked in well before the shift: waits for a coordinator
+  await withTenant(tid, (c) => c.query("UPDATE time_entries SET clock_in = clock_in - interval '3 hours'"));
+  const asg2 = (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: (await mkCrew(a, 'aa2')).id, confirmed: true })).json.assignment.id as string;
+  await withTenant(tid, (c) => c.query("INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in, clock_out, status) SELECT $1, a.id, a.user_id, s.starts_at - interval '2 hours', s.starts_at + interval '1 hour', 'submitted' FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE a.id = $2 RETURNING id", [tid, asg2]));
+  const { autoApprove } = await import('../src/autoApprove');
+  const early = (await withTenant(tid, (c) => c.query('SELECT id FROM time_entries WHERE assignment_id = $1', [asg2]))).rows[0].id;
+  assert.equal(await withTenant(tid, (c) => autoApprove(c, early)), false);
+  // A coordinator check-out within the hours is approved too, unless turned off under Labor rules
+  const rules = (await call(a, 'GET', '/api/labor-rules')).json;
+  assert.equal(rules.autoApprove, true);
+  assert.equal(rules.autoApproveGraceMin, 10);
+  assert.equal((await call(a, 'PUT', '/api/labor-rules', { ...rules, autoApprove: false })).json.autoApprove, false);
+  const c3 = await mkCrew(a, 'aa3');
+  const asg3 = (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c3.id, confirmed: true, override: true })).json.assignment?.id
+    ?? (await withTenant(tid, (c) => c.query("UPDATE shifts SET headcount = 3 WHERE id = $1", [sh])), (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c3.id, confirmed: true })).json.assignment.id);
+  assert.equal((await call(a, 'POST', `/api/assignments/${asg3}/check-in`, {})).status, 201);
+  assert.equal((await call(a, 'POST', `/api/assignments/${asg3}/check-out`, {})).json.entry.auto_approved, false);
+  await call(a, 'PUT', '/api/labor-rules', { ...rules, autoApprove: true });
+});
+
+test('minimum call: released early is still paid the shift minimum (payroll and pay estimate)', async () => {
+  const a = await register('mincall');
+  const c1 = await mkCrew(a, 'mc1');
+  const tid = await tenantOf(a);
+  assert.equal((await call(a, 'POST', '/api/skills', { name: 'Pusher', payRate: 25 })).status, 201);
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Show', startDate: '2030-03-05', endDate: '2030-03-05' })).json.event.id as string;
+  const mk = await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Pusher', startsAt: '2030-03-05T15:00:00Z', endsAt: '2030-03-05T18:00:00Z', headcount: 1, minHours: 4 });
+  assert.equal(mk.status, 201, mk.text);
+  assert.equal(Number(mk.json.shift.min_hours), 4);
+  const sh = mk.json.shift.id;
+  const asg = (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, confirmed: true })).json.assignment.id;
+  // The 3 h shift is estimated at the 4 h minimum
+  const mine = (await call(c1.session, 'GET', '/api/my/shifts')).json.shifts;
+  // (only upcoming shifts are listed; this one is in 2030)
+  const s1 = mine.find((x: any) => x.assignment_id === asg);
+  assert.equal(s1.estimated_pay, 100);
+  assert.ok(s1.pay_notes.some((n: string) => /4 h minimum call/.test(n)));
+  // Worked 2.5 h → paid 4 h
+  await withTenant(tid, (c) => c.query("INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in, clock_out, status) VALUES ($1,$2,$3,'2030-03-05T15:00:00Z','2030-03-05T17:30:00Z','approved')", [tid, asg, c1.id]));
+  const pr = (await call(a, 'GET', '/api/payroll?from=2030-03-04&to=2030-03-10')).json;
+  const p1 = pr.people.find((x: any) => x.name === 'Crew mc1');
+  assert.equal(p1.regular, 4);
+  assert.equal(p1.gross, 100);
+  assert.equal(p1.entries[0].minCall, 1.5);
+  // Worked longer than the minimum: no top-up; the minimum can be changed or removed on the shift
+  assert.equal((await call(a, 'PATCH', `/api/shifts/${sh}`, { minHours: 2 })).status, 200);
+  assert.equal((await call(a, 'GET', '/api/payroll?from=2030-03-04&to=2030-03-10')).json.people[0].regular, 2.5);
+  await call(a, 'PATCH', `/api/shifts/${sh}`, { minHours: null });
+  assert.equal((await call(a, 'GET', '/api/payroll?from=2030-03-04&to=2030-03-10')).json.people[0].regular, 2.5);
 });

@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
-import { api, fmtDateTime } from '@/lib/api';
+import { api, fmtDateTime, fmtTime } from '@/lib/api';
 
 type Entry = {
   id: string;
@@ -14,6 +14,9 @@ type Entry = {
   role_name: string;
   event_name: string;
   approved_by_name: string | null;
+  auto_approved?: boolean;
+  shift_starts_at?: string;
+  shift_ends_at?: string;
 };
 const TABS = [
   { key: 'submitted', label: 'Needs approval' },
@@ -96,11 +99,18 @@ function Body() {
                     <td>{r.hours.toFixed(2)}</td>
                     <td>
                       {r.status === 'submitted' ? (
-                        <button className="btn small primary" onClick={() => approve(r.id)}>
-                          Approve
-                        </button>
+                        <span className="row" style={{ gap: 6 }}>
+                          <button className="btn small primary" onClick={() => approve(r.id)}>
+                            Approve
+                          </button>
+                          {r.shift_starts_at && r.shift_ends_at && (
+                            <span className="muted small" title="Time outside the scheduled shift waits for a coordinator">
+                              scheduled {fmtTime(r.shift_starts_at)}–{fmtTime(r.shift_ends_at)}
+                            </span>
+                          )}
+                        </span>
                       ) : r.status === 'approved' ? (
-                        <span className="muted small">by {r.approved_by_name}</span>
+                        r.auto_approved ? <span className="chip open" title="Within the scheduled shift, so approved automatically">Auto-approved</span> : <span className="muted small">by {r.approved_by_name ?? 'a coordinator'}</span>
                       ) : null}
                     </td>
                   </tr>

@@ -6,7 +6,7 @@ import { api } from '@/lib/api';
 
 type Rules = {
   minRestHours: number; maxDailyHours: number; dailyOtAfter: number; weeklyOtAfter: number; otMultiplier: number;
-  nightStart: string; nightEnd: string; nightPremiumPct: number; sundayPremiumPct: number; holidayPremiumPct: number; holidays: string[]; defaultState: string | null;
+  nightStart: string; nightEnd: string; nightPremiumPct: number; sundayPremiumPct: number; holidayPremiumPct: number; holidays: string[]; defaultState: string | null; autoApprove?: boolean; autoApproveGraceMin?: number;
 };
 type StateRule = { state: string; otMult: number; dtAfter: number | null; dtMult: number; custom: boolean };
 
@@ -61,6 +61,17 @@ function Body() {
             <Num label="Maximum hours in one day" suffix="hours" value={r.maxDailyHours} onChange={(n) => set({ maxDailyHours: n })} hint="0 turns the limit off." />
           </div>
           <p className="muted">Breaking either rule needs the coordinator to confirm an override. Crew cannot claim open shifts that break them.</p>
+        </section>
+        <section className="card">
+          <h2>Timesheet approval</h2>
+          <label className="check">
+            <input type="checkbox" checked={r.autoApprove !== false} onChange={(e) => set({ autoApprove: e.target.checked })} />
+            Approve time automatically when it stays within the scheduled shift
+          </label>
+          <div className="grid2" style={{ marginTop: 8 }}>
+            <Num label="Grace either side" suffix="minutes" step={1} value={r.autoApproveGraceMin ?? 10} onChange={(n) => set({ autoApproveGraceMin: n })} hint="Clocking in this much before the start, or out this much after the end, still counts as on schedule. Leaving early always counts." />
+          </div>
+          <p className="muted">Anything outside that waits on the Timesheets page for a coordinator to approve.</p>
         </section>
         <section className="card">
           <h2>Overtime</h2>

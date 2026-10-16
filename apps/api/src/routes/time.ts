@@ -2,6 +2,7 @@ import { loadRates, rateFor as roleRateFor, loadRules, estimateShift } from '../
 import { respondToAssignment } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { autoApprove } from '../autoApprove';
 import { notifyStaff, describeShift } from '../notify';
 import { withTenant, audit } from '../db';
 import { authenticate, guard } from '../auth';
@@ -17,7 +18,7 @@ const csvCell = (v: unknown) => {
 };
 
 const ENTRY_SQL = `
-  SELECT t.id, t.status, t.clock_in, t.clock_out, t.approved_at,
+  SELECT t.id, t.status, t.clock_in, t.clock_out, t.approved_at, t.auto_approved, s.starts_at AS shift_starts_at, s.ends_at AS shift_ends_at, s.min_hours::float AS min_hours,
     ROUND(EXTRACT(EPOCH FROM (COALESCE(t.clock_out, now()) - t.clock_in)) / 3600.0, 2)::float AS hours,
     u.id AS user_id, u.name AS user_name, u.email AS user_email,
     s.role_name, s.pay_rate_override AS shift_rate, cr.rate AS crew_rate, cr.pay_type AS crew_pay_type, e.name AS event_name, ap.name AS approved_by_name
@@ -192,7 +193,7 @@ export async function timeRoutes(app: FastifyInstance) {
         [open.id, pos.lat ?? null, pos.lng ?? null, dist],
       );
       await audit(c, req.user.tid, req.user.sub, 'time.clock_out', 'time_entry', r.rows[0].id);
-      return r.rows[0];
+      return { ...r.rows[0], auto_approved: await autoApprove(c, r.rows[0].id) };
     });
     if (!row) return reply.code(409).send({ error: 'You are not clocked in' });
     return { entry: row };
@@ -219,7 +220,7 @@ export async function timeRoutes(app: FastifyInstance) {
     const row = await withTenant(req.user.tid, async (c) => {
       const r = await c.query("UPDATE time_entries SET clock_out = now(), status = 'submitted', out_by = $2 WHERE assignment_id = $1 AND clock_out IS NULL RETURNING id, clock_in, clock_out", [id, req.user.sub]);
       if (r.rows[0]) await audit(c, req.user.tid, req.user.sub, 'time.check_out', 'time_entry', r.rows[0].id, { assignmentId: id });
-      return r.rows[0];
+      return r.rows[0] ? { ...r.rows[0], auto_approved: await autoApprove(c, r.rows[0].id) } : undefined;
     });
     if (!row) return reply.code(409).send({ error: 'This person is not checked in' });
     return { entry: row };
