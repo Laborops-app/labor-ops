@@ -3,10 +3,11 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
-import { api, ApiError, fmtDateTime, fmtTime, getPosition, money } from '@/lib/api';
+import { api, ApiError, fmtDate, fmtDateTime, fmtTime, getPosition, money } from '@/lib/api';
 import { onPunchesChanged, pendingPunches, punch, type Punch } from '@/lib/punchQueue';
 import IosInstallHint from '@/components/IosInstallHint';
 import MyEarnings from '@/components/MyEarnings';
+import PastShifts from '@/components/PastShifts';
 
 /** Offline, the server can't say whether clock-in is open, so the window is worked out on the phone (1 h before start to 2 h after end). */
 const canClock = (s: { can_clock_in: boolean; starts_at: string; ends_at: string }) =>
@@ -41,6 +42,8 @@ type Entry = { id: string; status: string; clock_in: string; clock_out: string |
 
 function Body() {
   const [shifts, setShifts] = useState<MyShift[] | null>(null);
+  const [period, setPeriod] = useState<{ from: string; to: string; later: number } | null>(null);
+  const [view, setView] = useState<'current' | 'past'>('current');
   const [entries, setEntries] = useState<Entry[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
@@ -50,8 +53,9 @@ function Body() {
   const [queued, setQueued] = useState<Punch[]>([]);
   const load = async () => {
     try {
-      const [s, t] = await Promise.all([api<{ shifts: MyShift[] }>('/api/my/shifts'), api<{ entries: Entry[] }>('/api/my/time')]);
+      const [s, t] = await Promise.all([api<{ shifts: MyShift[]; period?: { from: string; to: string }; later?: number }>('/api/my/shifts'), api<{ entries: Entry[] }>('/api/my/time')]);
       setShifts(s.shifts);
+      setPeriod(s.period ? { ...s.period, later: s.later ?? 0 } : null);
       setEntries(t.entries);
       setOffline(false);
       try { localStorage.setItem('lo_my_shifts', JSON.stringify({ at: Date.now(), shifts: s.shifts, entries: t.entries })); } catch { /* storage blocked */ }
@@ -116,10 +120,19 @@ function Body() {
       {notice && <Banner kind="info" onClose={() => setNotice('')}>{notice}</Banner>}
       {offline && <p className="muted small">Offline: showing your shifts as of the last time they loaded.</p>}
       {!offline && <MyEarnings />}
-      {!shifts ? (
+      <div className="row space my-view">
+        <div className="seg" role="tablist" aria-label="Which shifts">
+          <button role="tab" aria-selected={view === 'current'} className={view === 'current' ? 'active' : ''} onClick={() => setView('current')}>This pay period</button>
+          <button role="tab" aria-selected={view === 'past'} className={view === 'past' ? 'active' : ''} onClick={() => setView('past')} disabled={offline}>Past shifts</button>
+        </div>
+        {view === 'current' && period && <span className="muted small">{fmtDate(period.from)} – {fmtDate(period.to)}</span>}
+      </div>
+      {view === 'past' ? (
+        <PastShifts />
+      ) : !shifts ? (
         <div className="muted">Loading…</div>
       ) : shifts.length === 0 ? (
-        <Empty>No shifts yet. When a labor coordinator assigns you one, it will show up here.</Empty>
+        <Empty>No shifts left in this pay period. When a labor coordinator assigns you one, it will show up here.</Empty>
       ) : (
         shifts.map((s) => (
           <section className="card shift-card" key={s.assignment_id}>
@@ -203,29 +216,10 @@ function Body() {
           </section>
         ))
       )}
-      {entries.length > 0 && (
-        <section className="card">
-          <h2>My recent time</h2>
-          <div className="table-wrap">
-            <table>
-              <tbody>
-                {entries.map((e) => (
-                  <tr key={e.id}>
-                    <td className="small">
-                      {e.role_name}
-                      <div className="muted">{e.event_name}</div>
-                    </td>
-                    <td className="small">{fmtDateTime(e.clock_in)}</td>
-                    <td>{e.clock_out ? `${e.hours.toFixed(2)} h` : '—'}</td>
-                    <td>
-                      <Pill status={e.status} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
+      {view === 'current' && period && period.later > 0 && (
+        <p className="muted small center-text">
+          {period.later} more shift{period.later === 1 ? '' : 's'} after this pay period: see <Link href="/my-calendar">Calendar</Link>.
+        </p>
       )}
     </>
   );

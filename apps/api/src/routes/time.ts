@@ -1,3 +1,4 @@
+import { currentPeriods } from '../payPeriods';
 import { loadRates, rateFor as roleRateFor, loadRules, estimateShift } from '../pay';
 import { respondToAssignment } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
@@ -47,6 +48,8 @@ export async function timeRoutes(app: FastifyInstance) {
     withTenant(req.user.tid, async (c) => {
       const rates = await loadRates(c);
       const rules = await loadRules(c);
+      // Only the current pay period (Labor rules), plus any offer still waiting for an answer.
+      const pp = await currentPeriods(c);
       const rows = (
         await c.query(
           `SELECT a.id AS assignment_id, a.status, a.is_lead, s.id AS shift_id, s.event_id, s.role_name, s.starts_at, s.ends_at,
@@ -58,9 +61,12 @@ export async function timeRoutes(app: FastifyInstance) {
              EXISTS (SELECT 1 FROM time_entries t WHERE t.assignment_id = a.id AND t.clock_out IS NULL) AS clocked_in,
              (a.status = 'accepted' AND now() BETWEEN s.starts_at - interval '1 hour' AND s.ends_at + interval '2 hours') AS can_clock_in
            FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
-           WHERE a.user_id = $1 AND (s.ends_at > now() - interval '12 hours')
+           WHERE a.user_id = $1
+             -- Over shifts move to Past, unless the person is still clocked in (they need the Clock out button).
+             AND (s.ends_at > now() OR EXISTS (SELECT 1 FROM time_entries t WHERE t.assignment_id = a.id AND t.clock_out IS NULL))
+             AND ((s.starts_at < ($2::date + 1)::timestamp AT TIME ZONE $3) OR (a.status = 'offered'))
            ORDER BY s.starts_at`,
-          [req.user.sub],
+          [req.user.sub, pp.current.to, pp.tz],
         )
       ).rows;
       const shifts = [];
@@ -68,9 +74,34 @@ export async function timeRoutes(app: FastifyInstance) {
         const pay = await estimateShift(c, rules, rates, r.role_name, r.starts_at, r.ends_at, req.user.sub, r.shift_id);
         shifts.push({ ...r, hours: pay.hours, hourly_rate: pay.rate, estimated_pay: pay.estimate, pay_notes: pay.notes, pay_type: pay.payType });
       }
-      return { shifts };
+      const later = Number((await c.query(
+        `SELECT count(*)::int AS n FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id
+          WHERE a.user_id = $1 AND a.status = 'accepted' AND s.starts_at >= ($2::date + 1)::timestamp AT TIME ZONE $3`,
+        [req.user.sub, pp.current.to, pp.tz])).rows[0].n);
+      return { shifts, period: pp.current, later };
     }),
   );
+
+  // Shifts already over, newest first, with the time worked and where it stands. Paged with ?before=<ISO time>.
+  app.get('/api/my/shifts/past', { preHandler: authenticate }, async (req) => {
+    const { before } = z.object({ before: z.string().datetime({ offset: true }).optional() }).parse(req.query);
+    return withTenant(req.user.tid, async (c) => {
+      const rows = (
+        await c.query(
+          `SELECT a.id AS assignment_id, a.status, a.is_lead, a.no_show_at, s.id AS shift_id, s.role_name, s.starts_at, s.ends_at, e.name AS event_name, e.venue,
+                  COALESCE((SELECT round(sum(extract(epoch FROM t.clock_out - t.clock_in)) / 3600.0, 2) FROM time_entries t WHERE t.assignment_id = a.id AND t.clock_out IS NOT NULL), 0)::float AS worked,
+                  (SELECT CASE WHEN bool_and(t.status = 'approved') THEN 'approved' WHEN bool_or(t.clock_out IS NULL) THEN 'clocked in' ELSE 'submitted' END
+                     FROM time_entries t WHERE t.assignment_id = a.id) AS time_status
+             FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
+            WHERE a.user_id = $1 AND a.status = 'accepted' AND s.ends_at <= now()
+              AND NOT EXISTS (SELECT 1 FROM time_entries t WHERE t.assignment_id = a.id AND t.clock_out IS NULL) AND ($2::timestamptz IS NULL OR s.starts_at < $2)
+            ORDER BY s.starts_at DESC LIMIT 31`,
+          [req.user.sub, before ?? null],
+        )
+      ).rows;
+      return { shifts: rows.slice(0, 30), more: rows.length > 30 };
+    });
+  });
 
   app.get('/api/my/calendar', { preHandler: authenticate }, async (req, reply) => {
     const q = z.object({ from: z.string().datetime({ offset: true }), to: z.string().datetime({ offset: true }) }).safeParse(req.query);

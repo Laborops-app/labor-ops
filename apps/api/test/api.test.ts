@@ -2600,9 +2600,8 @@ test('crew pay: a personal hourly or day rate per crew member per event drives e
   // they were told, and their own view of the shift shows it
   const told = await withTenant(tid, (c) => c.query("SELECT title FROM notifications WHERE user_id = $1 AND title LIKE 'Pay updated%'", [c1.id]));
   assert.equal(told.rowCount, 1);
-  const mine = (await call(c1.session, 'GET', '/api/my/shifts')).json.shifts;
-  const s1 = mine.find((x: any) => x.shift_id === sh);
-  assert.ok(s1, JSON.stringify(mine[0] ?? null));
+  // (a 2030 shift is outside the current pay period list, so read its own page)
+  const s1 = (await call(c1.session, 'GET', `/api/my/assignments/${byUser[c1.id].id}`)).json.shift;
   assert.deepEqual([s1.pay_type, s1.estimated_pay], ['day', 300]);
 
   // payroll from approved time uses the personal rates
@@ -3095,9 +3094,8 @@ test('minimum call: released early is still paid the shift minimum (payroll and 
   const sh = mk.json.shift.id;
   const asg = (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, confirmed: true })).json.assignment.id;
   // The 3 h shift is estimated at the 4 h minimum
-  const mine = (await call(c1.session, 'GET', '/api/my/shifts')).json.shifts;
-  // (only upcoming shifts are listed; this one is in 2030)
-  const s1 = mine.find((x: any) => x.assignment_id === asg);
+  // (a 2030 shift is outside the current pay period list, so read its own page)
+  const s1 = (await call(c1.session, 'GET', `/api/my/assignments/${asg}`)).json.shift;
   assert.equal(s1.estimated_pay, 100);
   assert.ok(s1.pay_notes.some((n: string) => /4 h minimum call/.test(n)));
   // Worked 2.5 h → paid 4 h
@@ -3462,4 +3460,31 @@ test('earnings: pay periods (every two weeks), payroll, waiting for approval and
   const before = (await call(c1.session, 'GET', '/api/my/earnings?offset=-1')).json;
   assert.equal(before.period.to < startDay, true);
   assert.equal(before.estimated.pay, 0);
+});
+
+test('my shifts: this pay period only (offers always shown), past shifts listed separately', async () => {
+  const a = await register('myper');
+  const tid = await tenantOf(a);
+  const c1 = await mkCrew(a, 'myp1');
+  const rules = (await call(a, 'GET', '/api/labor-rules')).json;
+  const tz = (await withTenant(tid, (c) => c.query('SELECT timezone FROM tenants'))).rows[0].timezone;
+  const local = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(d);
+  await call(a, 'PUT', '/api/labor-rules', { ...rules, payPeriodStart: local(new Date(Date.now() - 7 * 86400_000)) });
+  const ev = await mkEvent(a);
+  const mk = async (role: string, s: number, e: number, confirmed = true) => {
+    const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: role, startsAt: start(s), endsAt: start(e), headcount: 1 })).json.shift.id;
+    return (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, confirmed, override: true })).json.assignment.id as string;
+  };
+  await mk('Soon', 24, 28);
+  await mk('Far', 24 * 20, 24 * 20 + 4);
+  await mk('Far offer', 24 * 21, 24 * 21 + 4, false);
+  const over = await mk('Over', -30, -26);
+  await withTenant(tid, (c) => c.query("INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in, clock_out, status) SELECT $1, a.id, a.user_id, s.starts_at, s.ends_at, 'approved' FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE a.id = $2", [tid, over]));
+  const cur = (await call(c1.session, 'GET', '/api/my/shifts')).json;
+  assert.deepEqual(cur.shifts.map((s: any) => s.role_name), ['Soon', 'Far offer']);
+  assert.equal(cur.later, 1);
+  const past = (await call(c1.session, 'GET', '/api/my/shifts/past')).json;
+  assert.deepEqual(past.shifts.map((s: any) => s.role_name), ['Over']);
+  assert.equal(past.shifts[0].worked, 4);
+  assert.equal(past.shifts[0].time_status, 'approved');
 });
