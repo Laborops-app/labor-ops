@@ -1,7 +1,9 @@
 'use client';
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import TimeEdit from '@/components/TimeEdit';
 import Shell from '@/components/Shell';
+import { usePageActive } from '@/components/KeepAlive';
+import { useSearchParams } from 'next/navigation';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { api, ApiError, fmtDateTime, fmtTime, type Me } from '@/lib/api';
 
@@ -61,10 +63,22 @@ function Body({ me }: { me: Me }) {
       .then((r) => setRows(r.entries))
       .catch((e) => setError(e.message));
   };
+  // The page stays loaded in the background: reload whenever you come back to it, so links here (like the one on
+  // Reports) always show current time. ?status=submitted|approved|open picks the tab.
+  const active = usePageActive();
+  const asked = useSearchParams()?.get('status');
+  const applied = useRef<string | null>(null);
   useEffect(() => {
+    if (!active) { applied.current = null; return; }
+    // A link asking for a tab wins once per visit; after that the tabs are yours to switch.
+    if (asked && asked !== applied.current && TABS.some((x) => x.key === asked)) {
+      applied.current = asked;
+      if (asked !== tab) { setTab(asked as (typeof TABS)[number]['key']); return; }
+    }
+    if (!asked) applied.current = null;
     load(tab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+  }, [tab, active, asked]);
 
   const approve = async (id: string) => {
     setError('');

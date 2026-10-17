@@ -99,7 +99,7 @@ function Body() {
             <Kpi label="No-shows" value={String(t.noShows)} sub={`${t.late} late arrival${t.late === 1 ? '' : 's'}`} tone={t.noShows ? 'bad' : undefined} />
           </div>
           {t.unapproved > 0 && (
-            <Banner kind="info">{t.unapproved} timesheet{t.unapproved === 1 ? ' is' : 's are'} not approved yet: labor cost and margin only count approved time. <Link href="/timesheets">Review timesheets</Link></Banner>
+            <Banner kind="info">{t.unapproved} timesheet{t.unapproved === 1 ? ' is' : 's are'} not approved yet: labor cost and margin only count approved time. <Link className="btn small primary banner-act" href="/timesheets?status=submitted">Review timesheets</Link></Banner>
           )}
           {d.events.length === 0 ? (
             <Empty>No events in this period.</Empty>

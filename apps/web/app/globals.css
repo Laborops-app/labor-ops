@@ -1885,3 +1885,4 @@ details.card.profile-fold > summary::before { content: none; }
 .group-form input { flex: 1 1 200px; min-width: 0; }
 .group-loose { margin: 0.6rem 0 0.4rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; font-size: .72rem; }
 .group-tabs { margin-top: 6px; }
+.banner-act { display: inline-flex; margin-top: 8px; text-decoration: none; }
