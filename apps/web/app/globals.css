@@ -1886,3 +1886,6 @@ details.card.profile-fold > summary::before { content: none; }
 .group-loose { margin: 0.6rem 0 0.4rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; font-size: .72rem; }
 .group-tabs { margin-top: 6px; }
 .banner-act { display: inline-flex; margin-top: 8px; text-decoration: none; }
+.crew-pay .pay-person th { background: var(--surface-2); text-align: left; font-weight: 700; padding-top: 0.55rem; padding-bottom: 0.55rem; }
+.crew-pay .pay-line td:first-child { padding-left: 1.2rem; }
+.crew-pay .pay-add td { padding-left: 1.2rem; border-bottom: 0; }

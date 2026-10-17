@@ -149,7 +149,9 @@ export async function estimateShift(c: PoolClient, rules: Rules, rates: Map<stri
     ? (await c.query(
         `SELECT s.event_id, s.pay_type, s.pay_rate_override, s.min_hours, e.ot_after, e.state, e.address, cr.pay_type AS cr_type, cr.rate AS cr_rate
            FROM shifts s JOIN events e ON e.id = s.event_id
-           LEFT JOIN event_crew_rates cr ON cr.event_id = s.event_id AND cr.user_id = $2::uuid
+           LEFT JOIN LATERAL (SELECT x.pay_type, x.rate FROM event_crew_rates x
+           WHERE x.event_id = s.event_id AND x.user_id = $2::uuid AND (x.role_name = '' OR lower(x.role_name) = lower(trim(s.role_name)))
+           ORDER BY (x.role_name = '') LIMIT 1) cr ON true
           WHERE s.id = $1`, [shiftId, userId ?? null])).rows[0]
     : null;
   if (sh) sh.day_rate = (await loadDayRates(c)).get(roleKeyOf(role)) ?? 0;

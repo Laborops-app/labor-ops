@@ -3664,3 +3664,47 @@ test('phase groups: named groups inside a phase hold any position, follow the sh
   assert.equal(s1b.group_id, null);
   assert.equal(s1b.phase_id, li);
 });
+
+test('crew pay per position: one person can have a different rate for each position on the same event', async () => {
+  const a = await register('crewpos');
+  const tid = await tenantOf(a);
+  await call(a, 'POST', '/api/skills', { name: 'Hand', payRate: 20 });
+  await call(a, 'POST', '/api/skills', { name: 'Rigger', payRate: 35 });
+  const c1 = await mkCrew(a, 'cpos1');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Arena', startDate: '2030-07-08', endDate: '2030-07-08' })).json.event.id;
+  const hand = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Hand', startsAt: '2030-07-08T14:00:00Z', endsAt: '2030-07-08T18:00:00Z', headcount: 1 })).json.shift.id;
+  const rig = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Rigger', startsAt: '2030-07-08T19:00:00Z', endsAt: '2030-07-08T23:00:00Z', headcount: 1 })).json.shift.id;
+  for (const s of [hand, rig]) assert.ok([200, 201].includes((await call(a, 'POST', `/api/shifts/${s}/assign`, { userId: c1.id, confirmed: true })).status));
+
+  // $25/hr as a Hand, $50/hr as a Rigger, and $22/hr for any other position on this event
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/crew-rates/${c1.id}`, { payType: 'hourly', rate: 25, role: 'Hand' })).status, 200);
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/crew-rates/${c1.id}`, { payType: 'hourly', rate: 50, role: 'rigger' })).status, 200);
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/crew-rates/${c1.id}`, { payType: 'hourly', rate: 22 })).status, 200);
+  // saving the same position again updates it (case-insensitive), not a second row
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/crew-rates/${c1.id}`, { payType: 'hourly', rate: 50, role: 'Rigger' })).status, 200);
+  let d = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  assert.equal(d.crewRates.length, 3);
+  const mine = (id: string) => d.shifts.find((s: any) => s.id === id).assignments[0];
+  assert.deepEqual([mine(hand).rate, mine(hand).estimated_pay], [25, 100]);
+  assert.deepEqual([mine(rig).rate, mine(rig).estimated_pay], [50, 200]);
+
+  // payroll uses the position rates
+  await withTenant(tid, async (c) => {
+    for (const s of [hand, rig]) {
+      const asg = (await c.query('SELECT id FROM shift_assignments WHERE shift_id = $1', [s])).rows[0].id;
+      const sh = (await c.query('SELECT starts_at, ends_at FROM shifts WHERE id = $1', [s])).rows[0];
+      await c.query("INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in, clock_out, status) VALUES ($1,$2,$3,$4,$5,'approved')", [tid, asg, c1.id, sh.starts_at, sh.ends_at]);
+    }
+  });
+  const gross = async () => (await call(a, 'GET', '/api/payroll?from=2030-07-08&to=2030-07-08')).json.people.find((p: any) => p.userId === c1.id).gross;
+  assert.equal(await gross(), 100 + 200);
+
+  // removing the Rigger rate falls back to their all-positions rate on this event, then to the role's rate
+  assert.equal((await call(a, 'DELETE', `/api/events/${ev}/crew-rates/${c1.id}?role=Rigger`)).status, 200);
+  assert.equal(await gross(), 100 + 88);
+  assert.equal((await call(a, 'DELETE', `/api/events/${ev}/crew-rates/${c1.id}`)).status, 200);
+  assert.equal(await gross(), 100 + 140);
+  assert.equal((await call(a, 'DELETE', `/api/events/${ev}/crew-rates/${c1.id}?role=Rigger`)).status, 404);
+  d = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  assert.deepEqual(d.crewRates.map((r: any) => [r.role_name, r.rate]), [['Hand', 25]]);
+});

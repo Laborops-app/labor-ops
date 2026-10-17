@@ -2,7 +2,7 @@
 import { useTabTitle } from '@/lib/tabs';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
@@ -24,7 +24,7 @@ import { EventDetails, Phases, Clocking, RentmanCard, EventFull, Phase, RmView }
 import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 
 type Assignment = { id: string; user_id: string; user_name: string; status: string; is_lead?: boolean; clocked_in_at?: string | null; last_clock_out?: string | null; pay_type?: 'hourly' | 'day'; rate?: number | null; estimated_pay?: number | null };
-type CrewRate = { user_id: string; user_name: string; pay_type: 'hourly' | 'day'; rate: number; note: string | null };
+type CrewRate = { user_id: string; user_name: string; role_name?: string; pay_type: 'hourly' | 'day'; rate: number; note: string | null };
 type Elig = { user_id: string; missing_certs: string[]; time_off: boolean; outside_availability: boolean; booked?: { role_name: string; event_name: string; starts_at: string; ends_at: string } | null };
 /** Stars for a position; on a lead role ("Audio Lead") the rating as that position ("Audio") counts. */
 const starsFor = (m: { ratings?: Record<string, number> }, role: string) => {
@@ -1469,40 +1469,51 @@ function OvertimeCard({ eventId, ot, onSaved, onError }: { eventId: string; ot: 
 
 /** Pay for each crew member on this event: their role's rate by default, or their own hourly or day rate. */
 function CrewPay({ eventId, shifts, rates, onSaved }: { eventId: string; shifts: Shift[]; rates: CrewRate[]; onSaved: () => void }) {
-  type Row = { id: string; name: string; roles: string[]; defaults: string[] };
-  const people = new Map<string, Row>();
+  // One line per person per position they work here, plus an "all positions" line: a position's own rate wins,
+  // then the person's rate for every position on this event, then the shift's / role's rate.
+  const low = (r: string) => r.trim().toLowerCase();
+  const defaultOf = new Map<string, string>();
+  for (const s of shifts)
+    if (!defaultOf.has(low(s.role_name)))
+      defaultOf.set(low(s.role_name), s.pay_type === 'day' ? (s.hourly_rate ? `${money(s.hourly_rate)}/day` : 'day rate not set') : s.hourly_rate ? `${money(s.hourly_rate)}/hr` : 'no rate set');
+  const eventRoles = [...new Map(shifts.map((s) => [low(s.role_name), s.role_name])).values()].sort();
+  type Person = { id: string; name: string; roles: string[] };
+  const people = new Map<string, Person>();
   for (const s of shifts)
     for (const a of s.assignments.filter((x) => x.status !== 'declined')) {
-      const p = people.get(a.user_id) ?? { id: a.user_id, name: a.user_name, roles: [], defaults: [] };
-      if (!p.roles.includes(s.role_name)) {
-        p.roles.push(s.role_name);
-        p.defaults.push(s.pay_type === 'day' ? (s.hourly_rate ? `${money(s.hourly_rate)}/day` : 'day rate not set') : s.hourly_rate ? `${money(s.hourly_rate)}/hr` : 'no rate set');
-      }
+      const p = people.get(a.user_id) ?? { id: a.user_id, name: a.user_name, roles: [] };
+      if (!p.roles.some((r) => low(r) === low(s.role_name))) p.roles.push(s.role_name);
       people.set(a.user_id, p);
     }
   // People who have a rate but are no longer on a shift still show, so the rate can be removed.
-  for (const r of rates) if (!people.has(r.user_id)) people.set(r.user_id, { id: r.user_id, name: r.user_name, roles: [], defaults: [] });
+  for (const r of rates) if (!people.has(r.user_id)) people.set(r.user_id, { id: r.user_id, name: r.user_name, roles: [] });
+  const [extra, setExtra] = useState<Record<string, string[]>>({}); // positions added by hand, per person
   const list = [...people.values()].sort((a, b) => a.name.localeCompare(b.name));
-  const byUser = new Map(rates.map((r) => [r.user_id, r]));
+  const saved = (uid: string, role: string) => rates.find((r) => r.user_id === uid && low(r.role_name ?? '') === low(role));
+  const key = (uid: string, role: string) => `${uid}|${low(role)}`;
   const [edit, setEdit] = useState<Record<string, { type: 'default' | 'hourly' | 'day'; rate: string }>>({});
   const [busy, setBusy] = useState('');
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
-  const cur = (id: string) => edit[id] ?? (byUser.get(id) ? { type: byUser.get(id)!.pay_type, rate: String(byUser.get(id)!.rate) } : { type: 'default' as const, rate: '' });
-  const save = async (p: Row) => {
-    const e = cur(p.id);
-    setErr(''); setMsg(''); setBusy(p.id);
+  const cur = (uid: string, role: string) => {
+    const k = key(uid, role), sv = saved(uid, role);
+    return edit[k] ?? (sv ? { type: sv.pay_type, rate: String(sv.rate) } : { type: 'default' as const, rate: '' });
+  };
+  const save = async (p: Person, role: string) => {
+    const k = key(p.id, role), e = cur(p.id, role);
+    const what = role ? `${p.name} as ${role}` : `${p.name} (all positions)`;
+    setErr(''); setMsg(''); setBusy(k);
     try {
       if (e.type === 'default') {
-        if (byUser.has(p.id)) await api(`/api/events/${eventId}/crew-rates/${p.id}`, { method: 'DELETE' });
-        setMsg(`${p.name} is back on the role's rate.`);
+        if (saved(p.id, role)) await api(`/api/events/${eventId}/crew-rates/${p.id}${role ? `?role=${encodeURIComponent(role)}` : ''}`, { method: 'DELETE' });
+        setMsg(`${what}: back on the default rate.`);
       } else {
         const n = Math.round(Number(e.rate) * 100) / 100;
         if (!(n > 0)) throw new Error('Enter a rate above 0.');
-        await api(`/api/events/${eventId}/crew-rates/${p.id}`, { method: 'PUT', body: { payType: e.type, rate: n } });
-        setMsg(`${p.name}: ${money(n)}${e.type === 'day' ? ' per day' : '/hr'} on this event.`);
+        await api(`/api/events/${eventId}/crew-rates/${p.id}`, { method: 'PUT', body: { payType: e.type, rate: n, role: role || null } });
+        setMsg(`${what}: ${money(n)}${e.type === 'day' ? ' per day' : '/hr'} on this event.`);
       }
-      setEdit((x) => { const { [p.id]: _, ...rest } = x; return rest; });
+      setEdit((x) => { const { [k]: _, ...rest } = x; return rest; });
       onSaved();
     } catch (x) {
       setErr((x as Error).message);
@@ -1510,10 +1521,39 @@ function CrewPay({ eventId, shifts, rates, onSaved }: { eventId: string; shifts:
       setBusy('');
     }
   };
+  const rateLine = (p: Person, role: string, label: React.ReactNode, def: string) => {
+    const k = key(p.id, role), e = cur(p.id, role), sv = saved(p.id, role), dirty = !!edit[k];
+    const who = role ? `${p.name} as ${role}` : `${p.name}, all positions`;
+    return (
+      <tr key={k} className="pay-line">
+        <td className="small">{label}</td>
+        <td className="small">{def}</td>
+        <td>
+          <div className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
+            <select value={e.type} aria-label={`Pay type for ${who}`} onChange={(x) => setEdit({ ...edit, [k]: { type: x.target.value as 'default' | 'hourly' | 'day', rate: e.rate } })} style={{ width: 'auto' }}>
+              <option value="default">Default</option>
+              <option value="hourly">Hourly</option>
+              <option value="day">Day rate</option>
+            </select>
+            {e.type !== 'default' && (
+              <span className="money-input">
+                <span aria-hidden="true">$</span>
+                <input type="number" min={0.01} max={100000} step="0.01" inputMode="decimal" value={e.rate} aria-label={`Rate for ${who}`} placeholder={e.type === 'day' ? '300.00' : '35.00'}
+                  onChange={(x) => setEdit({ ...edit, [k]: { type: e.type, rate: x.target.value } })} style={{ width: '6.5rem' }} />
+                <span className="muted small">{e.type === 'day' ? '/day' : '/hr'}</span>
+              </span>
+            )}
+          </div>
+          {sv && !dirty && <div className="small" style={{ marginTop: 4 }}><span className="chip open">Own rate · {money(sv.rate)}{sv.pay_type === 'day' ? '/day' : '/hr'}</span></div>}
+        </td>
+        <td>{dirty && <button className="btn small primary" disabled={busy === k} onClick={() => save(p, role)}>{busy === k ? 'Saving…' : 'Save'}</button>}</td>
+      </tr>
+    );
+  };
   return (
     <div>
       <p className="muted small">
-        Set a different pay for one person on this event: an hourly rate (overtime still applies) or a flat day rate. It replaces the role&apos;s rate and any rate on the shift, for this event only. They are told when their pay changes, and payroll uses it.
+        Set a different pay for one person on this event, per position: an hourly rate (overtime still applies) or a flat day rate. A position&apos;s rate wins; &ldquo;All positions&rdquo; covers any position without its own rate; otherwise the shift&apos;s or role&apos;s rate is used. They are told when their pay changes, and payroll uses it.
       </p>
       {err && <Banner onClose={() => setErr('')}>{err}</Banner>}
       {msg && <Banner kind="ok" onClose={() => setMsg('')}>{msg}</Banner>}
@@ -1521,41 +1561,32 @@ function CrewPay({ eventId, shifts, rates, onSaved }: { eventId: string; shifts:
         <Empty>No one is on this event yet. Add crew to a shift first.</Empty>
       ) : (
         <div className="table-wrap">
-          <table className="table">
-            <thead><tr><th>Crew member</th><th>Default</th><th>Pay on this event</th><th></th></tr></thead>
+          <table className="table crew-pay">
+            <thead><tr><th>Position</th><th>Default</th><th>Pay on this event</th><th></th></tr></thead>
             <tbody>
               {list.map((p) => {
-                const e = cur(p.id);
-                const saved = byUser.get(p.id);
-                const dirty = !!edit[p.id];
+                const own = rates.filter((r) => r.user_id === p.id && r.role_name).map((r) => r.role_name!);
+                const roles = [...new Map([...p.roles, ...own, ...(extra[p.id] ?? [])].map((r) => [low(r), r])).values()];
+                const others = eventRoles.filter((r) => !roles.some((x) => low(x) === low(r)));
+                const allSaved = saved(p.id, '');
                 return (
-                  <tr key={p.id}>
-                    <td>{p.name}<div className="muted small">{p.roles.join(', ') || 'Not on a shift now'}</div></td>
-                    <td className="small">{p.defaults.join(', ') || <span className="muted">—</span>}</td>
-                    <td>
-                      <div className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
-                        <select value={e.type} aria-label={`Pay type for ${p.name}`} onChange={(x) => setEdit({ ...edit, [p.id]: { type: x.target.value as 'default' | 'hourly' | 'day', rate: e.rate } })} style={{ width: 'auto' }}>
-                          <option value="default">Role&apos;s rate</option>
-                          <option value="hourly">Hourly</option>
-                          <option value="day">Day rate</option>
-                        </select>
-                        {e.type !== 'default' && (
-                          <span className="money-input">
-                            <span aria-hidden="true">$</span>
-                            <input type="number" min={0.01} max={100000} step="0.01" inputMode="decimal" value={e.rate} aria-label={`Rate for ${p.name}`} placeholder={e.type === 'day' ? '300.00' : '35.00'}
-                              onChange={(x) => setEdit({ ...edit, [p.id]: { type: e.type, rate: x.target.value } })} style={{ width: '6.5rem' }} />
-                            <span className="muted small">{e.type === 'day' ? '/day' : '/hr'}</span>
-                          </span>
-                        )}
-                      </div>
-                      {saved && !dirty && <div className="small" style={{ marginTop: 4 }}><span className="chip open">Own rate · {money(saved.rate)}{saved.pay_type === 'day' ? '/day' : '/hr'}</span></div>}
-                    </td>
-                    <td>
-                      {dirty && (
-                        <button className="btn small primary" disabled={busy === p.id} onClick={() => save(p)}>{busy === p.id ? 'Saving…' : 'Save'}</button>
-                      )}
-                    </td>
-                  </tr>
+                  <Fragment key={p.id}>
+                    <tr className="pay-person"><th colSpan={4}>{p.name}{p.roles.length === 0 && <span className="muted small"> · not on a shift now</span>}</th></tr>
+                    {roles.map((r) =>
+                      rateLine(p, r, <>{r}{!p.roles.some((x) => low(x) === low(r)) && <span className="muted"> (not on it now)</span>}</>,
+                        allSaved ? `${money(allSaved.rate)}${allSaved.pay_type === 'day' ? '/day' : '/hr'} (all positions)` : defaultOf.get(low(r)) ?? '—'))}
+                    {(roles.length !== 1 || allSaved) && rateLine(p, '', <i>All positions</i>, 'role rates')}
+                    {others.length > 0 && (
+                      <tr className="pay-add">
+                        <td colSpan={4}>
+                          <select value="" aria-label={`Add a position rate for ${p.name}`} onChange={(x) => x.target.value && setExtra({ ...extra, [p.id]: [...(extra[p.id] ?? []), x.target.value] })} style={{ width: 'auto' }}>
+                            <option value="">+ Rate for another position…</option>
+                            {others.map((r) => <option key={r} value={r}>{r}</option>)}
+                          </select>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>

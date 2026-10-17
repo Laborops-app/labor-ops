@@ -351,7 +351,7 @@ export async function eventRoutes(app: FastifyInstance) {
       const rules = rates ? await loadRules(c) : null;
       // Personal rates for this event (admins and rate-allowed coordinators only).
       const crewRates = seePay
-        ? (await c.query('SELECT r.user_id, u.name AS user_name, r.pay_type, r.rate::float AS rate, r.note, r.updated_at FROM event_crew_rates r JOIN users u ON u.id = r.user_id WHERE r.event_id = $1 ORDER BY u.name', [eventId])).rows
+        ? (await c.query('SELECT r.user_id, u.name AS user_name, r.role_name, r.pay_type, r.rate::float AS rate, r.note, r.updated_at FROM event_crew_rates r JOIN users u ON u.id = r.user_id WHERE r.event_id = $1 ORDER BY u.name, r.role_name', [eventId])).rows
         : [];
       const personal = new Set(crewRates.map((r) => r.user_id));
       for (const s of shifts) {
@@ -476,7 +476,9 @@ export async function eventRoutes(app: FastifyInstance) {
   // Hourly at a set rate, or a flat day rate, for one person's shifts on this event. Admins, and coordinators allowed to adjust rates.
   app.put('/api/events/:id/crew-rates/:userId', { preHandler: mgr }, async (req, reply) => {
     const { id: eventId, userId } = z.object({ id: z.string().uuid(), userId: z.string().uuid() }).parse(req.params);
-    const b = z.object({ payType: z.enum(['hourly', 'day']), rate: z.number().positive().max(100000), note: z.string().trim().max(200).optional().nullable() }).parse(req.body);
+    // role: one position on this event ("Audio Tech"); empty or left out = every position they work here.
+    const b = z.object({ payType: z.enum(['hourly', 'day']), rate: z.number().positive().max(100000), note: z.string().trim().max(200).optional().nullable(), role: z.string().trim().max(100).optional().nullable() }).parse(req.body);
+    const role = b.role?.trim() ?? '';
     const r = await withTenant(req.user.tid, async (c) => {
       if (!(await canAdjustRates(c, req.user))) return { code: 403, error: 'Only admins, and coordinators allowed to adjust rates, can set pay.' };
       const ev = (await c.query('SELECT id, name FROM events WHERE id = $1', [eventId])).rows[0];
@@ -484,18 +486,18 @@ export async function eventRoutes(app: FastifyInstance) {
       const u = (await c.query('SELECT id, name FROM users WHERE id = $1 AND active', [userId])).rows[0];
       if (!u) return { code: 404, error: 'Crew member not found' };
       const rate = Math.round(b.rate * 100) / 100;
-      const prev = (await c.query('SELECT pay_type, rate::float AS rate FROM event_crew_rates WHERE event_id = $1 AND user_id = $2', [eventId, userId])).rows[0];
+      const prev = (await c.query('SELECT pay_type, rate::float AS rate FROM event_crew_rates WHERE event_id = $1 AND user_id = $2 AND lower(role_name) = lower($3)', [eventId, userId, role])).rows[0];
       await c.query(
-        `INSERT INTO event_crew_rates (tenant_id, event_id, user_id, pay_type, rate, note, updated_by) VALUES ($1,$2,$3,$4,$5,$6,$7)
-         ON CONFLICT (event_id, user_id) DO UPDATE SET pay_type = EXCLUDED.pay_type, rate = EXCLUDED.rate, note = EXCLUDED.note, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-        [req.user.tid, eventId, userId, b.payType, rate, b.note || null, req.user.sub],
+        `INSERT INTO event_crew_rates (tenant_id, event_id, user_id, pay_type, rate, note, updated_by, role_name) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT (event_id, user_id, lower(role_name)) DO UPDATE SET pay_type = EXCLUDED.pay_type, rate = EXCLUDED.rate, note = EXCLUDED.note, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+        [req.user.tid, eventId, userId, b.payType, rate, b.note || null, req.user.sub, role],
       );
-      await audit(c, req.user.tid, req.user.sub, 'event.crew_rate', 'event', eventId, { userId, payType: b.payType, rate, before: prev ?? null });
+      await audit(c, req.user.tid, req.user.sub, 'event.crew_rate', 'event', eventId, { userId, role: role || null, payType: b.payType, rate, before: prev ?? null });
       // Tell the person when their pay for a job they are on changes.
-      const onIt = (await c.query("SELECT 1 FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE s.event_id = $1 AND a.user_id = $2 AND a.status <> 'declined' LIMIT 1", [eventId, userId])).rowCount;
+      const onIt = (await c.query("SELECT 1 FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE s.event_id = $1 AND a.user_id = $2 AND a.status <> 'declined' AND ($3 = '' OR lower(trim(s.role_name)) = lower($3)) LIMIT 1", [eventId, userId, role])).rowCount;
       if (onIt && (!prev || prev.pay_type !== b.payType || prev.rate !== rate))
-        await notify(c, req.user.tid, { userId, category: 'shift_change', title: `Pay updated: ${ev.name}`, body: b.payType === 'day' ? `You'll be paid a day rate of $${rate.toFixed(2)} per shift day on this event.` : `Your rate on this event is $${rate.toFixed(2)}/hr (overtime rules still apply).`, link: '/my-shifts' });
-      return { code: 200, rate: { user_id: userId, user_name: u.name, pay_type: b.payType, rate, note: b.note || null } };
+        await notify(c, req.user.tid, { userId, category: 'shift_change', title: `Pay updated: ${ev.name}`, body: (b.payType === 'day' ? `You'll be paid a day rate of $${rate.toFixed(2)} per shift day` : `Your rate is $${rate.toFixed(2)}/hr`) + (role ? ` as ${role} on this event` : ' on this event') + (b.payType === 'day' ? '.' : ' (overtime rules still apply).'), link: '/my-shifts' });
+      return { code: 200, rate: { user_id: userId, user_name: u.name, role_name: role, pay_type: b.payType, rate, note: b.note || null } };
     });
     const { code, ...rest } = r as { code: number; [k: string]: unknown };
     return reply.code(code).send(rest);
@@ -505,9 +507,10 @@ export async function eventRoutes(app: FastifyInstance) {
     const { id: eventId, userId } = z.object({ id: z.string().uuid(), userId: z.string().uuid() }).parse(req.params);
     const r = await withTenant(req.user.tid, async (c) => {
       if (!(await canAdjustRates(c, req.user))) return { code: 403, error: 'Only admins, and coordinators allowed to adjust rates, can set pay.' };
-      const d = await c.query('DELETE FROM event_crew_rates WHERE event_id = $1 AND user_id = $2 RETURNING pay_type, rate::float AS rate', [eventId, userId]);
+      const role = String((req.query as { role?: string }).role ?? '').trim().slice(0, 100);
+      const d = await c.query('DELETE FROM event_crew_rates WHERE event_id = $1 AND user_id = $2 AND lower(role_name) = lower($3) RETURNING pay_type, rate::float AS rate', [eventId, userId, role]);
       if (!d.rowCount) return { code: 404, error: 'No personal rate to remove' };
-      await audit(c, req.user.tid, req.user.sub, 'event.crew_rate_removed', 'event', eventId, { userId, before: d.rows[0] });
+      await audit(c, req.user.tid, req.user.sub, 'event.crew_rate_removed', 'event', eventId, { userId, role: role || null, before: d.rows[0] });
       return { code: 200, ok: true };
     });
     const { code, ...rest } = r as { code: number; [k: string]: unknown };
