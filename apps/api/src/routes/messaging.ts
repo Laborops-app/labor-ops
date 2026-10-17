@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import crypto from 'node:crypto';
 import { z } from 'zod';
-import { pool, withTenant, audit } from '../db';
+import { withTenant, audit } from '../db';
 import { guard } from '../auth';
 import { config } from '../config';
 import { sendEmail, sendSms, toE164 } from '../notify/providers';
@@ -39,8 +39,7 @@ const str = (max = 300) => z.string().trim().max(max);
 
 const schemas: Record<Provider, z.ZodTypeAny> = {
   ses: z.object({ host: str(200), port: z.coerce.number().int().min(1).max(65535).optional(), user: str(200), pass: str(300).optional(), from: str(200) }).strict(),
-  twilio: z.object({ sid: str(100), token: str(200).optional(), from: str(30) }).strict(),
-  sns: z.object({ region: str(40), accessKeyId: str(100), secretAccessKey: str(200).optional(), originationNumber: str(30), senderId: str(11) }).strict(),
+  zernio: z.object({ apiKey: str(300).optional(), from: str(30) }).strict(),
   podium: z.object({ clientId: str(200), clientSecret: str(300).optional(), locationUid: str(100) }).strict(),
 };
 
@@ -62,7 +61,7 @@ export async function messagingRoutes(app: FastifyInstance) {
         email: { live: emailLive(r), from: r.ses.from, host: r.ses.host || null, source: r.ses.source },
         sms: { live: smsLive(r), provider: r.smsProvider, from: smsSender(r) },
         settings: view,
-        urls: { appUrl: config.appUrl, podiumRedirect: redirectUri(), podiumWebhook: webhookUrl(req.user.tid), twilioInbound: `${config.appUrl}/api/sms/twilio/inbound/${req.user.tid}` },
+        urls: { appUrl: config.appUrl, podiumRedirect: redirectUri(), podiumWebhook: webhookUrl(req.user.tid) },
         stats: (
           await c.query(`SELECT channel, status, count(*)::int AS n FROM deliveries WHERE created_at > now() - interval '30 days' GROUP BY channel, status`)
         ).rows,
@@ -83,7 +82,7 @@ export async function messagingRoutes(app: FastifyInstance) {
   );
 
   app.put('/api/messaging/settings/:provider', { preHandler: adm }, async (req, reply) => {
-    const { provider } = z.object({ provider: z.enum(['ses', 'twilio', 'sns', 'podium']) }).parse(req.params);
+    const { provider } = z.object({ provider: z.enum(['ses', 'zernio', 'podium']) }).parse(req.params);
     const body = schemas[provider].parse(req.body ?? {}) as Record<string, any>;
     await withTenant(req.user.tid, async (c) => {
       await saveIntegration(c, req.user.tid, req.user.sub, provider, body);
@@ -94,7 +93,7 @@ export async function messagingRoutes(app: FastifyInstance) {
   });
 
   app.delete('/api/messaging/settings/:provider', { preHandler: adm }, async (req) => {
-    const { provider } = z.object({ provider: z.enum(['ses', 'twilio', 'sns', 'podium']) }).parse(req.params);
+    const { provider } = z.object({ provider: z.enum(['ses', 'zernio', 'podium']) }).parse(req.params);
     await withTenant(req.user.tid, async (c) => {
       await clearIntegration(c, provider);
       await audit(c, req.user.tid, req.user.sub, 'messaging.settings.clear', 'integration', null, { provider });
@@ -104,7 +103,7 @@ export async function messagingRoutes(app: FastifyInstance) {
   });
 
   app.put('/api/messaging/sms-provider', { preHandler: adm }, async (req) => {
-    const { provider } = z.object({ provider: z.enum(['none', 'twilio', 'sns', 'podium']) }).parse(req.body);
+    const { provider } = z.object({ provider: z.enum(['none', 'zernio', 'podium']) }).parse(req.body);
     await withTenant(req.user.tid, async (c) => {
       await c.query('UPDATE tenants SET sms_provider = $1 WHERE id = $2', [provider, req.user.tid]);
       await audit(c, req.user.tid, req.user.sub, 'messaging.sms_provider', 'tenant', req.user.tid, { provider });
@@ -281,30 +280,5 @@ export async function messagingRoutes(app: FastifyInstance) {
       return { ok: true };
     });
 
-    // Twilio STOP webhook. /inbound uses the server-level Twilio token; /inbound/:tenantId uses that company's saved token.
-    const twilioInbound = async (req: any, reply: any) => {
-      const tenantId: string | undefined = req.params?.tenantId;
-      let token = config.sms.token;
-      if (tenantId) {
-        if (!z.string().uuid().safeParse(tenantId).success) return reply.code(404).send({ error: 'Not found' });
-        const cfg = await withTenant(tenantId, (c) => loadSettings(c, tenantId));
-        token = cfg.twilio.token;
-      }
-      if (!token) return reply.code(503).send({ error: 'SMS is not configured' });
-      const params = (req.body ?? {}) as Record<string, string>;
-      const url = `${config.appUrl}/api/sms/twilio/inbound${tenantId ? '/' + tenantId : ''}`;
-      const data = url + Object.keys(params).sort().map((k) => k + params[k]).join('');
-      const expect = crypto.createHmac('sha1', token).update(data).digest('base64');
-      const a = Buffer.from(expect);
-      const b = Buffer.from(String(req.headers['x-twilio-signature'] ?? ''));
-      if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return reply.code(403).send({ error: 'Bad signature' });
-      if (STOP_WORDS.has(String(params.Body ?? '').trim().toUpperCase())) {
-        const digits = String(params.From ?? '').replace(/\D/g, '').slice(-10);
-        if (digits.length === 10) await pool.query('SELECT notify_sms_stop($1)', [digits]);
-      }
-      return reply.type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
-    };
-    inst.post('/api/sms/twilio/inbound', twilioInbound);
-    inst.post('/api/sms/twilio/inbound/:tenantId', twilioInbound);
   });
 }

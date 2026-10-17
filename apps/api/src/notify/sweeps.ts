@@ -1,7 +1,7 @@
 import { pool, withTenant } from '../db';
 import { notify } from './index';
 import { loadSettings } from './settings';
-import { snsOptedOut } from './providers';
+import { zernioOptedOut } from './providers';
 import { fmtWhen } from './templates';
 import { purgeArchive } from '../routes/archive';
 
@@ -11,10 +11,10 @@ export async function runSweeps(): Promise<{ reminders: number; certs: number }>
   let reminders = 0;
   let certs = 0;
   for (const t of tenants) {
-    // With Amazon SNS, STOP replies are handled by AWS; mirror them so the app stops queuing texts.
+    // STOP replies to the Zernio number are kept by Zernio; mirror them so the app stops queuing texts.
     const cfg = await withTenant(t.id, (c) => loadSettings(c, t.id)).catch(() => null);
-    if (cfg?.smsProvider === 'sns')
-      for (const digits of await snsOptedOut(cfg)) if (digits.length === 10) await pool.query('SELECT notify_sms_stop($1)', [digits]);
+    if (cfg?.smsProvider === 'zernio')
+      for (const digits of await zernioOptedOut(cfg)) await pool.query('SELECT notify_sms_stop($1)', [digits]);
     await withTenant(t.id, async (c) => {
       // Archived events are kept two years.
       await purgeArchive(c, t.id);

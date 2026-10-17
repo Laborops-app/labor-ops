@@ -249,7 +249,7 @@ export async function platformRoutes(app: FastifyInstance) {
         storage: { source: effective().source, enabled: storageEnabled() },
         lastBackup: lastBackup[0] ?? null,
         email: !!(config.email.host && config.email.user),
-        sms: config.sms.provider === 'sns' ? !!config.sms.sns.accessKeyId : !!config.sms.sid,
+        sms: !!(config.sms.zernio.apiKey && config.sms.zernio.from),
         demo: config.seedDemo,
         uptime: Math.round(process.uptime()),
         version: process.env.APP_VERSION ?? null,

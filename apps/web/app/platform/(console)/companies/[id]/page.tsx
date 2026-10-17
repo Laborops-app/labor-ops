@@ -20,7 +20,7 @@ type Detail = {
   history: { action: string; detail: any; created_at: string; actor: string | null }[];
   plans: string[];
 };
-const PROVIDER: Record<string, string> = { ses: 'Amazon SES email', twilio: 'Twilio texts', sns: 'Amazon SNS texts', podium: 'Podium', rentman: 'Rentman', quickbooks: 'QuickBooks' };
+const PROVIDER: Record<string, string> = { ses: 'Amazon SES email', zernio: 'Zernio texts', podium: 'Podium', rentman: 'Rentman', quickbooks: 'QuickBooks' };
 const human = (a: string) => a.replace(/[._]/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
 
 export default function CompanyPage() {

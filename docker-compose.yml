@@ -86,16 +86,9 @@ services:
       SES_SMTP_USER: ${SES_SMTP_USER:-}
       SES_SMTP_PASS: ${SES_SMTP_PASS:-}
       EMAIL_FROM: ${EMAIL_FROM:-LaborOps <no-reply@laborops.app>}
-      # Text messages (Twilio). Leave unset to run in log-only mode.
-      SMS_PROVIDER: ${SMS_PROVIDER:-twilio}
-      SNS_REGION: ${SNS_REGION:-us-west-2}
-      SNS_ACCESS_KEY_ID: ${SNS_ACCESS_KEY_ID:-}
-      SNS_SECRET_ACCESS_KEY: ${SNS_SECRET_ACCESS_KEY:-}
-      SNS_ORIGINATION_NUMBER: ${SNS_ORIGINATION_NUMBER:-}
-      SNS_SENDER_ID: ${SNS_SENDER_ID:-}
-      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
-      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
-      TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
+      # Text messages through Zernio. Leave unset to run in log-only mode (companies can add their own key in the app).
+      ZERNIO_API_KEY: ${ZERNIO_API_KEY:-}
+      ZERNIO_FROM: ${ZERNIO_FROM:-}
       # Object storage and backups are set on the Platform page. These only matter if you prefer configuring by hand;
       # left blank, the built-in RustFS above is used automatically.
       S3_ENDPOINT: ${S3_ENDPOINT:-}

@@ -695,8 +695,9 @@ test('notifications: queue, inbox, preferences, SMS consent, reset and invite li
   await call(c1.session, 'PUT', '/api/my/notification-prefs', { email: true, sms: true, smsConsent: true });
   assert.equal((await pool.query("SELECT notify_sms_stop('8015550142') AS n")).rows[0].n >= 1, true);
   assert.equal((await call(c1.session, 'GET', '/api/my/notification-prefs')).json.sms, false);
+  // Twilio is gone: its webhook no longer exists
   const inbound = await app.inject({ method: 'POST', url: '/api/sms/twilio/inbound', payload: 'Body=STOP&From=%2B18015550142', headers: { 'content-type': 'application/x-www-form-urlencoded' } });
-  assert.equal(inbound.statusCode, 503); // no Twilio token configured in tests
+  assert.equal(inbound.statusCode, 404);
   void as;
 });
 
@@ -704,28 +705,66 @@ async function tidOf() {
   return (await pool.query('SELECT tenant_id FROM auth_find_user($1)', [`admin-ntf-${run}@test.example`])).rows[0].tenant_id as string;
 }
 
-test('twilio inbound webhook: signature is required, STOP switches SMS off', async () => {
-  const { config } = await import('../src/config');
-  const crypto = await import('node:crypto');
-  const a = await register('twi');
-  const c1 = await mkCrew(a, 'tw1');
+test('zernio: texts go through the Zernio API; STOP (409 or the opt-out list) switches texting off', async () => {
+  const { processQueue } = await import('../src/notify/worker');
+  const { runSweeps } = await import('../src/notify/sweeps');
+  const a = await register('zer');
+  const c1 = await mkCrew(a, 'zr1');
+  const c2 = await mkCrew(a, 'zr2');
   await call(a, 'PATCH', `/api/crew/${c1.id}`, { phone: '(385) 555-0199' });
-  await call(c1.session, 'PUT', '/api/my/notification-prefs', { email: true, sms: true, smsConsent: true });
-  config.sms.token = 'test-token';
+  await call(a, 'PATCH', `/api/crew/${c2.id}`, { phone: '(385) 555-0177' });
+  for (const c of [c1, c2]) await call(c.session, 'PUT', '/api/my/notification-prefs', { email: false, sms: true, smsConsent: true });
+  // the key is saved encrypted and never returned
+  assert.equal((await call(a, 'PUT', '/api/messaging/settings/zernio', { apiKey: 'zk_live_secret', from: '+18015550100' })).status, 200);
+  await call(a, 'PUT', '/api/messaging/sms-provider', { provider: 'zernio' });
+  const m = await call(a, 'GET', '/api/messaging');
+  assert.deepEqual([m.json.sms.provider, m.json.sms.live, m.json.sms.from, m.json.settings.zernio.apiKeySet], ['zernio', true, '+18015550100', true]);
+  assert.ok(!m.text.includes('zk_live_secret'));
+
+  const realFetch = globalThis.fetch;
+  const calls: { url: string; init: any }[] = [];
+  globalThis.fetch = (async (u: any, init: any) => {
+    const url = String(u);
+    if (!url.startsWith('https://zernio.com/api/v1/')) return realFetch(u, init);
+    calls.push({ url, init });
+    if (url.endsWith('/sms/messages')) {
+      const to = JSON.parse(init.body).to;
+      if (to === '+13855550177') return new Response(JSON.stringify({ error: `Recipient ${to} has opted out of SMS from this number`, type: 'invalid_request_error' }), { status: 409 });
+      return new Response(JSON.stringify({ id: 'zmsg_1', conversationId: 'c1', status: 'sent' }), { status: 200 });
+    }
+    if (url.includes('/sms/opt-outs')) return new Response(JSON.stringify({ optOuts: [{ phoneNumber: '+13855550199', optedOutAt: '2030-01-01T00:00:00Z', keyword: 'STOP', from: '+18015550100' }], count: 1 }), { status: 200 });
+    return new Response('{}', { status: 404 });
+  }) as typeof fetch;
   try {
-    const params: Record<string, string> = { Body: 'stop', From: '+13855550199' };
-    const sig = (p: Record<string, string>) =>
-      crypto.createHmac('sha1', 'test-token').update(`${config.appUrl}/api/sms/twilio/inbound` + Object.keys(p).sort().map((k) => k + p[k]).join('')).digest('base64');
-    const send = (sg: string) =>
-      app.inject({ method: 'POST', url: '/api/sms/twilio/inbound', payload: new URLSearchParams(params).toString(),
-        headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-twilio-signature': sg } });
-    assert.equal((await send('bogus')).statusCode, 403);
+    const ev = (await call(a, 'POST', '/api/events', { name: 'ZGig', startDate: '2030-01-01', endDate: '2030-01-02' })).json.event.id;
+    const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Rigger', startsAt: start(30), endsAt: start(36), headcount: 2 })).json.shift.id;
+    await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id });
+    await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c2.id });
+    await processQueue(100);
+    const sends = calls.filter((c) => c.url.endsWith('/sms/messages'));
+    assert.equal(sends.length, 2);
+    const first = sends.find((c) => JSON.parse(c.init.body).to === '+13855550199')!;
+    assert.equal(first.init.headers.Authorization, 'Bearer zk_live_secret');
+    assert.ok(first.init.headers['Idempotency-Key']);
+    const body = JSON.parse(first.init.body);
+    assert.equal(body.from, '+18015550100');
+    assert.match(body.text, /New shift offered/);
+    const log = (await call(a, 'GET', '/api/messaging')).json.deliveries.filter((d: any) => d.channel === 'sms');
+    assert.equal(log.find((d: any) => d.to_addr === '+13855550199').status, 'sent');
+    assert.equal(log.find((d: any) => d.to_addr === '+13855550177').status, 'failed');
+    // a 409 "opted out" answer switches texting off for that person
+    assert.equal((await call(c2.session, 'GET', '/api/my/notification-prefs')).json.sms, false);
     assert.equal((await call(c1.session, 'GET', '/api/my/notification-prefs')).json.sms, true);
-    assert.equal((await send(sig(params))).statusCode, 200);
+    // the opt-out list from Zernio is mirrored by the sweep
+    await runSweeps();
+    assert.ok(calls.some((c) => c.url.includes('/sms/opt-outs')));
     assert.equal((await call(c1.session, 'GET', '/api/my/notification-prefs')).json.sms, false);
   } finally {
-    config.sms.token = '';
+    globalThis.fetch = realFetch;
   }
+  // Twilio and SNS settings are no longer accepted
+  assert.equal((await call(a, 'PUT', '/api/messaging/settings/twilio', { sid: 'x', token: 'y', from: '+1' })).status, 400);
+  assert.equal((await call(a, 'PUT', '/api/messaging/sms-provider', { provider: 'sns' })).status, 400);
 });
 
 test('messaging settings: per-company, encrypted, secrets never returned, admin only', async () => {
@@ -750,12 +789,13 @@ test('messaging settings: per-company, encrypted, secrets never returned, admin 
   m = await call(a, 'GET', '/api/messaging');
   assert.equal(m.json.settings.ses.user, 'AKIAUSER2');
   assert.equal(m.json.settings.ses.passSet, true);
-  // SNS texting
-  await call(a, 'PUT', '/api/messaging/settings/sns', { region: 'us-west-2', accessKeyId: 'AKIASNS', secretAccessKey: 'sns-secret', originationNumber: '+18015550100', senderId: '' });
+  // Zernio texting
+  await call(a, 'PUT', '/api/messaging/settings/zernio', { apiKey: 'zernio-secret', from: '+18015550100' });
   assert.equal((await call(a, 'PUT', '/api/messaging/sms-provider', { provider: 'nope' })).status, 400);
-  await call(a, 'PUT', '/api/messaging/sms-provider', { provider: 'sns' });
+  await call(a, 'PUT', '/api/messaging/sms-provider', { provider: 'zernio' });
   m = await call(a, 'GET', '/api/messaging');
-  assert.equal(m.json.sms.provider, 'sns');
+  assert.ok(!m.text.includes('zernio-secret'));
+  assert.equal(m.json.sms.provider, 'zernio');
   assert.equal(m.json.sms.live, true);
   assert.equal(m.json.sms.from, '+18015550100');
   // another company is unaffected

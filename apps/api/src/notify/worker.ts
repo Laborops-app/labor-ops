@@ -1,5 +1,5 @@
 import { pool, withTenant } from '../db';
-import { sendEmail, sendSms } from './providers';
+import { sendEmail, sendSms, type SendResult } from './providers';
 import { sendPush } from './push';
 import { loadSettings, saveIntegration, type Resolved } from './settings';
 import { runSweeps } from './sweeps';
@@ -34,7 +34,7 @@ export async function processQueue(limit = 20): Promise<number> {
         await finish('skipped', 'placeholder address', null);
         continue;
       }
-      let r: { ok: true; id: string; logged?: boolean } | { ok: false; permanent: boolean; error: string };
+      let r: SendResult;
       if (d.channel === 'push') {
         const sub = (await pool.query('SELECT * FROM notify_push_sub($1)', [d.to_addr])).rows[0];
         if (!sub) {
@@ -63,7 +63,10 @@ export async function processQueue(limit = 20): Promise<number> {
               await withTenant(d.tenant_id, (c) => saveIntegration(c, d.tenant_id, null, 'podium', t, { raw: true }));
               invalidateSettings(d.tenant_id);
             },
+            key: d.id,
           });
+        // The person replied STOP to our number: stop texting them in LaborOps too.
+        if (!r.ok && r.optedOut) await pool.query('SELECT notify_sms_stop($1)', [String(d.to_addr).replace(/\D/g, '').slice(-10)]);
       }
       if (r.ok) await finish('sent', (r as any).logged ? 'log-only mode: not delivered' : null, r.id || null);
       else if (r.permanent || d.attempts >= MAX_ATTEMPTS) await finish('failed', r.error, null);

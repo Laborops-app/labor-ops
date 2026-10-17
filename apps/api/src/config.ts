@@ -23,7 +23,7 @@ export const config = {
   // New companies may sign up. Off in production unless SIGNUP_OPEN=true (always on when developing and testing).
   signupOpen: process.env.SIGNUP_OPEN === 'true' || (process.env.NODE_ENV !== 'production' && process.env.SIGNUP_OPEN !== 'false'),
   demoPassword: process.env.DEMO_PASSWORD ?? 'LaborOps-Demo-1',
-  // Public base URL, used for links in emails/SMS and for verifying Twilio webhooks.
+  // Public base URL, used for links in emails and text messages.
   appUrl: (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/+$/, ''),
   // Where the platform console is served (its own subdomain in production; the same server when developing).
   platformUrl: (process.env.PLATFORM_URL ?? process.env.APP_URL ?? 'http://localhost:3000').replace(/\/+$/, ''),
@@ -35,20 +35,15 @@ export const config = {
     pass: process.env.SES_SMTP_PASS ?? '',
     from: process.env.EMAIL_FROM ?? 'LaborOps <no-reply@laborops.app>',
   },
-  // SMS provider: 'twilio' (default) or 'sns' (Amazon SNS). Not configured = log-only mode.
+  // Text messages through Zernio (zernio.com). A company can also save its own Zernio key in the app, or use Podium.
+  // Not configured = log-only mode (texts are recorded, nothing is sent).
   sms: {
-    provider: (process.env.SMS_PROVIDER ?? 'twilio').toLowerCase() === 'sns' ? ('sns' as const) : ('twilio' as const),
-    sns: {
-      region: process.env.SNS_REGION ?? 'us-west-2',
-      accessKeyId: process.env.SNS_ACCESS_KEY_ID ?? '',
-      secretAccessKey: process.env.SNS_SECRET_ACCESS_KEY ?? '',
-      // Optional: the registered 10DLC / toll-free number to send from (E.164), or an alphanumeric sender ID where allowed.
-      originationNumber: process.env.SNS_ORIGINATION_NUMBER ?? '',
-      senderId: process.env.SNS_SENDER_ID ?? '',
+    provider: 'zernio' as const,
+    zernio: {
+      apiKey: process.env.ZERNIO_API_KEY ?? '',
+      // The SMS-enabled number (E.164) or approved branded sender ID to send from.
+      from: process.env.ZERNIO_FROM ?? '',
     },
-    sid: process.env.TWILIO_ACCOUNT_SID ?? '',
-    token: process.env.TWILIO_AUTH_TOKEN ?? '',
-    from: process.env.TWILIO_FROM_NUMBER ?? '',
   },
   workers: process.env.NOTIFY_WORKERS !== 'false',
   // S3-compatible object storage (RustFS on the same server by default). Unset = files stay in Postgres.

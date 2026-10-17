@@ -1911,3 +1911,6 @@ details.card.profile-fold > summary::before { content: none; }
 .upd-rec { list-style: none; padding: 0; margin: 0 0 10px; columns: 2 220px; font-size: 0.9rem; }
 .good-text { color: var(--good); }
 .upd-crew details { padding: 6px 0; border-top: 1px solid var(--border); } .upd-crew details:first-of-type { border-top: 0; } .upd-crew summary { cursor: pointer; }
+.fold-card .fold-right { display: inline-flex; align-items: center; gap: 10px; flex: none; }
+.fold-card .fold-right .small { white-space: nowrap; }
+.fold-card > summary .muted.small { font-weight: 400; }

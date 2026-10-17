@@ -1,10 +1,10 @@
-import { SNSClient, PublishCommand, ListPhoneNumbersOptedOutCommand } from '@aws-sdk/client-sns';
+import crypto from 'node:crypto';
 import nodemailer, { type Transporter } from 'nodemailer';
 import type { Resolved } from './settings';
 import { emailLive, smsLive } from './settings';
 import { sendPodiumText } from './podium';
 
-export type SendResult = { ok: true; id: string; logged?: boolean } | { ok: false; permanent: boolean; error: string };
+export type SendResult = { ok: true; id: string; logged?: boolean } | { ok: false; permanent: boolean; error: string; optedOut?: boolean };
 
 const transports = new Map<string, Transporter>();
 function getTransport(c: Resolved['ses']) {
@@ -57,87 +57,53 @@ export function toE164(raw: string | null | undefined): string | null {
   return null;
 }
 
-const snsClients = new Map<string, SNSClient>();
-const getSns = (c: Resolved['sns']) => {
-  const k = `${c.region}:${c.accessKeyId}:${c.secretAccessKey.length}`;
-  let cl = snsClients.get(k);
-  if (!cl) {
-    if (snsClients.size > 50) snsClients.clear();
-    cl = new SNSClient({ region: c.region || 'us-west-2', credentials: { accessKeyId: c.accessKeyId, secretAccessKey: c.secretAccessKey } });
-    snsClients.set(k, cl);
-  }
-  return cl;
-};
+/** Zernio's API (overridable for tests). */
+export const ZERNIO_API = () => (process.env.ZERNIO_API_BASE ?? 'https://zernio.com/api/v1').replace(/\/+$/, '');
 
-// Errors where retrying cannot help (bad number, opted out, sandbox/unverified destination, bad credentials).
-const SNS_PERMANENT = new Set([
-  'InvalidParameterException', 'InvalidParameter', 'OptedOutException', 'OptedOut', 'VerificationException',
-  'AuthorizationErrorException', 'AuthorizationError', 'InvalidClientTokenId', 'UnrecognizedClientException', 'SignatureDoesNotMatch',
-]);
-
-async function sendSnsSms(c: Resolved['sns'], m: { to: string; body: string }): Promise<SendResult> {
+async function sendZernioSms(c: Resolved['zernio'], m: { to: string; body: string; key?: string }): Promise<SendResult> {
   try {
-    const attrs: Record<string, { DataType: string; StringValue: string }> = {
-      'AWS.SNS.SMS.SMSType': { DataType: 'String', StringValue: 'Transactional' },
-    };
-    if (c.originationNumber) attrs['AWS.MM.SMS.OriginationNumber'] = { DataType: 'String', StringValue: c.originationNumber };
-    else if (c.senderId) attrs['AWS.SNS.SMS.SenderID'] = { DataType: 'String', StringValue: c.senderId };
-    const r = await getSns(c).send(new PublishCommand({ PhoneNumber: m.to, Message: m.body, MessageAttributes: attrs }), { abortSignal: AbortSignal.timeout(15_000) });
-    return { ok: true, id: String(r.MessageId ?? '') };
+    const res = await fetch(`${ZERNIO_API()}/sms/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${c.apiKey}`,
+        'Content-Type': 'application/json',
+        // A retry of the same delivery replays Zernio's first answer instead of texting twice.
+        'Idempotency-Key': m.key ?? crypto.randomUUID(),
+      },
+      body: JSON.stringify({ from: c.from, to: m.to, text: m.body }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (res.ok) return { ok: true, id: String(data.id ?? '') };
+    const msg = String(data.error?.message ?? data.error ?? data.message ?? 'request failed').slice(0, 250);
+    // 409: the person replied STOP (or the same send is still in flight); 404: no such sending number; 401/403: bad key.
+    return { ok: false, permanent: res.status >= 400 && res.status < 500 && res.status !== 429, error: `Zernio ${res.status}: ${msg}`, optedOut: res.status === 409 && /opt/i.test(msg) };
   } catch (e: any) {
-    const name = String(e?.name ?? e?.Code ?? '');
-    return { ok: false, permanent: SNS_PERMANENT.has(name), error: `SNS ${name || 'error'}: ${String(e?.message ?? e).slice(0, 250)}` };
+    return { ok: false, permanent: false, error: String(e?.message ?? e).slice(0, 300) };
   }
 }
 
-/** Numbers that replied STOP to an AWS-owned sender. Returns last-10-digit strings. Empty when not using SNS or on error. */
-export async function snsOptedOut(cfg: Resolved): Promise<string[]> {
-  if (cfg.smsProvider !== 'sns' || !smsLive(cfg)) return [];
-  const out: string[] = [];
+/** Numbers that replied STOP to the Zernio sender. Returns last-10-digit strings; empty when not using Zernio or on error. */
+export async function zernioOptedOut(cfg: Resolved): Promise<string[]> {
+  if (cfg.smsProvider !== 'zernio' || !smsLive(cfg)) return [];
   try {
-    let token: string | undefined;
-    do {
-      const r = await getSns(cfg.sns).send(new ListPhoneNumbersOptedOutCommand({ nextToken: token }));
-      for (const n of r.phoneNumbers ?? []) out.push(n.replace(/\D/g, '').slice(-10));
-      token = r.nextToken;
-    } while (token && out.length < 5000);
+    const res = await fetch(`${ZERNIO_API()}/sms/opt-outs?limit=5000`, { headers: { Authorization: `Bearer ${cfg.zernio.apiKey}` }, signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) return [];
+    const data: any = await res.json().catch(() => ({}));
+    return (data.optOuts ?? []).map((o: any) => String(o.phoneNumber ?? '').replace(/\D/g, '').slice(-10)).filter((d: string) => d.length === 10);
   } catch (e: any) {
-    console.error('sns opt-out sync failed:', e?.name ?? e);
+    console.error('zernio opt-out sync failed:', e?.message ?? e);
+    return [];
   }
-  return out;
 }
 
-export type SmsContext = { persistPodium?: (t: { accessToken: string; refreshToken: string; expiresAt: number }) => Promise<void>; contactName?: string };
+export type SmsContext = { persistPodium?: (t: { accessToken: string; refreshToken: string; expiresAt: number }) => Promise<void>; contactName?: string; key?: string };
 
 export async function sendSms(cfg: Resolved, m: { to: string; body: string }, ctx: SmsContext = {}): Promise<SendResult> {
   if (!smsLive(cfg)) {
     console.log(`[sms:log-only] provider=${cfg.smsProvider} to=${m.to} chars=${m.body.length}`);
     return { ok: true, id: 'log-only', logged: true };
   }
-  if (cfg.smsProvider === 'sns') return sendSnsSms(cfg.sns, m);
   if (cfg.smsProvider === 'podium') return sendPodiumText(cfg.podium, { ...m, contactName: ctx.contactName }, ctx.persistPodium);
-  return sendTwilioSms(cfg.twilio, m);
-}
-
-async function sendTwilioSms(c: Resolved['twilio'], m: { to: string; body: string }): Promise<SendResult> {
-  try {
-    const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${c.sid}/Messages.json`, {
-      method: 'POST',
-      headers: {
-        Authorization: 'Basic ' + Buffer.from(`${c.sid}:${c.token}`).toString('base64'),
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({ To: m.to, From: c.from, Body: m.body }).toString(),
-      signal: AbortSignal.timeout(15_000),
-    });
-    const data: any = await res.json().catch(() => ({}));
-    if (res.ok) return { ok: true, id: String(data.sid ?? '') };
-    return {
-      ok: false,
-      permanent: res.status >= 400 && res.status < 500 && res.status !== 429,
-      error: `Twilio ${data.code ?? res.status}: ${String(data.message ?? 'request failed').slice(0, 250)}`,
-    };
-  } catch (e: any) {
-    return { ok: false, permanent: false, error: String(e?.message ?? e).slice(0, 300) };
-  }
+  return sendZernioSms(cfg.zernio, { ...m, key: ctx.key });
 }

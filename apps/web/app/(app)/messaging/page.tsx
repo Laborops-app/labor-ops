@@ -2,6 +2,7 @@
 import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Shell from '@/components/Shell';
+import Fold from '@/components/Fold';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { api, fmtDateTime } from '@/lib/api';
 
@@ -9,14 +10,13 @@ type Row = { id: string; channel: 'email' | 'sms' | 'push'; category: string; to
 type Reply = { id: string; from_addr: string; contact_name: string | null; body: string; received_at: string; user_name: string | null };
 type Data = {
   email: { live: boolean; from: string; host: string | null; source: 'company' | 'server' };
-  sms: { live: boolean; provider: 'none' | 'twilio' | 'sns' | 'podium'; from: string | null };
+  sms: { live: boolean; provider: 'none' | 'zernio' | 'podium'; from: string | null };
   settings: {
     ses: { host: string; port: number; user: string; passSet: boolean; from: string; source: string };
-    twilio: { sid: string; tokenSet: boolean; from: string; source: string };
-    sns: { region: string; accessKeyId: string; secretAccessKeySet: boolean; originationNumber: string; senderId: string; source: string };
+    zernio: { apiKeySet: boolean; from: string; source: string };
     podium: { clientId: string; locationUid: string; clientSecretSet: boolean; connected: boolean; connectedAt: string | null; webhookSecretSet: boolean; webhookRegistered: boolean };
   };
-  urls: { appUrl: string; podiumRedirect: string; podiumWebhook: string; twilioInbound: string };
+  urls: { appUrl: string; podiumRedirect: string; podiumWebhook: string };
   stats: { channel: string; status: string; n: number }[];
   deliveries: Row[];
   replies: Reply[];
@@ -24,7 +24,7 @@ type Data = {
 
 const mask = (r: Row) => (r.channel === 'sms' ? r.to_addr.replace(/\d(?=\d{4})/g, '•') : r.to_addr);
 const CH = { email: 'Email', sms: 'Text', push: 'Push' } as const;
-const PROVIDERS = { none: 'Off (log only)', podium: 'Podium', sns: 'Amazon SNS', twilio: 'Twilio' } as const;
+const PROVIDERS = { none: 'Off (log only)', zernio: 'Zernio', podium: 'Podium' } as const;
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -65,8 +65,7 @@ function Body() {
   const [busy, setBusy] = useState('');
   const [to, setTo] = useState({ email: '', sms: '' });
   const [ses, setSes] = useState({ host: '', port: '587', user: '', pass: '', from: '' });
-  const [sns, setSns] = useState({ region: 'us-west-2', accessKeyId: '', secretAccessKey: '', originationNumber: '', senderId: '' });
-  const [twilio, setTwilio] = useState({ sid: '', token: '', from: '' });
+  const [zernio, setZernio] = useState({ apiKey: '', from: '' });
   const [podium, setPodium] = useState({ clientId: '', clientSecret: '', locationUid: '' });
   const [locs, setLocs] = useState<{ uid: string; name: string }[] | null>(null);
   const [hook, setHook] = useState<{ url: string; secret: string } | null>(null);
@@ -77,8 +76,7 @@ function Body() {
         setD(r);
         const s = r.settings;
         setSes({ host: s.ses.host, port: String(s.ses.port || 587), user: s.ses.user, pass: '', from: s.ses.from });
-        setSns({ region: s.sns.region || 'us-west-2', accessKeyId: s.sns.accessKeyId, secretAccessKey: '', originationNumber: s.sns.originationNumber, senderId: s.sns.senderId });
-        setTwilio({ sid: s.twilio.sid, token: '', from: s.twilio.from });
+        setZernio({ apiKey: '', from: s.zernio.from });
         setPodium({ clientId: s.podium.clientId, clientSecret: '', locationUid: s.podium.locationUid });
       })
       .catch((e) => setError(e.message));
@@ -105,7 +103,7 @@ function Body() {
     }
   };
 
-  const save = (p: 'ses' | 'twilio' | 'sns' | 'podium', body: object, label: string) =>
+  const save = (p: 'ses' | 'zernio' | 'podium', body: object, label: string) =>
     run(`save-${p}`, async () => {
       await api(`/api/messaging/settings/${p}`, { method: 'PUT', body });
       return `${label} settings saved.`;
@@ -155,14 +153,13 @@ function Body() {
             <h2>Browser push</h2>
             <span className="small">{dot(true)}Built in</span>
           </div>
-          <p className="muted small">Crew turn this on from their profile page. No setup needed.</p>
+          <p className="muted small">Notifications in the web app and the installed phone app. Crew turn them on from their profile page. No setup needed.</p>
           <p className="small">{stat('push')}</p>
         </section>
       </div>
 
-      <section className="card">
-        <h2>Email · Amazon SES</h2>
-        <p className="muted small">
+      <Fold id="msg-email" title="Email · Amazon SES" sub={d.email.live ? `Sending from ${d.email.from}` : 'Not set up'} status={<>{dot(d.email.live)}{d.email.live ? 'Connected' : 'Not connected'}</>}>
+        <p className="muted small" style={{ marginTop: 0 }}>
           In the SES console, verify your sending domain, then create SMTP credentials. The SMTP user and password are not the same as your AWS login.
           {s.ses.source === 'server' && s.ses.host && ' Currently using the server’s default settings; saving here overrides them for your company.'}
         </p>
@@ -202,11 +199,10 @@ function Body() {
           <input style={{ flex: 1, minWidth: 180 }} type="email" placeholder="you@example.com" value={to.email} onChange={(e) => setTo({ ...to, email: e.target.value })} required aria-label="Send a test email to" />
           <button className="btn" disabled={!!busy}>{busy === 'test-email' ? 'Sending…' : 'Send test email'}</button>
         </form>
-      </section>
+      </Fold>
 
-      <section className="card">
-        <h2>Text messages</h2>
-        <p className="muted small">Pick which service sends texts. People only receive texts after they turn them on and agree on their own profile.</p>
+      <Fold id="msg-sms" title="Text messages · service" sub={`Using ${PROVIDERS[d.sms.provider]}`} status={<>{dot(d.sms.live)}{d.sms.live ? 'Connected' : 'Not connected'}</>} defaultOpen={!d.sms.live}>
+        <p className="muted small" style={{ marginTop: 0 }}>Pick which service sends texts. People only receive texts after they turn them on and agree on their own profile.</p>
         <div className="seg" role="radiogroup" aria-label="Texting service">
           {(Object.keys(PROVIDERS) as (keyof typeof PROVIDERS)[]).map((k) => (
             <button
@@ -226,14 +222,43 @@ function Body() {
           <input style={{ flex: 1, minWidth: 180 }} type="tel" placeholder="+1 801 555 0123" value={to.sms} onChange={(e) => setTo({ ...to, sms: e.target.value })} required aria-label="Send a test text to" />
           <button className="btn" disabled={!!busy}>{busy === 'test-sms' ? 'Sending…' : 'Send test text'}</button>
         </form>
-      </section>
+        <p className="muted small">In-app notifications and phone/browser push work without any of these.</p>
+      </Fold>
 
-      <section className="card">
-        <div className="row space">
-          <h2>Podium</h2>
-          <span className="small">{dot(s.podium.connected)}{s.podium.connected ? 'Connected' : 'Not connected'}</span>
-        </div>
-        <p className="muted small">Texts go out through your Podium inbox, and customer replies show up in both places. You need a Podium developer app (client ID and secret).</p>
+      <Fold
+        id="msg-zernio"
+        title="Zernio"
+        sub={s.zernio.apiKeySet && s.zernio.from ? `Sending from ${s.zernio.from}` : 'Add your API key and sending number'}
+        status={<>{dot(d.sms.provider === 'zernio' && d.sms.live)}{s.zernio.apiKeySet && s.zernio.from ? (d.sms.provider === 'zernio' ? 'In use' : 'Saved') : 'Not set up'}</>}
+      >
+        <p className="muted small" style={{ marginTop: 0 }}>
+          Texting through Zernio (zernio.com). In your Zernio dashboard, create an API key and get an SMS-enabled number (US numbers need their carrier
+          registration approved before they can send). People who reply STOP are switched off automatically.
+          {s.zernio.source === 'server' && s.zernio.apiKeySet && ' Currently using the server’s default key; saving here overrides it for your company.'}
+        </p>
+        <form onSubmit={(e) => { e.preventDefault(); save('zernio', zernio, 'Zernio'); }}>
+          <div className="settings-grid">
+            <Field label="API key" hint={s.zernio.apiKeySet ? '(saved — leave blank to keep)' : ''}>
+              <input type="password" value={zernio.apiKey} onChange={(e) => setZernio({ ...zernio, apiKey: e.target.value })} autoComplete="new-password" placeholder={s.zernio.apiKeySet ? '••••••••' : ''} required={!s.zernio.apiKeySet} />
+            </Field>
+            <Field label="Send from" hint="your Zernio number">
+              <input value={zernio.from} onChange={(e) => setZernio({ ...zernio, from: e.target.value })} placeholder="+18015550100" required />
+            </Field>
+            <div className="form-actions">
+              <button className="btn primary" disabled={!!busy}>Save Zernio settings</button>
+              {d.sms.provider !== 'zernio' && s.zernio.apiKeySet && (
+                <button type="button" className="btn" disabled={!!busy} onClick={() => run('use-zernio', async () => { await api('/api/messaging/sms-provider', { method: 'PUT', body: { provider: 'zernio' } }); return 'Texts now go through Zernio.'; })}>Use Zernio for texts</button>
+              )}
+              {s.zernio.source === 'company' && (
+                <button type="button" className="btn ghost" disabled={!!busy} onClick={() => run('clear-zernio', async () => { await api('/api/messaging/settings/zernio', { method: 'DELETE' }); return 'Zernio settings cleared.'; })}>Clear</button>
+              )}
+            </div>
+          </div>
+        </form>
+      </Fold>
+
+      <Fold id="msg-podium" title="Podium" sub="Texts through your Podium inbox, with replies" status={<>{dot(s.podium.connected)}{s.podium.connected ? 'Connected' : 'Not connected'}</>}>
+        <p className="muted small" style={{ marginTop: 0 }}>Texts go out through your Podium inbox, and customer replies show up in both places. You need a Podium developer app (client ID and secret).</p>
         <p className="small">Add this as the redirect address in your Podium app:</p>
         <Copy text={d.urls.podiumRedirect} />
         <form
@@ -304,71 +329,10 @@ function Body() {
             )}
           </>
         )}
-      </section>
-
-      <div className="cols-2">
-        <section className="card">
-          <h2>Amazon SNS</h2>
-          <p className="muted small">Texting through AWS. Create an IAM user allowed to publish SMS; new accounts start in a sandbox that only reaches numbers you verify in the SNS console.</p>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              save('sns', sns, 'Amazon SNS');
-            }}
-          >
-            <div className="grid-form" style={{ gridTemplateColumns: '1fr' }}>
-              <Field label="Region">
-                <input value={sns.region} onChange={(e) => setSns({ ...sns, region: e.target.value })} required />
-              </Field>
-              <Field label="Access key ID">
-                <input value={sns.accessKeyId} onChange={(e) => setSns({ ...sns, accessKeyId: e.target.value })} autoComplete="off" required />
-              </Field>
-              <Field label="Secret access key" hint={s.sns.secretAccessKeySet ? '(saved — leave blank to keep)' : ''}>
-                <input type="password" value={sns.secretAccessKey} onChange={(e) => setSns({ ...sns, secretAccessKey: e.target.value })} autoComplete="new-password" placeholder={s.sns.secretAccessKeySet ? '••••••••' : ''} required={!s.sns.secretAccessKeySet} />
-              </Field>
-              <Field label="Sending number" hint="your registered toll-free or 10DLC number">
-                <input value={sns.originationNumber} onChange={(e) => setSns({ ...sns, originationNumber: e.target.value })} placeholder="+18015550100" />
-              </Field>
-              <div className="form-actions">
-                <button className="btn primary" disabled={!!busy}>Save SNS settings</button>
-              </div>
-            </div>
-          </form>
-          <p className="muted small">The same account can send push alerts to a mobile app later. Browsers use the built-in push above.</p>
-        </section>
-
-        <section className="card">
-          <h2>Twilio</h2>
-          <p className="muted small">Texting through Twilio. A free trial only reaches numbers you verify in Twilio.</p>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              save('twilio', twilio, 'Twilio');
-            }}
-          >
-            <div className="grid-form" style={{ gridTemplateColumns: '1fr' }}>
-              <Field label="Account SID">
-                <input value={twilio.sid} onChange={(e) => setTwilio({ ...twilio, sid: e.target.value })} autoComplete="off" required />
-              </Field>
-              <Field label="Auth token" hint={s.twilio.tokenSet ? '(saved — leave blank to keep)' : ''}>
-                <input type="password" value={twilio.token} onChange={(e) => setTwilio({ ...twilio, token: e.target.value })} autoComplete="new-password" placeholder={s.twilio.tokenSet ? '••••••••' : ''} required={!s.twilio.tokenSet} />
-              </Field>
-              <Field label="From number">
-                <input value={twilio.from} onChange={(e) => setTwilio({ ...twilio, from: e.target.value })} placeholder="+18015550100" required />
-              </Field>
-              <div className="form-actions">
-                <button className="btn primary" disabled={!!busy}>Save Twilio settings</button>
-              </div>
-            </div>
-          </form>
-          <p className="small">Incoming-message webhook (for STOP):</p>
-          <Copy text={d.urls.twilioInbound} />
-        </section>
-      </div>
+      </Fold>
 
       {d.replies.length > 0 && (
-        <section className="card">
-          <h2>Text replies</h2>
+        <Fold id="msg-replies" title="Text replies" sub={`${d.replies.length} recent`}>
           <div className="table-wrap">
             <table>
               <tbody>
@@ -385,11 +349,10 @@ function Body() {
               </tbody>
             </table>
           </div>
-        </section>
+        </Fold>
       )}
 
-      <section className="card">
-        <h2>Recent messages</h2>
+      <Fold id="msg-recent" title="Recent messages" sub="The last 50 emails, texts and push notifications" defaultOpen>
         {d.deliveries.length === 0 ? (
           <Empty>Nothing has been sent yet.</Empty>
         ) : (
@@ -425,7 +388,7 @@ function Body() {
             </table>
           </div>
         )}
-      </section>
+      </Fold>
     </>
   );
 }

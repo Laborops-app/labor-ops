@@ -36,7 +36,7 @@ docker-compose.yml   The whole stack on one server: Postgres, API, web, Caddy.
 - Per event for any period: fill rate, scheduled vs worked hours, overtime and double time, labor cost (approved time, as paid), billed (accepted quote, or hours × billing rates), margin, labor budget vs actual, no-shows and late arrivals. CSV download.
 
 **Messages and the app**
-- In-app notifications, email (Amazon SES), text messages (Twilio, Amazon SNS or Podium) and browser push. Chat with files, groups and event channels.
+- In-app notifications, email (Amazon SES), text messages (Zernio or Podium) and browser push. Chat with files, groups and event channels.
 - Installable web app (no native apps to maintain): an iPhone guide for *Add to Home Screen* (required there for notifications), an install button on Android, then a prompt to turn on alerts.
 - Push messages use **Declarative Web Push** (shown by Safari even if the service worker isn't running) and set the app badge. For people with push on, the text message for the same alert is held back 10 minutes and only sent if the push wasn't opened (`SMS_ESCALATE_MIN`).
 - Password-free sign-in for crew: a **one-time sign-in link** by email (and text, for people who agreed to texts), and **passkeys** (Face ID / fingerprint) added on the Profile page.
