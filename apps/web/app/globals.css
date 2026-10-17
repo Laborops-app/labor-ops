@@ -1889,3 +1889,25 @@ details.card.profile-fold > summary::before { content: none; }
 .crew-pay .pay-person th { background: var(--surface-2); text-align: left; font-weight: 700; padding-top: 0.55rem; padding-bottom: 0.55rem; }
 .crew-pay .pay-line td:first-child { padding-left: 1.2rem; }
 .crew-pay .pay-add td { padding-left: 1.2rem; border-bottom: 0; }
+/* Send an update */
+.upd-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+.upd-chips .chip { border: 1px solid transparent; cursor: pointer; font: inherit; font-size: 0.8rem; font-weight: 600; background: var(--surface-2); color: var(--muted); padding: 0.3rem 0.75rem; margin: 0; }
+.upd-chips .chip.on { background: var(--chip-bg); color: var(--chip-text); border-color: var(--chip-text); }
+.upd-field { display: grid; gap: 4px; margin-bottom: 10px; font-weight: 600; font-size: 0.86rem; }
+.upd-field textarea { resize: vertical; font: inherit; }
+.upd-who { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; margin: 4px 0 12px; display: grid; gap: 6px; }
+.upd-who legend { font-weight: 700; padding: 0 4px; }
+.upd-sub { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-top: 4px; }
+.upd-person-q { max-width: 280px; }
+.upd-send { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin: 14px 0 6px; padding-top: 12px; border-top: 1px solid var(--border); }
+.upd-names { color: var(--muted); }
+.upd-h { margin: 22px 0 8px; font-size: 1.05rem; }
+.upd-list { list-style: none; margin: 0; padding: 0; }
+.upd-list > li { border: 1px solid var(--border); border-radius: 12px; margin-bottom: 8px; overflow: hidden; }
+.upd-item { all: unset; box-sizing: border-box; cursor: pointer; width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; }
+.upd-item:hover, .upd-item:focus-visible { background: var(--surface-2); }
+.upd-detail { padding: 0 12px 12px; }
+.upd-body { white-space: pre-wrap; margin: 4px 0 10px; }
+.upd-rec { list-style: none; padding: 0; margin: 0 0 10px; columns: 2 220px; font-size: 0.9rem; }
+.good-text { color: var(--good); }
+.upd-crew details { padding: 6px 0; border-top: 1px solid var(--border); } .upd-crew details:first-of-type { border-top: 0; } .upd-crew summary { cursor: pointer; }

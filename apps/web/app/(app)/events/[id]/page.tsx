@@ -16,6 +16,7 @@ import Modal from '@/components/Modal';
 import InvoicePanel from '@/components/InvoicePanel';
 import HrEventView from '@/components/HrEventView';
 import EventCrewSearch from '@/components/EventCrewSearch';
+import EventUpdates from '@/components/EventUpdates';
 import TopbarAction, { PlusIcon, TrashIcon, avClass, initialsOf } from '@/components/TopbarAction';
 import CopyEvent from '@/components/CopyEvent';
 import { api, ApiError, Me, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
@@ -191,7 +192,7 @@ function Body({ me }: { me: Me }) {
   const [tplId, setTplId] = useState('');
   const [tplPhase, setTplPhase] = useState('');
   // Event settings panel: clock-in, overtime and shift templates live here to keep the page short.
-  const [settings, setSettings] = useState<null | 'clock' | 'ot' | 'tpl' | 'pay' | 'rentman' | 'invoice' | 'rate'>(null);
+  const [settings, setSettings] = useState<null | 'clock' | 'ot' | 'tpl' | 'pay' | 'rentman' | 'invoice' | 'rate' | 'update'>(null);
   const [rateInfo, setRateInfo] = useState<{ rated: number; total: number; due: number } | null>(null);
   const loadRateInfo = () =>
     api<{ workers: { ended: boolean; review_id: string | null }[]; rated: number; total: number }>(`/api/events/${id}/reviews`)
@@ -1243,6 +1244,7 @@ function Body({ me }: { me: Me }) {
               ★ Rate crew{rateInfo?.due ? ` · ${rateInfo.due}` : rateInfo?.total ? ` · ${rateInfo.rated}/${rateInfo.total}` : ''}
             </button>
             <button className="btn small" onClick={() => setSettings('clock')} aria-haspopup="dialog">⚙ Settings</button>
+            <button className="btn small" onClick={() => setSettings('update')} aria-haspopup="dialog" title="Send an update to the crew scheduled on this event">📣 Send update</button>
             {rm && (rm.connected || rm.linked) && (
               <button className="btn small" onClick={() => setSettings('rentman')} aria-haspopup="dialog" title={rm.project ? rm.project.name : 'Link a Rentman project'}>
                 Rentman{rm.linked && rm.project ? ` · ${rm.project.number ? `#${rm.project.number}` : rm.project.name}` : ''}
@@ -1326,15 +1328,16 @@ function Body({ me }: { me: Me }) {
 
       {settings && typeof document !== 'undefined' && createPortal(
         <div className="drawer-backdrop" onMouseDown={() => setSettings(null)}>
-          <aside className={settings === 'rentman' || settings === 'invoice' || settings === 'rate' ? 'drawer wide' : 'drawer'} role="dialog" aria-modal="true" aria-label={settings === 'rentman' ? 'Rentman' : settings === 'invoice' ? 'Invoice' : settings === 'rate' ? 'Rate crew' : 'Event settings'} onMouseDown={(e) => e.stopPropagation()}>
+          <aside className={settings === 'rentman' || settings === 'invoice' || settings === 'rate' || settings === 'update' ? 'drawer wide' : 'drawer'} role="dialog" aria-modal="true" aria-label={settings === 'rentman' ? 'Rentman' : settings === 'invoice' ? 'Invoice' : settings === 'rate' ? 'Rate crew' : settings === 'update' ? 'Send an update' : 'Event settings'} onMouseDown={(e) => e.stopPropagation()}>
             <div className="row space">
-              <h2 style={{ margin: 0 }}>{settings === 'rentman' ? 'Rentman' : settings === 'invoice' ? `Invoice · ${ev.name}` : settings === 'rate' ? `Rate crew · ${ev.name}` : 'Event settings'}</h2>
+              <h2 style={{ margin: 0 }}>{settings === 'rentman' ? 'Rentman' : settings === 'invoice' ? `Invoice · ${ev.name}` : settings === 'rate' ? `Rate crew · ${ev.name}` : settings === 'update' ? `Send an update · ${ev.name}` : 'Event settings'}</h2>
               <button className="btn ghost small" aria-label="Close" onClick={() => setSettings(null)}>✕</button>
             </div>
             {settings === 'rentman' && <div style={{ marginTop: 12 }}><RentmanCard eventId={id} isAdmin={me.role === 'admin'} onError={setError} onView={setRm} /></div>}
             {settings === 'invoice' && <InvoicePanel eventId={id} isAdmin={me.role === 'admin'} />}
             {settings === 'rate' && <div style={{ marginTop: 12 }}><EventRatings me={me} eventId={id} onProgress={() => loadRateInfo()} /></div>}
-            {settings !== 'rentman' && settings !== 'invoice' && settings !== 'rate' && <div className="phase-tabs" role="tablist" aria-label="Settings section" style={{ margin: '12px 0' }}>
+            {settings === 'update' && <div style={{ marginTop: 12 }}><EventUpdates eventId={id} eventName={ev.name} shifts={d.shifts} phases={d.phases} groups={d.groups ?? []} /></div>}
+            {settings !== 'rentman' && settings !== 'invoice' && settings !== 'rate' && settings !== 'update' && <div className="phase-tabs" role="tablist" aria-label="Settings section" style={{ margin: '12px 0' }}>
               {([['clock', 'Clock-in'], ['ot', 'Overtime'], ['tpl', 'Shift templates'], ...((me.role === 'admin' || me.canAdjustRates) ? [['pay', 'Crew pay']] as const : [])] as const).map(([k, label]) => (
                 <button key={k} type="button" role="tab" aria-selected={settings === k} className={settings === k ? 'tab on' : 'tab'} onClick={() => setSettings(k)}>
                   {label}

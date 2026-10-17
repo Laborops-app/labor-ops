@@ -7,7 +7,7 @@ type A = { id: string; user_id: string; user_name: string; status: string; is_le
 type S = { id: string; role_name: string; starts_at: string; ends_at: string; phase_id: string | null; assignments: A[] };
 type P = { id: string; label: string };
 
-const STATUS: Record<string, string> = { accepted: 'Confirmed', pending: 'Offered', declined: 'Declined' };
+const STATUS: Record<string, string> = { accepted: 'Confirmed', offered: 'Offered', pending: 'Requested', declined: 'Declined' };
 
 /** Search the crew on this event by name or role, and jump to their shift. */
 export default function EventCrewSearch({ shifts, phases, onJump }: { shifts: S[]; phases: P[]; onJump: (shiftId: string, phaseKey: string, role: string) => void }) {

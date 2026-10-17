@@ -3,10 +3,11 @@ import { toE164 } from './providers';
 import { absUrl, renderEmail } from './templates';
 import { loadRates, loadRules, estimateShift, money } from '../pay';
 
-export type Category = 'assignment' | 'shift_change' | 'reminder' | 'approval_request' | 'approval_result' | 'open_shift' | 'chat' | 'cert' | 'account' | 'training' | 'attendance' | 'billing';
+export type Category = 'assignment' | 'shift_change' | 'reminder' | 'approval_request' | 'approval_result' | 'open_shift' | 'chat' | 'cert' | 'account' | 'training' | 'attendance' | 'billing' | 'event_update';
 
 // Categories that may also go out by text message (when the person opted in). Everything else is email + in-app only.
 const SMS_CATEGORIES = new Set<Category>(['assignment', 'shift_change', 'reminder', 'approval_result', 'attendance']);
+// (event_update texts only when the sender ticks "also text": allowSms.)
 /**
  * Someone with the app installed (push on) gets the push first; the text only goes out if they have not opened it
  * within this many minutes. Saves texts and still reaches people whose phone dropped the push.
@@ -39,9 +40,10 @@ type Target = { id: string; email: string; phone: string | null; notify_email: b
  * Record an in-app notification and queue email/SMS deliveries according to the person's settings.
  * Runs inside the caller's tenant transaction, so a rolled-back action never sends anything.
  */
-export async function notify(c: PoolClient, tenantId: string, input: NotifyInput | NotifyInput[]): Promise<void> {
+export async function notify(c: PoolClient, tenantId: string, input: NotifyInput | NotifyInput[]): Promise<{ userId: string; id: string }[]> {
   const list = Array.isArray(input) ? input : [input];
-  if (!list.length) return;
+  const made: { userId: string; id: string }[] = [];
+  if (!list.length) return made;
   const ids = [...new Set(list.map((n) => n.userId))];
   const { rows } = await c.query<Target>(
     'SELECT id, email, phone, notify_email, notify_sms, sms_consent_at FROM users WHERE id = ANY($1::uuid[]) AND active',
@@ -57,6 +59,7 @@ export async function notify(c: PoolClient, tenantId: string, input: NotifyInput
       [tenantId, u.id, n.category, n.title, n.body, n.link ?? null],
     );
     const nid = nr[0].id;
+    made.push({ userId: u.id, id: nid });
     const mySubs = subs.filter((x) => x.user_id === u.id).slice(0, 5);
     const unread = mySubs.length ? Number((await c.query('SELECT count(*)::int AS n FROM notifications WHERE user_id = $1 AND read_at IS NULL', [u.id])).rows[0].n) : 0;
     for (const sub of mySubs) {
@@ -92,6 +95,7 @@ export async function notify(c: PoolClient, tenantId: string, input: NotifyInput
       );
     }
   }
+  return made;
 }
 
 /** Notify every active admin / labor coordinator in the tenant. */

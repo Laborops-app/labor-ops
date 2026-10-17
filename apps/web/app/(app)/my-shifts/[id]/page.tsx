@@ -16,6 +16,7 @@ type Detail = {
     starts_at: string;
     ends_at: string;
     required_certs: string[];
+    event_id: string;
     event_name: string;
     venue: string | null;
     address: string | null;
@@ -36,6 +37,12 @@ function Body() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const load = () => api<Detail>(`/api/my/assignments/${id}`).then(setD).catch((e) => setError(e.message));
+  // Updates the labor coordinator sent about this event.
+  const [updates, setUpdates] = useState<{ id: string; title: string; body: string; created_at: string; sent_by_name: string | null }[]>([]);
+  const eventId = d?.shift.event_id;
+  useEffect(() => {
+    if (eventId) api<{ updates: typeof updates }>(`/api/my/events/${eventId}/updates`).then((r) => setUpdates(r.updates)).catch(() => {});
+  }, [eventId]);
   useEffect(() => {
     load();
   }, [id]);
@@ -106,6 +113,18 @@ function Body() {
               Decline
             </button>
           </div>
+        </section>
+      )}
+
+      {updates.length > 0 && (
+        <section className="card upd-crew">
+          <h2>Updates for this event</h2>
+          {updates.slice(0, 5).map((u, i) => (
+            <details key={u.id} open={i === 0}>
+              <summary><b>{u.title}</b> <span className="muted small">· {fmtDateTime(u.created_at)}{u.sent_by_name ? ` · ${u.sent_by_name}` : ''}</span></summary>
+              <p className="upd-body">{u.body}</p>
+            </details>
+          ))}
         </section>
       )}
 

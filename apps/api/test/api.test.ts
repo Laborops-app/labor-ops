@@ -3708,3 +3708,56 @@ test('crew pay per position: one person can have a different rate for each posit
   d = (await call(a, 'GET', `/api/events/${ev}`)).json;
   assert.deepEqual(d.crewRates.map((r: any) => [r.role_name, r.rate]), [['Hand', 25]]);
 });
+
+test('event updates: send a message to the scheduled crew, picked by phase / group / position / person, with history', async () => {
+  const a = await register('evupd');
+  const tid = await tenantOf(a);
+  const c1 = await mkCrew(a, 'eu1');
+  const c2 = await mkCrew(a, 'eu2');
+  const c3 = await mkCrew(a, 'eu3');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Expo', startDate: '2030-08-01', endDate: '2030-08-02' })).json.event.id as string;
+  const li = (await call(a, 'POST', `/api/events/${ev}/phases`, { label: 'Load in', startDate: '2030-08-01', endDate: '2030-08-01' })).json.phase.id as string;
+  const sh = (await call(a, 'POST', `/api/events/${ev}/phases`, { label: 'Show', startDate: '2030-08-02', endDate: '2030-08-02' })).json.phase.id as string;
+  const loaders = (await call(a, 'POST', `/api/event-phases/${li}/groups`, { label: 'Loaders' })).json.group.id as string;
+  const mk = (roleName: string, phaseId: string, day: string, groupId?: string) =>
+    call(a, 'POST', `/api/events/${ev}/shifts`, { roleName, startsAt: `${day}T14:00:00Z`, endsAt: `${day}T22:00:00Z`, headcount: 3, phaseId, groupId });
+  const s1 = (await mk('Loader', li, '2030-08-01', loaders)).json.shift.id;
+  const s2 = (await mk('Audio', sh, '2030-08-02')).json.shift.id;
+  await call(a, 'POST', `/api/shifts/${s1}/assign`, { userId: c1.id, confirmed: true });
+  await call(a, 'POST', `/api/shifts/${s2}/assign`, { userId: c2.id, confirmed: true });
+  await call(a, 'POST', `/api/shifts/${s2}/assign`, { userId: c3.id }); // offered, not confirmed
+
+  const pv = async (aud: any) => (await call(a, 'POST', `/api/events/${ev}/updates/preview`, aud)).json;
+  assert.equal((await pv({})).count, 2); // confirmed only by default
+  assert.equal((await pv({ include: 'all' })).count, 3);
+  assert.deepEqual((await pv({ phases: [li] })).people.map((p: any) => p.userId), [c1.id]);
+  assert.deepEqual((await pv({ groups: [loaders] })).people.map((p: any) => p.userId), [c1.id]);
+  assert.deepEqual((await pv({ roles: ['audio'] })).people.map((p: any) => p.userId), [c2.id]);
+  assert.deepEqual((await pv({ people: [c2.id] })).people.map((p: any) => p.userId), [c2.id]);
+
+  // crew cannot send; empty audience refused; empty message refused
+  assert.equal((await call(c1.session, 'POST', `/api/events/${ev}/updates`, { title: 'x', body: 'y' })).status, 403);
+  assert.equal((await call(a, 'POST', `/api/events/${ev}/updates`, { title: 'x', body: 'y', audience: { roles: ['nobody'] } })).status, 409);
+  assert.equal((await call(a, 'POST', `/api/events/${ev}/updates`, { title: 'Parking', body: '' })).status, 400);
+
+  const r = await call(a, 'POST', `/api/events/${ev}/updates`, { title: 'Load-in moved', body: 'Load-in starts an hour later. Park in lot C.', audience: { include: 'all' } });
+  assert.equal(r.status, 201, r.text);
+  assert.equal(r.json.update.recipients, 3);
+  const n = await withTenant(tid, (c) => c.query("SELECT user_id, title, body FROM notifications WHERE category = 'event_update' ORDER BY title"));
+  assert.equal(n.rowCount, 3);
+  const mine = n.rows.find((x: any) => x.user_id === c1.id);
+  assert.equal(mine.title, 'Expo: Load-in moved');
+  assert.match(mine.body, /Park in lot C\.[\s\S]*Your shift on Expo:\n• Loader \(Load in › Loaders\)/);
+  assert.match(n.rows.find((x: any) => x.user_id === c3.id).body, /offered, not confirmed yet/);
+
+  // history: 3 recipients, nobody opened yet; after c1 reads it, 1 opened
+  let h = (await call(a, 'GET', `/api/events/${ev}/updates`)).json.updates;
+  assert.equal(h.length, 1);
+  assert.deepEqual([h[0].recipients.length, h[0].opened], [3, 0]);
+  await withTenant(tid, (c) => c.query("UPDATE notifications SET read_at = now() WHERE user_id = $1 AND category = 'event_update'", [c1.id]));
+  h = (await call(a, 'GET', `/api/events/${ev}/updates`)).json.updates;
+  assert.equal(h[0].opened, 1);
+  // crew see their own updates for the event
+  assert.equal((await call(c1.session, 'GET', `/api/my/events/${ev}/updates`)).json.updates[0].title, 'Load-in moved');
+  assert.equal((await call(c1.session, 'GET', `/api/events/${ev}/updates`)).status, 403);
+});
