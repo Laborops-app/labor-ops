@@ -62,11 +62,13 @@ export async function timeRoutes(app: FastifyInstance) {
              (SELECT w.id FROM shift_swaps w WHERE w.assignment_id = a.id AND w.status IN ('open','pending') LIMIT 1) AS swap_id,
              (a.status = 'accepted' AND s.starts_at > now() AND NOT EXISTS (SELECT 1 FROM time_entries t WHERE t.assignment_id = a.id)) AS can_offer_swap,
              EXISTS (SELECT 1 FROM time_entries t WHERE t.assignment_id = a.id AND t.clock_out IS NULL) AS clocked_in,
-             (a.status = 'accepted' AND now() BETWEEN s.starts_at - interval '1 hour' AND s.ends_at + interval '2 hours') AS can_clock_in
+             (a.status = 'accepted' AND now() BETWEEN s.starts_at - interval '1 hour' AND s.ends_at + interval '2 hours') AS can_clock_in,
+             (SELECT json_build_object('kind', b.kind, 'started_at', b.started_at, 'remind_min', COALESCE((SELECT lunch_reminder_min FROM labor_rules), 45)) FROM time_breaks b WHERE b.assignment_id = a.id AND b.ended_at IS NULL LIMIT 1) AS on_break
            FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
            WHERE a.user_id = $1
              -- Over shifts move to Past, unless the person is still clocked in (they need the Clock out button).
-             AND (s.ends_at > now() OR EXISTS (SELECT 1 FROM time_entries t WHERE t.assignment_id = a.id AND t.clock_out IS NULL))
+             AND (s.ends_at > now() OR EXISTS (SELECT 1 FROM time_entries t WHERE t.assignment_id = a.id AND t.clock_out IS NULL)
+                  OR EXISTS (SELECT 1 FROM time_breaks b WHERE b.assignment_id = a.id AND b.ended_at IS NULL))
              AND ((s.starts_at < ($2::date + 1)::timestamp AT TIME ZONE $3) OR (a.status = 'offered'))
            ORDER BY s.starts_at`,
           [req.user.sub, pp.current.to, pp.tz],
@@ -227,6 +229,8 @@ export async function timeRoutes(app: FastifyInstance) {
             body.accuracy === undefined ? null : Math.round(body.accuracy), when.offline],
         )
       ).rows[0];
+      // Clocking in again on the shift ends a lunch that was still open.
+      await c.query('UPDATE time_breaks SET ended_at = $2 WHERE user_id = $1 AND ended_at IS NULL', [req.user.sub, when.at]);
       await audit(c, req.user.tid, req.user.sub, 'time.clock_in', 'time_entry', t.id, when.offline ? { offline: true } : undefined);
       return { code: 201, entry: t };
     });
@@ -249,6 +253,8 @@ export async function timeRoutes(app: FastifyInstance) {
       const outAt = new Date(Math.max(+when.at, +new Date(open.clock_in)));
       const rules = await rulesFor(c, open.assignment_id);
       const dist = rules && rules.geo_lat !== null && rules.geo_lng !== null && pos.lat !== undefined && pos.lng !== undefined ? Math.round(distanceM(pos.lat, pos.lng, rules.geo_lat, rules.geo_lng)) : null;
+      // Clocking out ends a break that was still running.
+      await c.query('UPDATE time_breaks SET ended_at = GREATEST(started_at, $2) WHERE user_id = $1 AND ended_at IS NULL', [req.user.sub, outAt]);
       const r = await c.query(
         `UPDATE time_entries SET clock_out = $5, status = 'submitted', out_lat = $2, out_lng = $3, out_distance_m = $4, client_out_id = $6, out_accuracy_m = $7, offline_out = $8
           WHERE id = $1 RETURNING id, clock_in, clock_out, offline_out`,
@@ -259,6 +265,66 @@ export async function timeRoutes(app: FastifyInstance) {
     });
     if (!row) return reply.code(409).send({ error: 'You are not clocked in' });
     return { entry: row };
+  });
+
+  // ----- breaks: a paid rest break keeps the clock running; a lunch clocks out until "back from lunch" -----
+  app.post('/api/time/break', { preHandler: authenticate }, async (req, reply) => {
+    const b = z.object({ kind: z.enum(['break', 'lunch']) }).merge(geoIn).parse(req.body ?? {});
+    const out = await withTenant(req.user.tid, async (c) => {
+      const open = (await c.query('SELECT id, assignment_id, clock_in FROM time_entries WHERE user_id = $1 AND clock_out IS NULL', [req.user.sub])).rows[0];
+      if (!open) return { code: 409, error: 'Clock in first' };
+      if ((await c.query('SELECT 1 FROM time_breaks WHERE user_id = $1 AND ended_at IS NULL', [req.user.sub])).rowCount) return { code: 409, error: 'You are already on a break' };
+      const rules = await rulesFor(c, open.assignment_id);
+      if (rules?.clock_mode === 'coordinator') return { code: 409, error: 'Your labor coordinator handles breaks on this event.' };
+      const br = (await c.query(
+        'INSERT INTO time_breaks (tenant_id, user_id, assignment_id, entry_id, kind) VALUES ($1,$2,$3,$4,$5) RETURNING id, kind, started_at',
+        [req.user.tid, req.user.sub, open.assignment_id, open.id, b.kind])).rows[0];
+      let entry = null;
+      if (b.kind === 'lunch') {
+        // Lunch is unpaid: clock out now; "back from lunch" clocks in again.
+        const dist = rules && rules.geo_lat !== null && rules.geo_lng !== null && b.lat !== undefined && b.lng !== undefined ? Math.round(distanceM(b.lat, b.lng, rules.geo_lat, rules.geo_lng)) : null;
+        const r = (await c.query(
+          `UPDATE time_entries SET clock_out = GREATEST(now(), clock_in), status = 'submitted', out_lat = $2, out_lng = $3, out_distance_m = $4, out_accuracy_m = $5
+            WHERE id = $1 RETURNING id, clock_in, clock_out`,
+          [open.id, b.lat ?? null, b.lng ?? null, dist, b.accuracy === undefined ? null : Math.round(b.accuracy)])).rows[0];
+        entry = { ...r, auto_approved: await autoApprove(c, r.id) };
+      }
+      await audit(c, req.user.tid, req.user.sub, b.kind === 'lunch' ? 'time.lunch_start' : 'time.break_start', 'time_entry', open.id);
+      return { code: 201, break: br, entry };
+    });
+    const { code, ...rest } = out as { code: number; [k: string]: unknown };
+    return reply.code(code).send(rest);
+  });
+
+  // End the break. After a lunch this clocks back in on the same shift (same location rules as clocking in);
+  // `done: true` ends the lunch without clocking back in (finished for the day).
+  app.post('/api/time/break/end', { preHandler: authenticate }, async (req, reply) => {
+    const b = z.object({ done: z.boolean().optional() }).merge(geoIn).parse(req.body ?? {});
+    const out = await withTenant(req.user.tid, async (c) => {
+      const br = (await c.query('SELECT id, kind, assignment_id, started_at FROM time_breaks WHERE user_id = $1 AND ended_at IS NULL', [req.user.sub])).rows[0];
+      if (!br) return { code: 409, error: 'You are not on a break' };
+      if (br.kind === 'break' || b.done) {
+        const r = (await c.query('UPDATE time_breaks SET ended_at = now() WHERE id = $1 RETURNING id, kind, started_at, ended_at', [br.id])).rows[0];
+        await audit(c, req.user.tid, req.user.sub, br.kind === 'lunch' ? 'time.lunch_done' : 'time.break_end', 'time_break', br.id);
+        return { code: 200, break: r };
+      }
+      // Back from lunch: clock in again.
+      if ((await c.query('SELECT 1 FROM time_entries WHERE user_id = $1 AND clock_out IS NULL', [req.user.sub])).rowCount) return { code: 409, error: 'You are already clocked in' };
+      const ok = (await c.query(
+        `SELECT 1 FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE a.id = $1 AND a.status = 'accepted' AND now() <= s.ends_at + interval '2 hours'`, [br.assignment_id])).rowCount;
+      if (!ok) return { code: 409, error: 'This shift is over. Ask your labor coordinator to add your time.' };
+      const rules = await rulesFor(c, br.assignment_id);
+      const fence = rules ? checkFence(rules, b) : { distance: null };
+      if ('error' in fence && fence.error) return { code: 409, error: fence.error, reason: 'geofence', distance: fence.distance };
+      const t = (await c.query(
+        `INSERT INTO time_entries (tenant_id, assignment_id, user_id, in_lat, in_lng, in_distance_m, in_accuracy_m) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, clock_in`,
+        [req.user.tid, br.assignment_id, req.user.sub, b.lat ?? null, b.lng ?? null, fence.distance ?? null, b.accuracy === undefined ? null : Math.round(b.accuracy)])).rows[0];
+      const r = (await c.query('UPDATE time_breaks SET ended_at = $2 WHERE id = $1 RETURNING id, kind, started_at, ended_at', [br.id, t.clock_in])).rows[0];
+      await audit(c, req.user.tid, req.user.sub, 'time.lunch_end', 'time_entry', t.id);
+      return { code: 200, break: r, entry: t };
+    });
+    const { code, ...rest } = out as { code: number; [k: string]: unknown };
+    return reply.code(code).send(rest);
   });
 
   // ----- coordinator: check crew in and out on site -----

@@ -1954,3 +1954,8 @@ details.card.profile-fold > summary::before { content: none; }
 .af-warn { display: block; color: var(--warn); }
 .af-short { margin: 6px 4px 0; }
 .af-send { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 0; border-top: 1px solid var(--border); margin-top: 8px; }
+/* Break / lunch on My shifts */
+.shift-card .break-box { flex-basis: 100%; border: 1px solid var(--border); border-radius: 10px; padding: 0.6rem 0.75rem; background: var(--surface-2, transparent); }
+.shift-card .break-box .row { margin-top: 0.5rem; flex-wrap: wrap; }
+.break-over { color: var(--bad); font-weight: 600; }
+.pill.break, .pill.lunch { background: var(--warn-bg); color: var(--warn); }

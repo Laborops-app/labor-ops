@@ -3413,9 +3413,9 @@ test('attendance: late nudge and alert, no-show flag (cleared by clocking in), f
   await withTenant(tid, (c) => c.query("INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in) VALUES ($1,$2,$3, now() - interval '9 hours')", [tid, aForgot, forgot.id]));
   const { attendanceFor } = await import('../src/attendance');
   const r1 = await withTenant(tid, (c) => attendanceFor(c, tid, 'America/Denver'));
-  assert.deepEqual(r1, { late: 1, noShows: 1, clockedOut: 1 });
+  assert.deepEqual(r1, { late: 1, noShows: 1, clockedOut: 1, lunchReminders: 0 });
   // Run again: nothing new
-  assert.deepEqual(await withTenant(tid, (c) => attendanceFor(c, tid, 'America/Denver')), { late: 0, noShows: 0, clockedOut: 0 });
+  assert.deepEqual(await withTenant(tid, (c) => attendanceFor(c, tid, 'America/Denver')), { late: 0, noShows: 0, clockedOut: 0, lunchReminders: 0 });
   const notes = (await withTenant(tid, (c) => c.query('SELECT user_id, title FROM notifications ORDER BY created_at'))).rows;
   assert.ok(notes.some((n) => n.user_id === late.id && /not clocked in/.test(n.title)));
   assert.ok(notes.some((n) => n.user_id === a.id && /late/.test(n.title)));
@@ -4059,4 +4059,64 @@ test('client portal switched off (production default): no client sign-in, portal
   } finally {
     config.clientPortal = true;
   }
+});
+
+test('breaks: a rest break keeps the clock running; lunch clocks out, reminds after the set minutes, and clocks back in', async () => {
+  const a = await register('brk');
+  const tid = await tenantOf(a);
+  const m = await mkCrew(a, 'brk1');
+  const crew = m.session;
+  const ev = await mkEvent(a);
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Loader', startsAt: start(-1), endsAt: start(6), headcount: 1 })).json.shift.id;
+  const asg = (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: m.id, confirmed: true, override: true })).json.assignment.id;
+
+  assert.equal((await call(crew, 'POST', '/api/time/break', { kind: 'break' })).status, 409); // not clocked in
+  assert.equal((await call(crew, 'POST', '/api/time/clock-in', { assignmentId: asg })).status, 201);
+
+  // Rest break: still clocked in.
+  assert.equal((await call(crew, 'POST', '/api/time/break', { kind: 'break' })).status, 201);
+  assert.equal((await call(crew, 'POST', '/api/time/break', { kind: 'lunch' })).status, 409); // one at a time
+  let mine = (await call(crew, 'GET', '/api/my/shifts')).json.shifts[0];
+  assert.equal(mine.clocked_in, true);
+  assert.equal(mine.on_break.kind, 'break');
+  assert.equal((await call(crew, 'POST', '/api/time/break/end')).status, 200);
+  assert.equal((await call(crew, 'POST', '/api/time/break/end')).status, 409);
+
+  // Lunch: clocked out, the shift stays on the list.
+  const l = await call(crew, 'POST', '/api/time/break', { kind: 'lunch' });
+  assert.equal(l.status, 201);
+  assert.ok(l.json.entry.clock_out);
+  mine = (await call(crew, 'GET', '/api/my/shifts')).json.shifts[0];
+  assert.equal(mine.clocked_in, false);
+  assert.equal(mine.on_break.kind, 'lunch');
+
+  // Reminder after the lunch minutes (45 by default), once.
+  const { attendanceFor } = await import('../src/attendance');
+  assert.equal((await withTenant(tid, (c) => attendanceFor(c, tid, 'America/Denver'))).lunchReminders, 0);
+  await withTenant(tid, (c) => c.query("UPDATE time_breaks SET started_at = now() - interval '46 minutes' WHERE user_id = $1", [m.id]));
+  assert.equal((await withTenant(tid, (c) => attendanceFor(c, tid, 'America/Denver'))).lunchReminders, 1);
+  assert.equal((await withTenant(tid, (c) => attendanceFor(c, tid, 'America/Denver'))).lunchReminders, 0);
+  const note = (await withTenant(tid, (c) => c.query("SELECT title, link FROM notifications WHERE user_id = $1 AND title LIKE 'Lunch%'", [m.id]))).rows;
+  assert.equal(note.length, 1);
+  assert.equal(note[0].link, '/my-shifts');
+
+  // Back from lunch: a second time entry on the same shift.
+  const back = await call(crew, 'POST', '/api/time/break/end');
+  assert.equal(back.status, 200);
+  assert.ok(back.json.entry.id);
+  mine = (await call(crew, 'GET', '/api/my/shifts')).json.shifts[0];
+  assert.equal(mine.clocked_in, true);
+  assert.equal(mine.on_break, null);
+  const n = (await withTenant(tid, (c) => c.query('SELECT count(*)::int AS n FROM time_entries WHERE assignment_id = $1', [asg]))).rows[0].n;
+  assert.equal(n, 2);
+
+  // Lunch, then done for the day: nothing open.
+  assert.equal((await call(crew, 'POST', '/api/time/break', { kind: 'lunch' })).status, 201);
+  assert.equal((await call(crew, 'POST', '/api/time/break/end', { done: true })).status, 200);
+  mine = (await call(crew, 'GET', '/api/my/shifts')).json.shifts[0];
+  assert.ok(!mine || (!mine.clocked_in && !mine.on_break));
+
+  // The reminder time is a labor rule.
+  const r = await call(a, 'GET', '/api/labor-rules');
+  assert.equal(r.json.lunchReminderMin, 45);
 });

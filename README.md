@@ -27,6 +27,7 @@ docker-compose.yml   The whole stack on one server: Postgres, API, web, Caddy.
 
 **Time and pay**
 - Crew clock in and out on their phone, with optional GPS geofence, or a coordinator checks them in on site.
+- **Breaks and lunch:** while clocked in, *Break* asks "Break or lunch?". A break keeps the person on the clock (paid) until *End break*. Lunch clocks them out (unpaid); *Back from lunch* clocks them in again on the same shift, with the same location check, or *Done for the day* ends it. A push and text reminds them to clock back in after 45 minutes (Labor rules → Lunch reminder, 0 = off). Breaks need a signal.
 - **Works offline:** with no signal, a clock-in/out is saved on the phone (with the time it was tapped, GPS accuracy and a random id) and sent automatically when there is signal again, by Background Sync on Android or when the app is next opened. The server accepts it once, keeps the phone's time (up to 12 hours old) and marks it *Offline* on the timesheet.
 - Timesheets inside the scheduled hours are approved automatically; coordinators, admins and leads (during the shift + 2 h) can fix times, with the original kept.
 - **Late and no-show alerts:** crew who haven't clocked in a few minutes after the start get a nudge, and coordinators and the event's leads are told; after a set time they are flagged as no-shows (cleared if they turn up). A clock-out forgotten for some hours is closed at the shift end and left for a manager to check. All three are set under Labor rules.

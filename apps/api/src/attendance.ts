@@ -48,11 +48,12 @@ async function mark(c: PoolClient, tenantId: string, key: string) {
 }
 
 export async function attendanceFor(c: PoolClient, tenantId: string, tz: string) {
-  const lr = (await c.query('SELECT late_alert_min, no_show_min, auto_clockout_h FROM labor_rules')).rows[0] ?? {};
+  const lr = (await c.query('SELECT late_alert_min, no_show_min, auto_clockout_h, lunch_reminder_min FROM labor_rules')).rows[0] ?? {};
   const lateMin = Number(lr.late_alert_min ?? 10);
   const noShowMin = Number(lr.no_show_min ?? 60);
   const outH = Number(lr.auto_clockout_h ?? 3);
-  const out = { late: 0, noShows: 0, clockedOut: 0 };
+  const lunchMin = Number(lr.lunch_reminder_min ?? 45);
+  const out = { late: 0, noShows: 0, clockedOut: 0, lunchReminders: 0 };
   const at = (d: Date) => fmtTimeOnly(d, tz);
   const msgs: NotifyInput[] = [];
   const byEvent = <T extends { event_id: string }>(list: T[]) => {
@@ -145,6 +146,35 @@ export async function attendanceFor(c: PoolClient, tenantId: string, tz: string)
     }
     out.clockedOut = rows.length;
   }
+
+  // ---- lunch is over: remind them to clock back in (texted too, they may have put the phone down) ----
+  if (lunchMin > 0) {
+    const rows = (
+      await c.query(
+        `UPDATE time_breaks b SET reminded_at = now()
+           FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
+          WHERE a.id = b.assignment_id AND b.kind = 'lunch' AND b.ended_at IS NULL AND b.reminded_at IS NULL
+            AND b.started_at <= now() - make_interval(mins => $1) AND s.ends_at > now()
+          RETURNING b.user_id, b.started_at, s.role_name, e.name AS event_name`,
+        [lunchMin],
+      )
+    ).rows;
+    for (const r of rows)
+      msgs.push({
+        userId: r.user_id, category: 'attendance', allowSms: true,
+        title: 'Lunch is over: clock back in',
+        body: `You started lunch at ${at(r.started_at)} (${lunchMin} minutes ago). Tap "Back from lunch" on My shifts to clock back in for ${r.role_name} at ${r.event_name}.`,
+        link: '/my-shifts', sms: `Lunch is over (${lunchMin} min). Clock back in for ${r.role_name} at ${r.event_name}.`,
+      });
+    out.lunchReminders = rows.length;
+  }
+  // A lunch nobody came back from closes once the shift is long over.
+  await c.query(
+    `UPDATE time_breaks b SET ended_at = GREATEST(b.started_at, s.ends_at)
+       FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id
+      WHERE a.id = b.assignment_id AND b.ended_at IS NULL AND s.ends_at <= now() - make_interval(secs => $1 * 3600)`,
+    [Math.max(outH, 2)],
+  );
 
   if (msgs.length) await notify(c, tenantId, msgs);
   return out;

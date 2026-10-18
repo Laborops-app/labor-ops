@@ -7,7 +7,7 @@ import WorkRuleSets from '@/components/WorkRuleSets';
 
 type Rules = {
   minRestHours: number; maxDailyHours: number; dailyOtAfter: number; weeklyOtAfter: number; otMultiplier: number;
-  nightStart: string; nightEnd: string; nightPremiumPct: number; saturdayPremiumPct?: number; sundayPremiumPct: number; holidayPremiumPct: number; holidays: string[]; defaultState: string | null; autoApprove?: boolean; autoApproveGraceMin?: number; lateAlertMin?: number; noShowMin?: number; autoClockoutH?: number; payPeriod?: 'weekly' | 'biweekly'; payPeriodStart?: string;
+  nightStart: string; nightEnd: string; nightPremiumPct: number; saturdayPremiumPct?: number; sundayPremiumPct: number; holidayPremiumPct: number; holidays: string[]; defaultState: string | null; autoApprove?: boolean; autoApproveGraceMin?: number; lateAlertMin?: number; noShowMin?: number; autoClockoutH?: number; lunchReminderMin?: number; payPeriod?: 'weekly' | 'biweekly'; payPeriodStart?: string;
 };
 type StateRule = { state: string; otMult: number; dtAfter: number | null; dtMult: number; custom: boolean };
 
@@ -98,6 +98,7 @@ function Body() {
             <Num label="Late alert after" suffix="minutes" step={1} value={r.lateAlertMin ?? 10} onChange={(n) => set({ lateAlertMin: n })} hint="Not clocked in this long after the start: the person gets a nudge, and coordinators and the event's leads are told. 0 turns it off." />
             <Num label="No-show after" suffix="minutes" step={5} value={r.noShowMin ?? 60} onChange={(n) => set({ noShowMin: n })} hint="Still not clocked in: marked as a no-show (cleared if they are checked in later). 0 turns it off." />
             <Num label="Close a forgotten clock-out after" suffix="hours past the end" step={0.5} value={r.autoClockoutH ?? 3} onChange={(n) => set({ autoClockoutH: n })} hint="Still clocked in this long after the shift ended: closed at the scheduled end and left for you to check (never approved automatically). 0 turns it off." />
+            <Num label="Lunch reminder after" suffix="minutes" step={5} value={r.lunchReminderMin ?? 45} onChange={(n) => set({ lunchReminderMin: n })} hint="Crew who clock out for lunch get a push and text this long after, telling them to clock back in. A rest break keeps them on the clock. 0 turns it off." />
           </div>
         </section>
         <section className="card">

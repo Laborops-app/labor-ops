@@ -27,6 +27,7 @@ type MyShift = {
   venue: string | null;
   clocked_in: boolean;
   can_clock_in: boolean;
+  on_break?: { kind: 'break' | 'lunch'; started_at: string; remind_min?: number } | null;
   clock_mode: 'self' | 'coordinator';
   needs_location: boolean;
   geofence_m: number | null;
@@ -51,6 +52,12 @@ function Body() {
   const [offline, setOffline] = useState(false);
   const [notice, setNotice] = useState('');
   const [queued, setQueued] = useState<Punch[]>([]);
+  const [askBreak, setAskBreak] = useState('');
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 15_000);
+    return () => clearInterval(t);
+  }, []);
   const load = async () => {
     try {
       const [s, t] = await Promise.all([api<{ shifts: MyShift[]; period?: { from: string; to: string }; later?: number }>('/api/my/shifts'), api<{ entries: Entry[] }>('/api/my/time')]);
@@ -95,6 +102,20 @@ function Body() {
       const how = await punch(kind, { ...(kind === 'in' ? { assignmentId: s.assignment_id } : {}), ...(pos ?? {}) }, `${s.role_name}, ${s.event_name}`);
       if (how === 'queued') setNotice(`No signal: your ${kind === 'in' ? 'clock-in' : 'clock-out'} is saved on this phone with the time you tapped, and will send by itself.`);
     });
+
+  // Breaks need a signal: they change what the office sees right away.
+  const breakCall = (s: MyShift, path: string, body: Record<string, unknown>, needsPos = false) =>
+    act(s.assignment_id, async () => {
+      setAskBreak('');
+      setNotice('');
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) throw new Error('No signal: breaks need a connection. Try again when you have signal.');
+      const pos = needsPos && s.needs_location ? await getPosition() : await getPosition(4000).catch(() => null);
+      await api(path, { body: { ...body, ...(pos ?? {}) } });
+    });
+  const since = (iso: string) => {
+    const m = Math.max(0, Math.floor((now - +new Date(iso)) / 60_000));
+    return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
+  };
 
   const act = async (key: string, fn: () => Promise<unknown>) => {
     setError('');
@@ -154,7 +175,7 @@ function Body() {
                   </div>
                 )}
               </div>
-              <Pill status={isIn(s) ? 'clocked in' : s.status} />
+              <Pill status={s.on_break?.kind === 'lunch' ? 'at lunch' : s.on_break ? 'on break' : isIn(s) ? 'clocked in' : s.status} />
             </div>
             <div className="row">
               <Link className="btn ghost small" href={`/my-shifts/${s.assignment_id}`}>
@@ -181,7 +202,23 @@ function Body() {
               {s.status === 'accepted' && !isIn(s) && s.clock_mode !== 'coordinator' && !canClock(s) && (
                 <span className="muted small">Clock-in opens 1 hour before the shift starts.</span>
               )}
-              {s.status === 'accepted' && !isIn(s) && s.clock_mode !== 'coordinator' && canClock(s) && (
+              {s.on_break?.kind === 'lunch' && !isIn(s) && (
+                <div className="break-box">
+                  <div className="small">
+                    🍽 <b>At lunch</b> since {fmtTime(s.on_break.started_at)} · {since(s.on_break.started_at)}
+                    {(s.on_break.remind_min ?? 45) > 0 && now - +new Date(s.on_break.started_at) >= (s.on_break.remind_min ?? 45) * 60_000 && <span className="break-over"> · time to clock back in</span>}
+                  </div>
+                  <div className="row">
+                    <button className="btn primary big" disabled={!!busy} onClick={() => breakCall(s, '/api/time/break/end', {}, true)}>
+                      Back from lunch
+                    </button>
+                    <button className="btn ghost small" disabled={!!busy} onClick={() => breakCall(s, '/api/time/break/end', { done: true })}>
+                      Done for the day
+                    </button>
+                  </div>
+                </div>
+              )}
+              {s.status === 'accepted' && !isIn(s) && !s.on_break && s.clock_mode !== 'coordinator' && canClock(s) && (
                 <>
                   <button
                     className="btn primary big"
@@ -207,10 +244,40 @@ function Body() {
                   Offer for swap
                 </button>
               )}
+              {isIn(s) && s.on_break?.kind === 'break' && (
+                <div className="break-box">
+                  <div className="small">☕ <b>On break</b> since {fmtTime(s.on_break.started_at)} · {since(s.on_break.started_at)} (still clocked in)</div>
+                  <div className="row">
+                    <button className="btn primary big" disabled={!!busy} onClick={() => breakCall(s, '/api/time/break/end', {})}>
+                      End break
+                    </button>
+                  </div>
+                </div>
+              )}
+              {isIn(s) && !s.on_break && s.clock_mode !== 'coordinator' && !queuedIn(s.assignment_id) && askBreak !== s.assignment_id && (
+                <button className="btn big" disabled={!!busy} onClick={() => setAskBreak(s.assignment_id)}>
+                  Break
+                </button>
+              )}
               {isIn(s) && (
                 <button className="btn danger-solid big" disabled={!!busy} onClick={() => doPunch(s, 'out')}>
                   Clock out
                 </button>
+              )}
+              {isIn(s) && !s.on_break && askBreak === s.assignment_id && (
+                <div className="break-box" role="group" aria-label="Break or lunch?">
+                  <div className="small"><b>Break or lunch?</b></div>
+                  <div className="row">
+                    <button className="btn big" disabled={!!busy} onClick={() => breakCall(s, '/api/time/break', { kind: 'break' })}>
+                      ☕ Break
+                    </button>
+                    <button className="btn big" disabled={!!busy} onClick={() => breakCall(s, '/api/time/break', { kind: 'lunch' })}>
+                      🍽 Lunch
+                    </button>
+                    <button className="btn ghost small" onClick={() => setAskBreak('')}>Cancel</button>
+                  </div>
+                  <div className="muted small">A break keeps you clocked in. Lunch clocks you out until you tap “Back from lunch”, and you get a reminder when lunch is over.</div>
+                </div>
               )}
             </div>
           </section>
