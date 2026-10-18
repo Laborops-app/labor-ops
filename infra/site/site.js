@@ -7,6 +7,7 @@
     ['HR', 'hr@demo.laborops.app', 'Invoicing, payroll and reports'],
     ['Labor Coordinator', 'manager@demo.laborops.app', 'Events, scheduling and timesheets'],
     ['Crew member', 'crew1@demo.laborops.app', 'Shifts, clock in/out and earnings (best on a phone)'],
+    ['Client', 'client@demo.laborops.app', 'The client portal: roster, live attendance, timesheet sign-off'],
   ];
   var dlg = document.createElement('dialog');
   dlg.setAttribute('aria-labelledby', 'demo-title');

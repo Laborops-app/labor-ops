@@ -14,6 +14,7 @@ const body = z.object({
   nightStart: hhmm,
   nightEnd: hhmm,
   nightPremiumPct: z.number().min(0).max(300),
+  saturdayPremiumPct: z.number().min(0).max(300).optional(),
   sundayPremiumPct: z.number().min(0).max(300),
   holidayPremiumPct: z.number().min(0).max(300),
   holidays: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(100),
@@ -33,7 +34,7 @@ const view = (r: any) => ({
   minRestHours: Number(r.min_rest_hours), maxDailyHours: Number(r.max_daily_hours), dailyOtAfter: Number(r.daily_ot_after),
   weeklyOtAfter: Number(r.weekly_ot_after), otMultiplier: Number(r.ot_multiplier),
   nightStart: String(r.night_start).slice(0, 5), nightEnd: String(r.night_end).slice(0, 5),
-  nightPremiumPct: Number(r.night_premium_pct), sundayPremiumPct: Number(r.sunday_premium_pct), holidayPremiumPct: Number(r.holiday_premium_pct),
+  nightPremiumPct: Number(r.night_premium_pct), saturdayPremiumPct: Number(r.saturday_premium_pct ?? 0), sundayPremiumPct: Number(r.sunday_premium_pct), holidayPremiumPct: Number(r.holiday_premium_pct),
   holidays: r.holidays as string[],
   defaultState: (r.default_state as string | null) ?? null,
   autoApprove: r.auto_approve === undefined || r.auto_approve === null ? true : !!r.auto_approve,
@@ -46,7 +47,7 @@ const view = (r: any) => ({
 });
 
 const SEL = `SELECT min_rest_hours, max_daily_hours, daily_ot_after, weekly_ot_after, ot_multiplier, night_start::text, night_end::text,
-  night_premium_pct, sunday_premium_pct, holiday_premium_pct, ARRAY(SELECT to_char(d,'YYYY-MM-DD') FROM unnest(holidays) d ORDER BY d) AS holidays, default_state, auto_approve, auto_approve_grace_min, late_alert_min, no_show_min, auto_clockout_h, pay_period, to_char(pay_period_start, 'YYYY-MM-DD') AS pay_period_start FROM labor_rules`;
+  night_premium_pct, saturday_premium_pct, sunday_premium_pct, holiday_premium_pct, ARRAY(SELECT to_char(d,'YYYY-MM-DD') FROM unnest(holidays) d ORDER BY d) AS holidays, default_state, auto_approve, auto_approve_grace_min, late_alert_min, no_show_min, auto_clockout_h, pay_period, to_char(pay_period_start, 'YYYY-MM-DD') AS pay_period_start FROM labor_rules`;
 
 export async function rulesRoutes(app: FastifyInstance) {
   app.get('/api/labor-rules', { preHandler: guard('admin', 'manager') }, async (req) =>
@@ -68,8 +69,9 @@ export async function rulesRoutes(app: FastifyInstance) {
            auto_approve = COALESCE($14, labor_rules.auto_approve), auto_approve_grace_min = COALESCE($15, labor_rules.auto_approve_grace_min),
            late_alert_min = COALESCE($16, labor_rules.late_alert_min), no_show_min = COALESCE($17, labor_rules.no_show_min),
            auto_clockout_h = COALESCE($18, labor_rules.auto_clockout_h),
-           pay_period = COALESCE($19, labor_rules.pay_period), pay_period_start = COALESCE($20::date, labor_rules.pay_period_start), updated_at=now()`,
-        [req.user.tid, b.minRestHours, b.maxDailyHours, b.dailyOtAfter, b.weeklyOtAfter, b.otMultiplier, b.nightStart, b.nightEnd, b.nightPremiumPct, b.sundayPremiumPct, b.holidayPremiumPct, b.holidays, b.defaultState ?? null, b.autoApprove ?? null, b.autoApproveGraceMin ?? null, b.lateAlertMin ?? null, b.noShowMin ?? null, b.autoClockoutH ?? null, b.payPeriod ?? null, b.payPeriodStart ?? null],
+           pay_period = COALESCE($19, labor_rules.pay_period), pay_period_start = COALESCE($20::date, labor_rules.pay_period_start),
+           saturday_premium_pct = COALESCE($21, labor_rules.saturday_premium_pct), updated_at=now()`,
+        [req.user.tid, b.minRestHours, b.maxDailyHours, b.dailyOtAfter, b.weeklyOtAfter, b.otMultiplier, b.nightStart, b.nightEnd, b.nightPremiumPct, b.sundayPremiumPct, b.holidayPremiumPct, b.holidays, b.defaultState ?? null, b.autoApprove ?? null, b.autoApproveGraceMin ?? null, b.lateAlertMin ?? null, b.noShowMin ?? null, b.autoClockoutH ?? null, b.payPeriod ?? null, b.payPeriodStart ?? null, b.saturdayPremiumPct ?? null],
       );
       await audit(c, req.user.tid, req.user.sub, 'labor_rules.update', 'tenant', req.user.tid, b);
       return view((await c.query(SEL)).rows[0]);

@@ -6,6 +6,7 @@ import { Banner, Empty } from '@/components/ui';
 type Line = { role: string; date: string; kind: 'regular' | 'overtime' | 'double' | 'day'; qty: number; unit: 'hour' | 'day'; rate: number; amount: number; description: string; qboItemId: string | null };
 type Billing = {
   lines: Line[]; total: number; warnings: string[]; canBill: boolean; unmapped: string[];
+  clientApproval?: { required: boolean; approved: boolean; stale: boolean; disputed: boolean; customer: string | null; last: { note: string | null; by_name: string | null; created_at: string } | null };
   customer: { name: string; qbo_customer_id: string | null } | null;
   quickbooks: { connected: boolean; environment: string };
   overtime: { otAfter: number | null; otMult: number; dtAfter: number | null; dtMult: number };
@@ -64,6 +65,15 @@ export default function InvoicePanel({ eventId, isAdmin }: { eventId: string; is
       ) : (
         <>
           {b.warnings.map((w) => <Banner key={w} kind="info">{w}</Banner>)}
+          {b.clientApproval?.required && (
+            b.clientApproval.approved
+              ? <Banner kind="ok">{b.clientApproval.customer ?? 'The client'} signed off on these timesheets{b.clientApproval.last?.by_name ? ` (${b.clientApproval.last.by_name})` : ''}.</Banner>
+              : <Banner>{b.clientApproval.disputed
+                  ? `${b.clientApproval.customer ?? 'The client'} questioned these timesheets: “${b.clientApproval.last?.note ?? ''}”. Fix the time and ask them to approve again in their portal.`
+                  : b.clientApproval.stale
+                    ? `Time changed after ${b.clientApproval.customer ?? 'the client'} approved it; they need to approve again in their portal before you invoice.`
+                    : `${b.clientApproval.customer ?? 'This client'} approves timesheets in their portal before you invoice. Waiting for them.`}</Banner>
+          )}
           <section className="card">
             <div className="row space">
               <h2 style={{ margin: 0 }}>{b.customer ? b.customer.name : 'No customer'}</h2>

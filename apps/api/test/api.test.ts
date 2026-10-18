@@ -852,7 +852,8 @@ test('podium: connect, send a text, signed webhook replies, STOP, bad signatures
     const ev = (await call(a, 'POST', '/api/events', { name: 'PGig', venue: 'Hall', startDate: '2030-01-01', endDate: '2030-01-02' })).json.event.id;
     const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Rigger', startsAt: start(30), endsAt: start(36), headcount: 1 })).json.shift.id;
     await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id });
-    await processQueue(100);
+    // other tests' messages may be queued ahead of this one
+    for (let i = 0; i < 30 && !calls.some((c) => c.url.endsWith('/v4/messages')); i++) await processQueue(100);
     const send = calls.find((c) => c.url.endsWith('/v4/messages'))!;
     assert.ok(send, 'Podium send called');
     assert.equal(send.init.headers.authorization, 'Bearer AT1');
@@ -1587,9 +1588,9 @@ test('accounting: event billing (time + schedule, per-job OT, day rates), QuickB
     const adp = await call(a, 'GET', '/api/payroll/export?provider=adp&from=2030-03-04&to=2030-03-10');
     assert.equal(adp.status, 200);
     const adpRows = adp.text.trim().split('\r\n');
-    assert.equal(adpRows[0], 'Co Code,Batch ID,File #,Reg Hours,O/T Hours,Hours 3 Code,Hours 3 Amount,Earnings 3 Code,Earnings 3 Amount');
-    assert.equal(adpRows[1], 'XYZ,LABOROPS,001234,8.00,3.00,,,,');
-    assert.equal(adpRows[2], 'XYZ,LABOROPS,,,,,,DAY,300.00');
+    assert.equal(adpRows[0], 'Co Code,Batch ID,File #,Reg Hours,O/T Hours,Hours 3 Code,Hours 3 Amount,Earnings 3 Code,Earnings 3 Amount,Earnings 4 Code,Earnings 4 Amount');
+    assert.equal(adpRows[1], 'XYZ,LABOROPS,001234,8.00,3.00,,,,,,');
+    assert.equal(adpRows[2], 'XYZ,LABOROPS,,,,,,DAY,300.00,,');
     const after = (await call(a, 'GET', '/api/payroll?from=2030-03-04&to=2030-03-10')).json;
     assert.ok(after.warnings.some((w: string) => /already exported/.test(w)));
     assert.equal(after.history[0].provider, 'adp');
@@ -1598,7 +1599,7 @@ test('accounting: event billing (time + schedule, per-job OT, day rates), QuickB
     const s2set = (await call(a, 'GET', '/api/accounting')).json.settings;
     assert.equal((await call(a, 'PUT', '/api/accounting/settings', { ...s2set, payroll: { ...s2set.payroll, enabled: ['adp', 'gusto', 'quickbooks'] } })).status, 200);
     const gusto = await call(a, 'GET', '/api/payroll/export?provider=gusto&from=2030-03-04&to=2030-03-10&mark=0');
-    assert.match(gusto.text.split('\r\n')[1], /^acct1,Crew,,acct1-.*@test\.example,8\.00,3\.00,,$/);
+    assert.match(gusto.text.split('\r\n')[1], /^acct1,Crew,,acct1-.*@test\.example,8\.00,3\.00,,,$/);
     await withTenant(tid, (c) => c.query('UPDATE time_entries SET payroll_exported_at = NULL'));
     // Without adding missing people: c1 is matched by email, c2 (not in QuickBooks) is skipped
     const qp0 = await call(a, 'POST', '/api/payroll/quickbooks', { from: '2030-03-04', to: '2030-03-10', addMissing: false });
@@ -3800,4 +3801,235 @@ test('event updates: send a message to the scheduled crew, picked by phase / gro
   // crew see their own updates for the event
   assert.equal((await call(c1.session, 'GET', `/api/my/events/${ev}/updates`)).json.updates[0].title, 'Load-in moved');
   assert.equal((await call(c1.session, 'GET', `/api/events/${ev}/updates`)).status, 403);
+});
+
+test('work rules: named sets drive minimum call, rounding, meal penalties, turnaround and cancellation pay', async () => {
+  const a = await register('wrules');
+  const tid = await tenantOf(a);
+  await call(a, 'POST', '/api/skills', { name: 'Hand', payRate: 20 });
+  const c1 = await mkCrew(a, 'wr1');
+  const c2 = await mkCrew(a, 'wr2');
+  const c3 = await mkCrew(a, 'wr3');
+  const crew = await mkCrew(a, 'wr4');
+  // presets are offered; only admins save sets; validation
+  const list = (await call(a, 'GET', '/api/work-rule-sets')).json;
+  assert.ok(list.presets.length >= 2);
+  const local = {
+    name: 'Local 7', isDefault: true,
+    config: { otAfter: 8, dtAfter: 12, minCallH: 4, rounding: { minutes: 15, mode: 'worker' },
+      meal: { afterH: 5, breakMin: 30, stepMin: 30, amounts: [10, 15] }, turnaround: { restH: 10, mult: 1.5 }, cancellation: { noticeH: 24, payH: 4 } },
+  };
+  assert.equal((await call(crew.session, 'POST', '/api/work-rule-sets', local)).status, 403);
+  assert.equal((await call(a, 'POST', '/api/work-rule-sets', { ...local, config: { meal: { afterH: 5, breakMin: 30, stepMin: 30, amounts: [] } } })).status, 400);
+  const set = await call(a, 'POST', '/api/work-rule-sets', local);
+  assert.equal(set.status, 201, set.text);
+  assert.equal((await call(a, 'POST', '/api/work-rule-sets', local)).status, 409, 'unique name');
+
+  const evA = (await call(a, 'POST', '/api/events', { name: 'Arena A', startDate: '2030-07-10', endDate: '2030-07-10' })).json.event.id;
+  const evB = (await call(a, 'POST', '/api/events', { name: 'Arena B', startDate: '2030-07-10', endDate: '2030-07-11' })).json.event.id;
+  assert.equal((await call(a, 'GET', `/api/events/${evA}/rule-set`)).json.source, 'default');
+  const shift = async (ev: string, s: string, e: string) => (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Hand', startsAt: s, endsAt: e, headcount: 3 })).json.shift.id as string;
+  const s1 = await shift(evA, '2030-07-10T14:00:00Z', '2030-07-10T20:15:00Z');
+  const s2 = await shift(evB, '2030-07-11T04:15:00Z', '2030-07-11T08:15:00Z');
+  // the default minimum call shows in estimates: a 2 h shift costs 4 h
+  const sShort = await shift(evA, '2030-07-10T14:00:00Z', '2030-07-10T16:00:00Z');
+  for (const [s, u] of [[s1, c1.id], [s2, c1.id], [sShort, c2.id]] as const) await call(a, 'POST', `/api/shifts/${s}/assign`, { userId: u, confirmed: true, override: true });
+  const est = (await call(a, 'GET', `/api/events/${evA}`)).json.shifts.find((x: any) => x.id === sShort);
+  assert.equal(est.estimated_cost, 3 * 80);
+
+  await withTenant(tid, async (c) => {
+    const put = async (shiftId: string, user: string, i: string, o: string) => {
+      const asg = (await c.query('SELECT id FROM shift_assignments WHERE shift_id = $1 AND user_id = $2', [shiftId, user])).rows[0].id;
+      await c.query("INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in, clock_out, status) VALUES ($1,$2,$3,$4,$5,'approved')", [tid, asg, user, i, o]);
+    };
+    await put(s1, c1.id, '2030-07-10T14:07:00Z', '2030-07-10T20:15:00Z'); // rounds in to 14:00 → 6.25 h straight: 3 meal penalties
+    await put(s2, c1.id, '2030-07-11T04:15:00Z', '2030-07-11T08:15:00Z'); // 8 h after the last call: 2 h inside the 10 h turnaround
+    await put(sShort, c2.id, '2030-07-10T14:00:00Z', '2030-07-10T16:00:00Z'); // 2 h worked, 4 h minimum call
+  });
+  const pr = (await call(a, 'GET', '/api/payroll?from=2030-07-09&to=2030-07-12')).json;
+  const p1 = pr.people.find((p: any) => p.userId === c1.id);
+  const eA = p1.entries.find((e: any) => e.eventId === evA);
+  const eB = p1.entries.find((e: any) => e.eventId === evB);
+  assert.equal(eA.rounded, true);
+  assert.equal(eA.hours, 6.25);
+  assert.deepEqual(eA.meal, { count: 3, amount: 40 });
+  assert.equal(eA.pay, 125 + 40);
+  assert.deepEqual(eB.turnaround, { hours: 2, amount: 20 });
+  assert.equal(eB.pay, 80 + 20);
+  assert.equal(eA.ruleSet, 'Local 7');
+  assert.equal(p1.penaltyPay, 60);
+  assert.equal(p1.gross, 265);
+  assert.equal(pr.people.find((p: any) => p.userId === c2.id).gross, 80);
+  // the detail export shows the penalties
+  const csvOut = (await call(a, 'GET', '/api/payroll/export?provider=csv&from=2030-07-09&to=2030-07-12&mark=0')).text;
+  assert.match(csvOut, /Meal penalties/);
+  assert.match(csvOut, /40\.00/);
+
+  // an event can use no special rules (another set) — here a set with nothing in it: plain pay, no penalties
+  const plain = (await call(a, 'POST', '/api/work-rule-sets', { name: 'Plain', config: {} })).json.set.id;
+  assert.equal((await call(a, 'PUT', `/api/events/${evA}/rule-set`, { ruleSetId: plain })).json.effective.name, 'Plain');
+  const pr2 = (await call(a, 'GET', '/api/payroll?from=2030-07-09&to=2030-07-12')).json;
+  const eA2 = pr2.people.find((p: any) => p.userId === c1.id).entries.find((e: any) => e.eventId === evA);
+  assert.equal(eA2.meal, undefined);
+  assert.equal(eA2.hours, 6.13); // 14:07 → 20:15, not rounded
+
+  // cancellation: a confirmed call cut with under 24 h notice pays 4 h; with plenty of notice, or "don't pay", nothing
+  const evC = (await call(a, 'POST', '/api/events', { name: 'Gala', startDate: '2030-01-01', endDate: '2030-01-02' })).json.event.id;
+  const soon = await shift(evC, start(10), start(16));
+  const later = await shift(evC, start(60), start(66));
+  for (const s of [soon, later]) for (const u of [c3.id, c2.id]) await call(a, 'POST', `/api/shifts/${s}/assign`, { userId: u, confirmed: true, override: true });
+  const asg = async (s: string, u: string) => (await withTenant(tid, (c) => c.query('SELECT id FROM shift_assignments WHERE shift_id = $1 AND user_id = $2', [s, u]))).rows[0].id;
+  assert.equal((await call(a, 'DELETE', `/api/assignments/${await asg(soon, c3.id)}`)).status, 200);
+  assert.equal((await call(a, 'DELETE', `/api/assignments/${await asg(soon, c2.id)}?noPay=1`)).status, 200);
+  assert.equal((await call(a, 'DELETE', `/api/assignments/${await asg(later, c3.id)}`)).status, 200);
+  const adj = (await withTenant(tid, (c) => c.query("SELECT user_id, hours::float AS hours, to_char(work_date,'YYYY-MM-DD') AS d FROM pay_adjustments WHERE kind = 'cancellation'"))).rows;
+  assert.deepEqual(adj.map((x: any) => [x.user_id, x.hours]), [[c3.id, 4]]);
+  const pr3 = (await call(a, 'GET', `/api/payroll?from=${adj[0].d}&to=${adj[0].d}`)).json;
+  const cx = pr3.people.find((p: any) => p.userId === c3.id).entries[0];
+  assert.deepEqual([cx.adjustment, cx.pay, cx.hours], ['cancellation', 80, 4]);
+  // canceling the event pays the confirmed short-notice calls left on it (c2 on the soon shift was removed unpaid; later shift has notice)
+  const soon2 = await shift(evC, start(5), start(9));
+  await call(a, 'POST', `/api/shifts/${soon2}/assign`, { userId: crew.id, confirmed: true, override: true });
+  assert.equal((await call(a, 'PATCH', `/api/events/${evC}/pipeline`, { status: 'canceled' })).status, 200);
+  const adj2 = (await withTenant(tid, (c) => c.query("SELECT user_id FROM pay_adjustments WHERE kind = 'cancellation' ORDER BY created_at"))).rows.map((x: any) => x.user_id);
+  assert.deepEqual(adj2, [c3.id, crew.id]);
+  // manual adjustments (admin/HR), and voiding (Arena A now uses "Plain": c2's 2 h call is 2 h, no minimum call)
+  const man = await call(a, 'POST', '/api/pay-adjustments', { userId: c2.id, date: '2030-07-10', amount: 25, note: 'Parking reimbursement' });
+  assert.equal(man.status, 201, man.text);
+  assert.equal((await call(a, 'GET', '/api/payroll?from=2030-07-09&to=2030-07-12')).json.people.find((p: any) => p.userId === c2.id).gross, 40 + 25);
+  assert.equal((await call(a, 'POST', `/api/pay-adjustments/${man.json.adjustment.id}/void`)).status, 200);
+  assert.equal((await call(a, 'GET', '/api/payroll?from=2030-07-09&to=2030-07-12')).json.people.find((p: any) => p.userId === c2.id).gross, 40);
+});
+
+test('client portal: client accounts see only their customer, sign off timesheets (gating invoices), and request crew', async () => {
+  const bcrypt = (await import('bcryptjs')).default;
+  const a = await register('cport');
+  const tid = await tenantOf(a);
+  await call(a, 'POST', '/api/skills', { name: 'Hand', payRate: 20 });
+  const crew = await mkCrew(a, 'cp-crew');
+  await call(a, 'PATCH', `/api/crew/${crew.id}`, { phone: '(801) 555-0111' });
+  const acme = (await call(a, 'POST', '/api/customers', { name: 'Acme Live' })).json.customer.id;
+  const div = (await call(a, 'POST', '/api/customers', { name: 'Acme Arena', parentId: acme })).json.customer.id;
+  const other = (await call(a, 'POST', '/api/customers', { name: 'Other Co' })).json.customer.id;
+  // staff add a portal user (invite emailed); crew can't; duplicate email refused
+  assert.equal((await call(crew.session, 'POST', `/api/customers/${acme}/portal-users`, { name: 'Pat', email: `pat-${run}@acme.example` })).status, 403);
+  const pu = await call(a, 'POST', `/api/customers/${acme}/portal-users`, { name: 'Pat Client', email: `pat-${run}@acme.example` });
+  assert.equal(pu.status, 201, pu.text);
+  assert.equal((await call(a, 'POST', `/api/customers/${acme}/portal-users`, { name: 'Pat', email: `pat-${run}@acme.example` })).status, 409);
+  const invite = await withTenant(tid, (c) => c.query("SELECT subject FROM deliveries WHERE to_addr = $1", [`pat-${run}@acme.example`]));
+  assert.match(invite.rows[0].subject, /client portal/);
+  await pool.query('SELECT 1'); // keep pool warm
+  await withTenant(tid, async (c) => c.query('UPDATE users SET password_hash = $2 WHERE id = $1', [pu.json.user.id, await bcrypt.hash('client-pass-123', 10)]));
+  const cl = await login(`pat-${run}@acme.example`, 'client-pass-123');
+  const me = (await call(cl, 'GET', '/api/auth/me')).json.user;
+  assert.deepEqual([me.role, me.customer.name], ['client', 'Acme Live']);
+  // clients are shut out of everything else
+  for (const [m, u] of [['GET', '/api/crew'], ['GET', '/api/events'], ['GET', '/api/chat/people'], ['GET', '/api/open-shifts'], ['GET', '/api/skills'], ['GET', '/api/my/shifts'], ['GET', '/api/payroll?from=2030-01-01&to=2030-01-02']] as const)
+    assert.equal((await call(cl, m, u)).status, 403, u);
+  // they don't show in staff crew lists
+  assert.ok(!(await call(a, 'GET', '/api/crew')).json.crew.some((x: any) => x.role === 'client'));
+
+  const mk = async (name: string, customerId: string) => (await call(a, 'POST', '/api/events', { name, startDate: '2030-09-01', endDate: '2030-09-01', customerId })).json.event.id as string;
+  const evA = await mk('Acme Gala', acme);
+  const evD = await mk('Arena Night', div);
+  const evO = await mk('Other Show', other);
+  const sh = (await call(a, 'POST', `/api/events/${evA}/shifts`, { roleName: 'Hand', startsAt: '2030-09-01T15:00:00Z', endsAt: '2030-09-01T21:00:00Z', headcount: 2 })).json.shift.id;
+  await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: crew.id, confirmed: true });
+  const ov = (await call(cl, 'GET', '/api/client/overview')).json;
+  assert.deepEqual(ov.events.map((e: any) => e.id).sort(), [evA, evD].sort(), 'own customer and its divisions only');
+  assert.equal((await call(cl, 'GET', `/api/client/events/${evO}`)).status, 404);
+  const d = await call(cl, 'GET', `/api/client/events/${evA}`);
+  assert.equal(d.status, 200, d.text);
+  assert.equal(d.json.roster[0].name, 'Crew cp-crew');
+  assert.ok(!d.text.includes('555-0111') && !d.text.includes('pay') , 'no phone numbers or pay');
+
+  // invoicing waits for sign-off when the customer requires it
+  await withTenant(tid, async (c) => {
+    const asg = (await c.query('SELECT id FROM shift_assignments WHERE shift_id = $1', [sh])).rows[0].id;
+    await c.query("INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in, clock_out, status) VALUES ($1,$2,$3,'2030-09-01T15:00:00Z','2030-09-01T21:00:00Z','approved')", [tid, asg, crew.id]);
+    await c.query("UPDATE skills SET bill_rate = 45 WHERE lower(name) = 'hand'");
+  });
+  assert.equal((await call(a, 'GET', `/api/events/${evA}/billing/iif?source=time`)).status, 200, 'not required yet');
+  assert.equal((await call(a, 'PUT', `/api/customers/${acme}/portal`, { requireApproval: true })).status, 200);
+  assert.equal((await call(a, 'GET', `/api/events/${evA}/billing/iif?source=time`)).status, 409);
+  assert.equal((await call(cl, 'POST', `/api/client/events/${evA}/dispute`, {})).status, 400, 'a dispute needs a note');
+  assert.equal((await call(cl, 'POST', `/api/client/events/${evA}/dispute`, { note: 'Crew left at 8' })).status, 200);
+  const blocked = await call(a, 'GET', `/api/events/${evA}/client-approval`);
+  assert.deepEqual([blocked.json.required, blocked.json.approved, blocked.json.disputed], [true, false, true]);
+  assert.equal((await call(cl, 'POST', `/api/client/events/${evA}/approve`, { note: 'Looks right' })).status, 200);
+  assert.equal((await call(a, 'GET', `/api/events/${evA}/billing/iif?source=time`)).status, 200);
+  // a change to the time after sign-off needs a new one
+  await withTenant(tid, (c) => c.query("UPDATE time_entries SET clock_out = '2030-09-01T21:30:00Z' WHERE user_id = $1", [crew.id]));
+  const st = (await call(a, 'GET', `/api/events/${evA}/client-approval`)).json;
+  assert.deepEqual([st.approved, st.stale], [false, true]);
+  assert.equal((await call(a, 'GET', `/api/events/${evA}/billing/iif?source=time`)).status, 409);
+  // can't sign off someone else's event
+  assert.equal((await call(cl, 'POST', `/api/client/events/${evO}/approve`, {})).status, 404);
+
+  // crew requests become pending events with open positions, and staff are told
+  const req1 = await call(cl, 'POST', '/api/client/requests', {
+    name: 'Spring Expo', venue: 'Hall B', startDate: '2030-10-05', endDate: '2030-10-06', notes: 'Forklift certified please',
+    positions: [{ role: 'Hand', count: 6, startsAt: '2030-10-05T14:00:00Z', endsAt: '2030-10-05T22:00:00Z' }],
+  });
+  assert.equal(req1.status, 201, req1.text);
+  const made = (await call(a, 'GET', `/api/events/${req1.json.event.id}`)).json;
+  assert.deepEqual([made.event.pipeline_status, made.event.customer_id, made.shifts[0].headcount], ['pending', acme, 6]);
+  const told = await withTenant(tid, (c) => c.query("SELECT 1 FROM notifications WHERE title LIKE 'Crew request from Acme Live%'"));
+  assert.ok(told.rowCount! >= 1);
+  // removing access signs them out of the portal
+  assert.equal((await call(a, 'DELETE', `/api/customers/${acme}/portal-users/${pu.json.user.id}`)).status, 200);
+  assert.equal((await call(cl, 'GET', '/api/client/overview')).status, 401);
+});
+
+test('auto-fill: proposes qualified, available people for open seats with reasons; sends only what the coordinator keeps', async () => {
+  const a = await register('afill');
+  const tid = await tenantOf(a);
+  const mkc = async (tag: string, skills: string[]) => {
+    const m = await call(a, 'POST', '/api/crew', { name: `Crew ${tag}`, email: `${tag}-${run}@test.example`, password: 'password123', skills });
+    assert.equal(m.status, 201, m.text);
+    return { id: m.json.member.id as string, session: await login(`${tag}-${run}@test.example`, 'password123') };
+  };
+  const audio1 = await mkc('af-audio1', ['Audio Tech']);
+  const audio2 = await mkc('af-audio2', ['Audio Tech']);
+  const off = await mkc('af-off', ['Audio Tech']);
+  const busy = await mkc('af-busy', ['Audio Tech']);
+  const hand = await mkc('af-hand', ['Stagehand']);
+  // time off for one, another shift at the same time for another
+  await call(off.session, 'POST', '/api/my/time-off', { startsOn: '2030-11-02', endsOn: '2030-11-02', note: 'away' });
+  const evX = (await call(a, 'POST', '/api/events', { name: 'Other gig', startDate: '2030-11-02', endDate: '2030-11-02' })).json.event.id;
+  const sx = (await call(a, 'POST', `/api/events/${evX}/shifts`, { roleName: 'Audio Tech', startsAt: '2030-11-02T15:00:00Z', endsAt: '2030-11-02T23:00:00Z', headcount: 1 })).json.shift.id;
+  await call(a, 'POST', `/api/shifts/${sx}/assign`, { userId: busy.id, confirmed: true });
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Fall Gala', startDate: '2030-11-02', endDate: '2030-11-02' })).json.event.id;
+  const sA = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Audio Tech', startsAt: '2030-11-02T16:00:00Z', endsAt: '2030-11-02T22:00:00Z', headcount: 3 })).json.shift.id;
+  const sB = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Audio Tech', startsAt: '2030-11-02T17:00:00Z', endsAt: '2030-11-02T21:00:00Z', headcount: 1 })).json.shift.id;
+
+  assert.equal((await call(hand.session, 'POST', `/api/events/${ev}/autofill/preview`, {})).status, 403);
+  const pv = (await call(a, 'POST', `/api/events/${ev}/autofill/preview`, {})).json;
+  const pa = pv.shifts.find((s: any) => s.id === sA);
+  const pb = pv.shifts.find((s: any) => s.id === sB);
+  const names = (s: any) => s.picks.map((p: any) => p.userId);
+  // Audio techs first; the person on time off and the one booked elsewhere are never proposed
+  assert.deepEqual(names(pa).slice(0, 2).sort(), [audio1.id, audio2.id].sort());
+  assert.ok(!names(pa).includes(off.id) && !names(pa).includes(busy.id));
+  assert.equal(pa.open, 3);
+  assert.ok(pa.picks.every((p: any) => p.reasons.length > 0));
+  // the third seat falls to the stagehand, flagged as not listing the position
+  const third = pa.picks.find((p: any) => p.userId === hand.id);
+  assert.ok(third && third.warnings.some((w: string) => /doesn.t list/.test(w)));
+  // nobody is proposed for both overlapping shifts
+  assert.ok(!names(pb).some((u: string) => names(pa).includes(u)));
+  assert.equal(pb.short, 1, 'no one left for the overlapping shift');
+  assert.ok(pa.skipped['time off'] >= 1);
+
+  // send only the two audio techs on shift A
+  const sent = await call(a, 'POST', `/api/events/${ev}/autofill/send`, { offers: [{ shiftId: sA, userId: audio1.id }, { shiftId: sA, userId: audio2.id }, { shiftId: sx, userId: audio1.id }] });
+  assert.equal(sent.status, 200, sent.text);
+  assert.equal(sent.json.sent, 2);
+  assert.equal(sent.json.failed.length, 1, 'a shift from another event is refused');
+  const asg = (await withTenant(tid, (c) => c.query('SELECT user_id, status FROM shift_assignments WHERE shift_id = $1 ORDER BY user_id', [sA]))).rows;
+  assert.equal(asg.length, 2);
+  assert.ok(asg.every((x: any) => x.status === 'offered'));
+  // the next proposal only covers the seat still open
+  const pv2 = (await call(a, 'POST', `/api/events/${ev}/autofill/preview`, { shiftIds: [sA] })).json;
+  assert.equal(pv2.shifts[0].open, 1);
 });

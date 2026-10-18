@@ -1,6 +1,7 @@
 import type { PoolClient } from 'pg';
 import { loadRules, loadRates, rateFor, priceShift, eventState, loadStateOt, type StateOt, loadDayRates, roleKeyOf } from './pay';
 import { localDate, baseRole, type AcctSettings, type PayrollProvider } from './accounting';
+import { rulesForEvents, withPremiums, roundPunches, mealPenalties, turnaroundHours } from './workRules';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -8,10 +9,18 @@ export type PayEntry = { id: string; date: string; event: string; eventId: strin
   /** Base hourly rate; for a day-rate shift, the day rate divided by the hours worked. */
   rate: number | null; day: boolean; exported: boolean;
   /** Hours added to reach the shift's minimum call (already included in hours, reg and pay). */
-  minCall?: number };
+  minCall?: number;
+  /** Work-rule set that priced it, and what it added (already included in pay). */
+  ruleSet?: string; rounded?: boolean;
+  meal?: { count: number; amount: number };
+  turnaround?: { hours: number; amount: number };
+  /** Pay that isn't worked time: cancellation pay or a manual adjustment. */
+  adjustment?: 'cancellation' | 'manual'; note?: string | null };
 export type PayPerson = {
   userId: string; name: string; email: string; payrollIds: Record<string, string>;
   regular: number; overtime: number; double: number; hours: number; days: number; dayPay: number; gross: number | null; missingRate: boolean;
+  /** Meal penalties and turnaround premiums, in dollars (already in gross). */
+  penaltyPay: number;
   entries: PayEntry[];
 };
 
@@ -60,6 +69,10 @@ export async function payrollSummary(c: PoolClient, from: string, to: string) {
     ).rows[0].n,
   );
   const stateCache = new Map<string, StateOt>();
+  // Each event's work-rule set (union local / client contract), if any.
+  const ruleSets = await rulesForEvents(c, [...new Set(rows.map((r) => r.event_id as string))]);
+  const lastOut = new Map<string, Date>(); // user -> end of their previous call (turnaround)
+  const mealSpans = new Map<string, { spans: { in: Date; out: Date }[]; entry: PayEntry | null; person: PayPerson | null; meal: NonNullable<import('./workRules').WorkRules['meal']> }>();
   const people = new Map<string, PayPerson>();
   const week = new Map<string, number>(); // user|monday -> hours so far
   const jobDay = new Map<string, number>(); // user|event|date -> hours so far
@@ -73,11 +86,12 @@ export async function payrollSummary(c: PoolClient, from: string, to: string) {
     if (date < weekOf(from) && !inPeriod) continue;
     let p = people.get(r.user_id);
     if (!p && inPeriod) {
-      p = { userId: r.user_id, name: r.name, email: r.email, payrollIds: r.payroll_ids ?? {}, regular: 0, overtime: 0, double: 0, hours: 0, days: 0, dayPay: 0, gross: 0, missingRate: false, entries: [] };
+      p = { userId: r.user_id, name: r.name, email: r.email, payrollIds: r.payroll_ids ?? {}, regular: 0, overtime: 0, double: 0, hours: 0, days: 0, dayPay: 0, gross: 0, missingRate: false, penaltyPay: 0, entries: [] };
       people.set(r.user_id, p);
     }
     const override = Number(r.pay_rate_override ?? 0);
     if (r.pay_type === 'day') {
+      lastOut.set(r.user_id, new Date(r.clock_out));
       const k = `${r.assignment_id}|${date}`;
       if (dayPaid.has(k)) continue;
       dayPaid.add(k);
@@ -93,12 +107,26 @@ export async function payrollSummary(c: PoolClient, from: string, to: string) {
     const stKey = r.event_id;
     if (!stateCache.has(stKey)) stateCache.set(stKey, await loadStateOt(c, eventState(r, fallbackState), rules));
     const st = stateCache.get(stKey)!;
+    const set = ruleSets.get(r.event_id) ?? null;
+    const w = set?.rules ?? null;
+    const punch = roundPunches(w, new Date(r.clock_in), new Date(r.clock_out));
     const rate = override > 0 ? override : rateFor(rates, r.role_name);
-    const priced = priceShift(rules, rate || 1, r.clock_in, r.clock_out, week.get(wk) ?? 0, {
-      otAfter: r.ot_after === null ? null : Number(r.ot_after), otMult: st.otMult, dtAfter: st.dtAfter, dtMult: st.dtMult, priorDay: jobDay.get(jd) ?? 0,
+    const priced = priceShift(withPremiums(rules, w), rate || 1, punch.in, punch.out, week.get(wk) ?? 0, {
+      otAfter: w?.otAfter ?? (r.ot_after === null ? null : Number(r.ot_after)),
+      otMult: w?.otMult ?? st.otMult, dtAfter: w?.dtAfter ?? st.dtAfter, dtMult: w?.dtMult ?? st.dtMult, priorDay: jobDay.get(jd) ?? 0,
     });
     week.set(wk, (week.get(wk) ?? 0) + priced.hours);
     jobDay.set(jd, (jobDay.get(jd) ?? 0) + priced.hours);
+    // Turnaround: hours worked before the rest after this person's previous call was over.
+    const prevOut = lastOut.get(r.user_id) ?? null;
+    lastOut.set(r.user_id, punch.out);
+    const taH = w?.turnaround ? turnaroundHours(w.turnaround, prevOut, punch.in, punch.out) : 0;
+    const mk = w?.meal ? `${jd}` : '';
+    if (w?.meal) {
+      const m = mealSpans.get(mk) ?? { spans: [], entry: null, person: null, meal: w.meal };
+      m.spans.push({ in: punch.in, out: punch.out });
+      mealSpans.set(mk, m);
+    }
     if (!inPeriod || !p) continue;
     const reg = r2(priced.hours - priced.otHours - priced.dtHours);
     const pay = rate ? priced.estimate : null;
@@ -108,11 +136,25 @@ export async function payrollSummary(c: PoolClient, from: string, to: string) {
     p.double = r2(p.double + priced.dtHours);
     p.hours = r2(p.hours + priced.hours);
     const entry: PayEntry = { id: r.id, date, event: r.event_name, eventId: r.event_id, role: r.role_name, hours: priced.hours, reg, ot: priced.otHours, dt: priced.dtHours, premium: priced.premiumHours, pay, rate: rate || null, day: false, exported: !!r.payroll_exported_at };
+    if (set) entry.ruleSet = set.name;
+    if (punch.rounded) entry.rounded = true;
+    if (taH > 0 && w?.turnaround) {
+      const amt = rate ? r2(taH * rate * (w.turnaround.mult - 1)) : 0;
+      entry.turnaround = { hours: taH, amount: amt };
+      if (entry.pay !== null) entry.pay = r2(entry.pay + amt);
+      p.penaltyPay = r2(p.penaltyPay + amt);
+    }
     p.entries.push(entry);
+    if (mk) {
+      const m = mealSpans.get(mk)!;
+      m.entry = entry;
+      m.person = p;
+    }
     // Minimum call is per person per shift per day: remember the hours worked and the last entry.
-    if (Number(r.min_hours) > 0) {
+    const minH = Number(r.min_hours) || (w?.minCallH ?? 0);
+    if (minH > 0) {
       const k = `${r.assignment_id}|${date}`;
-      const m = minCall.get(k) ?? { worked: 0, min: Number(r.min_hours), rate: rate ?? 0, entry, person: p };
+      const m = minCall.get(k) ?? { worked: 0, min: minH, rate: rate ?? 0, entry, person: p };
       m.worked += priced.hours;
       m.entry = entry;
       minCall.set(k, m);
@@ -128,6 +170,44 @@ export async function payrollSummary(c: PoolClient, from: string, to: string) {
     if (m.entry.pay !== null && m.rate) m.entry.pay = r2(m.entry.pay + add * m.rate);
     m.person.regular = r2(m.person.regular + add);
     m.person.hours = r2(m.person.hours + add);
+  }
+  // Meal penalties per person per job per day (dollar amounts, on that day's last entry).
+  for (const m of mealSpans.values()) {
+    if (!m.entry || !m.person) continue;
+    const r = mealPenalties(m.meal, m.spans.sort((a, b) => +a.in - +b.in));
+    if (!r.count) continue;
+    m.entry.meal = r;
+    if (m.entry.pay !== null) m.entry.pay = r2(m.entry.pay + r.amount);
+    m.person.penaltyPay = r2(m.person.penaltyPay + r.amount);
+  }
+  // Pay that isn't worked time: cancellation pay and manual adjustments dated in the period.
+  const adj = (
+    await c.query(
+      `SELECT a.id, a.user_id, a.event_id, a.event_name, a.role_name, a.kind, to_char(a.work_date, 'YYYY-MM-DD') AS date, a.hours::float AS hours,
+              a.amount::float AS amount, a.note, a.exported_at, u.name, u.email, u.payroll_ids
+         FROM pay_adjustments a JOIN users u ON u.id = a.user_id
+        WHERE a.voided_at IS NULL AND a.work_date BETWEEN $1::date AND $2::date ORDER BY a.work_date`,
+      [from, to],
+    )
+  ).rows;
+  for (const a of adj) {
+    let p = people.get(a.user_id);
+    if (!p) {
+      p = { userId: a.user_id, name: a.name, email: a.email, payrollIds: a.payroll_ids ?? {}, regular: 0, overtime: 0, double: 0, hours: 0, days: 0, dayPay: 0, gross: 0, missingRate: false, penaltyPay: 0, entries: [] };
+      people.set(a.user_id, p);
+    }
+    const hourly = a.role_name ? rateFor(rates, a.role_name) : undefined;
+    const dayAmt = a.role_name ? dayRates.get(roleKeyOf(a.role_name)) ?? 0 : 0;
+    // A role paid by the day gets its day rate; otherwise the hours at the role's rate.
+    const isDay = !hourly && dayAmt > 0;
+    const pay = a.amount !== null ? Number(a.amount) : isDay ? dayAmt : hourly ? r2(a.hours * hourly) : null;
+    if (pay === null) p.missingRate = true;
+    const hours = isDay || a.amount !== null ? 0 : a.hours;
+    p.regular = r2(p.regular + hours);
+    p.hours = r2(p.hours + hours);
+    if (isDay) p.dayPay = r2(p.dayPay + (pay ?? 0));
+    p.entries.push({ id: a.id, date: a.date, event: a.event_name ?? '', eventId: a.event_id ?? '', role: a.role_name ?? '', hours, reg: hours, ot: 0, dt: 0, premium: 0, pay,
+      rate: hourly ?? null, day: isDay, exported: !!a.exported_at, adjustment: a.kind, note: a.note });
   }
   const list = [...people.values()].sort((a, b) => a.name.localeCompare(b.name));
   for (const p of list) p.gross = p.missingRate ? null : r2(p.entries.reduce((s, e) => s + (e.pay ?? 0), 0));
@@ -155,8 +235,9 @@ const h = (n: number) => (n ? n.toFixed(2) : '');
 /** ADP Workforce Now pay data import (EPI-style CSV): one row per employee keyed by File #. Column codes are set under Integrations. */
 export function adpFile(s: AcctSettings['payroll']['adp'], people: PayPerson[]) {
   return csv([
-    ['Co Code', 'Batch ID', 'File #', 'Reg Hours', 'O/T Hours', 'Hours 3 Code', 'Hours 3 Amount', 'Earnings 3 Code', 'Earnings 3 Amount'],
-    ...people.map((p) => [s.companyCode, s.batchId, p.payrollIds.adp ?? '', h(p.regular), h(p.overtime), p.double ? s.dtCode : '', h(p.double), p.dayPay ? s.dayCode : '', p.dayPay ? p.dayPay.toFixed(2) : '']),
+    ['Co Code', 'Batch ID', 'File #', 'Reg Hours', 'O/T Hours', 'Hours 3 Code', 'Hours 3 Amount', 'Earnings 3 Code', 'Earnings 3 Amount', 'Earnings 4 Code', 'Earnings 4 Amount'],
+    ...people.map((p) => [s.companyCode, s.batchId, p.payrollIds.adp ?? '', h(p.regular), h(p.overtime), p.double ? s.dtCode : '', h(p.double), p.dayPay ? s.dayCode : '', p.dayPay ? p.dayPay.toFixed(2) : '',
+      p.penaltyPay ? s.penaltyCode || 'PEN' : '', p.penaltyPay ? p.penaltyPay.toFixed(2) : '']),
   ]);
 }
 
@@ -174,10 +255,11 @@ export function adpRunFile(s: AcctSettings['payroll']['adp'], people: PayPerson[
   ];
   for (const p of people) {
     // Hours per Rate Code: each role can be paid at a different rate set up on the employee in RUN.
-    const by = new Map<string, { reg: number; ot: number; dt: number; day: number }>();
+    const by = new Map<string, { reg: number; ot: number; dt: number; day: number; pen: number }>();
     for (const e of p.entries) {
       const code = rateCodeOf(e.role) || r.rateCode;
-      const t = by.get(code) ?? { reg: 0, ot: 0, dt: 0, day: 0 };
+      const t = by.get(code) ?? { reg: 0, ot: 0, dt: 0, day: 0, pen: 0 };
+      t.pen += (e.meal?.amount ?? 0) + (e.turnaround?.amount ?? 0);
       if (e.day) t.day += e.pay ?? 0;
       else {
         t.reg += e.reg;
@@ -193,6 +275,7 @@ export function adpRunFile(s: AcctSettings['payroll']['adp'], people: PayPerson[
       if (t.ot > 0.004) line(r.otCode, t.ot, null);
       if (t.dt > 0.004) line(r.dtCode, t.dt, null);
       if (t.day > 0.004) line(r.dayCode, null, t.day);
+      if (t.pen > 0.004) line(r.penaltyCode || 'PEN', null, t.pen);
     }
   }
   return csv(rows);
@@ -201,10 +284,10 @@ export function adpRunFile(s: AcctSettings['payroll']['adp'], people: PayPerson[
 /** Gusto hours import: one row per employee. */
 export function gustoFile(people: PayPerson[]) {
   return csv([
-    ['Last Name', 'First Name', 'Employee ID', 'Email', 'Regular Hours', 'Overtime Hours', 'Double Overtime Hours', 'Day Rate Pay'],
+    ['Last Name', 'First Name', 'Employee ID', 'Email', 'Regular Hours', 'Overtime Hours', 'Double Overtime Hours', 'Day Rate Pay', 'Penalty Pay'],
     ...people.map((p) => {
       const n = split(p.name);
-      return [n.last, n.first, p.payrollIds.gusto ?? '', p.email, h(p.regular), h(p.overtime), h(p.double), p.dayPay ? p.dayPay.toFixed(2) : ''];
+      return [n.last, n.first, p.payrollIds.gusto ?? '', p.email, h(p.regular), h(p.overtime), h(p.double), p.dayPay ? p.dayPay.toFixed(2) : '', p.penaltyPay ? p.penaltyPay.toFixed(2) : ''];
     }),
   ]);
 }
@@ -213,15 +296,18 @@ export function gustoFile(people: PayPerson[]) {
 export function quickbooksFile(people: PayPerson[]) {
   return csv([
     ['Employee', 'Employee ID', 'Date', 'Hours', 'Customer / Job', 'Service', 'Notes'],
-    ...people.flatMap((p) => p.entries.map((e) => [p.name, p.payrollIds.quickbooks ?? '', e.date, e.hours.toFixed(2), e.event, baseRole(e.role), e.day ? 'Day rate shift' : ''])),
+    ...people.flatMap((p) => p.entries.filter((e) => !e.adjustment).map((e) => [p.name, p.payrollIds.quickbooks ?? '', e.date, e.hours.toFixed(2), e.event, baseRole(e.role),
+      [e.day ? 'Day rate shift' : '', e.meal ? `Meal penalties $${e.meal.amount.toFixed(2)}` : '', e.turnaround ? `Turnaround $${e.turnaround.amount.toFixed(2)}` : ''].filter(Boolean).join('; ')])),
   ]);
 }
 
 /** Every entry with its split and estimated pay, for review or any other payroll system. */
 export function detailFile(people: PayPerson[]) {
   return csv([
-    ['Employee', 'Email', 'Date', 'Event', 'Role', 'Hours', 'Regular', 'Overtime', 'Double time', 'Day rate', 'Estimated pay'],
-    ...people.flatMap((p) => p.entries.map((e) => [p.name, p.email, e.date, e.event, e.role, e.hours.toFixed(2), h(e.reg), h(e.ot), h(e.dt), e.day ? 'yes' : '', e.pay === null ? '' : e.pay.toFixed(2)])),
+    ['Employee', 'Email', 'Date', 'Event', 'Role', 'Hours', 'Regular', 'Overtime', 'Double time', 'Day rate', 'Meal penalties', 'Turnaround', 'Type', 'Work rules', 'Estimated pay'],
+    ...people.flatMap((p) => p.entries.map((e) => [p.name, p.email, e.date, e.event, e.role, e.hours.toFixed(2), h(e.reg), h(e.ot), h(e.dt), e.day ? 'yes' : '',
+      e.meal ? e.meal.amount.toFixed(2) : '', e.turnaround ? e.turnaround.amount.toFixed(2) : '', e.adjustment === 'cancellation' ? 'Cancellation pay' : e.adjustment === 'manual' ? 'Adjustment' : 'Worked',
+      e.ruleSet ?? '', e.pay === null ? '' : e.pay.toFixed(2)])),
   ]);
 }
 

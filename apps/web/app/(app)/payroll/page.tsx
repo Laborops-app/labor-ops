@@ -3,10 +3,12 @@ import { Fragment, useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, money } from '@/lib/api';
+import PayAdjustments from '@/components/PayAdjustments';
 
 type Provider = 'adp' | 'gusto' | 'quickbooks';
-type Entry = { id: string; date: string; event: string; role: string; hours: number; reg: number; ot: number; dt: number; pay: number | null; rate: number | null; day: boolean; exported: boolean; minCall?: number };
-type Person = { userId: string; name: string; email: string; payrollIds: Record<string, string>; regular: number; overtime: number; double: number; hours: number; days: number; dayPay: number; gross: number | null; entries: Entry[] };
+type Entry = { id: string; date: string; event: string; role: string; hours: number; reg: number; ot: number; dt: number; pay: number | null; rate: number | null; day: boolean; exported: boolean; minCall?: number;
+  ruleSet?: string; rounded?: boolean; meal?: { count: number; amount: number }; turnaround?: { hours: number; amount: number }; adjustment?: 'cancellation' | 'manual'; note?: string | null };
+type Person = { userId: string; name: string; email: string; payrollIds: Record<string, string>; regular: number; overtime: number; double: number; hours: number; days: number; dayPay: number; gross: number | null; penaltyPay?: number; entries: Entry[] };
 type Data = {
   from: string; to: string; people: Person[]; warnings: string[]; totals: { people: number; hours: number; gross: number };
   payroll: { enabled: Provider[]; primary: Provider }; missingIds: Record<string, string[]>; quickbooksConnected: boolean;
@@ -206,7 +208,7 @@ function Body() {
               <div className="table-wrap">
                 <table className="table">
                   <thead>
-                    <tr><th>Name</th>{prov && <th>{ID_LABEL[prov]}</th>}<th>Regular</th><th>Overtime</th><th>Double</th><th>Day rate</th><th>Est. gross</th><th></th></tr>
+                    <tr><th>Name</th>{prov && <th>{ID_LABEL[prov]}</th>}<th>Regular</th><th>Overtime</th><th>Double</th><th>Day rate</th><th>Penalties</th><th>Est. gross</th><th></th></tr>
                   </thead>
                   <tbody>
                     {d.people.map((p) => (
@@ -230,12 +232,13 @@ function Body() {
                           <td>{h(p.overtime)}</td>
                           <td>{h(p.double)}</td>
                           <td>{p.days ? `${p.days} × · ${money(p.dayPay)}` : '—'}</td>
+                          <td>{p.penaltyPay ? money(p.penaltyPay) : '—'}</td>
                           <td>{p.gross === null ? <span className="muted">rate missing</span> : money(p.gross)}</td>
                           <td><button className="btn ghost small" onClick={() => setOpen(open === p.userId ? null : p.userId)}>{open === p.userId ? 'Hide' : 'Details'}</button></td>
                         </tr>
                         {open === p.userId && (
                           <tr>
-                            <td colSpan={prov ? 8 : 7}>
+                            <td colSpan={prov ? 9 : 8}>
                               <table className="table small">
                                 <tbody>
                                   {p.entries.map((e) => (
@@ -243,7 +246,13 @@ function Body() {
                                       <td>{e.date}</td>
                                       <td>{e.event}</td>
                                       <td>{e.role}</td>
-                                      <td>{e.day ? `day rate · ${e.hours.toFixed(2)} h` : `${e.hours.toFixed(2)} h${e.ot ? ` · ${e.ot} OT` : ''}${e.dt ? ` · ${e.dt} DT` : ''}${e.minCall ? ` · incl. ${e.minCall} h minimum call` : ''}`}</td>
+                                      <td>
+                                        {e.adjustment ? <><span className="chip warn">{e.adjustment === 'cancellation' ? 'Cancellation pay' : 'Adjustment'}</span> {e.day ? 'day rate' : e.hours ? `${e.hours.toFixed(2)} h` : ''}{e.note && <div className="muted">{e.note}</div>}</>
+                                          : e.day ? `day rate · ${e.hours.toFixed(2)} h` : `${e.hours.toFixed(2)} h${e.ot ? ` · ${e.ot} OT` : ''}${e.dt ? ` · ${e.dt} DT` : ''}${e.minCall ? ` · incl. ${e.minCall} h minimum call` : ''}${e.rounded ? ' · rounded' : ''}`}
+                                        {e.meal && <div className="small">Meal penalties: {e.meal.count} × · {money(e.meal.amount)}</div>}
+                                        {e.turnaround && <div className="small">Turnaround: {e.turnaround.hours} h · {money(e.turnaround.amount)}</div>}
+                                        {e.ruleSet && <div className="muted small">{e.ruleSet}</div>}
+                                      </td>
                                       <td className="muted">{e.rate ? `${money(e.rate)}/h` : ''}</td>
                                       <td>{e.pay === null ? '—' : money(e.pay)}</td>
                                       <td>{e.exported && <span className="chip warn">exported</span>}</td>
@@ -263,6 +272,7 @@ function Body() {
             <p className="muted small">Downloading a provider file marks these entries as exported, so a second export warns you. Gross pay is an estimate; your payroll provider calculates taxes and the final amounts.</p>
           </section>
 
+          <PayAdjustments from={d.from} to={d.to} onChanged={load} known={d.people.map((p) => ({ id: p.userId, name: p.name }))} />
           {d.history.length > 0 && (
             <section className="card">
               <h2>Past exports</h2>

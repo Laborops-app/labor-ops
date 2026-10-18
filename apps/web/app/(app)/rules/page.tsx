@@ -3,10 +3,11 @@ import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner } from '@/components/ui';
 import { api } from '@/lib/api';
+import WorkRuleSets from '@/components/WorkRuleSets';
 
 type Rules = {
   minRestHours: number; maxDailyHours: number; dailyOtAfter: number; weeklyOtAfter: number; otMultiplier: number;
-  nightStart: string; nightEnd: string; nightPremiumPct: number; sundayPremiumPct: number; holidayPremiumPct: number; holidays: string[]; defaultState: string | null; autoApprove?: boolean; autoApproveGraceMin?: number; lateAlertMin?: number; noShowMin?: number; autoClockoutH?: number; payPeriod?: 'weekly' | 'biweekly'; payPeriodStart?: string;
+  nightStart: string; nightEnd: string; nightPremiumPct: number; saturdayPremiumPct?: number; sundayPremiumPct: number; holidayPremiumPct: number; holidays: string[]; defaultState: string | null; autoApprove?: boolean; autoApproveGraceMin?: number; lateAlertMin?: number; noShowMin?: number; autoClockoutH?: number; payPeriod?: 'weekly' | 'biweekly'; payPeriodStart?: string;
 };
 type StateRule = { state: string; otMult: number; dtAfter: number | null; dtMult: number; custom: boolean };
 
@@ -120,6 +121,7 @@ function Body() {
                 <input type="time" value={r.nightEnd} onChange={(e) => set({ nightEnd: e.target.value })} />
               </span>
             </label>
+            <Num label="Saturday premium" suffix="%" step={1} value={r.saturdayPremiumPct ?? 0} onChange={(n) => set({ saturdayPremiumPct: n })} />
             <Num label="Sunday premium" suffix="%" step={1} value={r.sundayPremiumPct} onChange={(n) => set({ sundayPremiumPct: n })} />
             <Num label="Holiday premium" suffix="%" step={1} value={r.holidayPremiumPct} onChange={(n) => set({ holidayPremiumPct: n })} />
           </div>
@@ -140,6 +142,7 @@ function Body() {
         </section>
         <button className="btn primary">Save rules</button>
       </form>
+      <WorkRuleSets />
       <StateOvertime states={states} defaultState={r.defaultState} onDefault={(s) => set({ defaultState: s })} onChanged={loadStates} onError={setError} onOk={setOk} />
     </>
   );

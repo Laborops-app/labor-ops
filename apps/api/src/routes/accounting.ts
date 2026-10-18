@@ -1,3 +1,4 @@
+import { invoiceBlockedByClient, clientApprovalState } from './client';
 import { maybeArchive } from '../pipeline';
 import crypto from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
@@ -192,6 +193,7 @@ export async function accountingRoutes(app: FastifyInstance) {
         ...b,
         canBill: allowed,
         quickbooks: { connected: qboConnected(q), environment: q?.environment ?? 'sandbox' },
+        clientApproval: await clientApprovalState(c, id),
         invoices: b.invoices.map((i: any) => ({ ...i, url: i.provider === 'qbo' && i.external_id && q ? appLink(q.environment, 'invoice', i.external_id) : null })),
         unmapped: b.lines.filter((l) => !l.qboItemId).map((l) => l.role).filter((v, i, a) => a.indexOf(v) === i),
       };
@@ -209,6 +211,8 @@ export async function accountingRoutes(app: FastifyInstance) {
         if (!bill) return { code: 404, error: 'Event not found' };
         if (!bill.customer) return { code: 400, error: 'Pick a customer for this event first (Event details).' };
         if (!bill.lines.length || bill.total <= 0) return { code: 400, error: 'Nothing to bill yet.' };
+        const blocked = await invoiceBlockedByClient(c, id);
+        if (blocked) return { code: 409, error: blocked, reason: 'client_approval' };
         if (!b.again && bill.invoices.some((i: any) => i.provider === 'qbo')) return { code: 409, error: 'This event already has a QuickBooks invoice. Create another one only if that is intended.', reason: 'duplicate' };
         const missing = bill.lines.filter((l) => !l.qboItemId);
         if (missing.length) return { code: 400, error: `Choose a QuickBooks item for ${[...new Set(missing.map((l) => l.role))].join(', ')} (or a default item) under Integrations.` };
@@ -250,6 +254,7 @@ export async function accountingRoutes(app: FastifyInstance) {
       const bill = await eventBilling(c, id, q.source);
       if (!bill) return { code: 404 as const };
       if (!bill.lines.length) return { code: 400 as const };
+      if (await invoiceBlockedByClient(c, id)) return { code: 409 as const };
       const s = await loadAcct(c);
       const body = invoiceIif(s.desktop, {
         customer: bill.customer?.name ?? bill.event.client ?? bill.event.name,
@@ -266,7 +271,8 @@ export async function accountingRoutes(app: FastifyInstance) {
     if (out.code === 403) return reply.code(403).send({ error: 'Only admins and coordinators allowed to adjust rates can export invoices.' });
     if (out.code === 404) return reply.code(404).send({ error: 'Event not found' });
     if (out.code === 400) return reply.code(400).send({ error: 'Nothing to bill yet.' });
-    return download(reply, out.name, 'text/plain', out.body);
+    if (out.code === 409) return reply.code(409).send({ error: 'The client has to approve this event’s timesheets before it can be invoiced.', reason: 'client_approval' });
+    return download(reply, out.name!, 'text/plain', out.body!);
   });
 
   // ---------- payroll ----------
@@ -286,6 +292,7 @@ export async function accountingRoutes(app: FastifyInstance) {
   const markExported = async (c: any, tid: string, sub: string, provider: string, p: { from: string; to: string }, people: Awaited<ReturnType<typeof payrollSummary>>['people']) => {
     const ids = people.flatMap((x) => x.entries.map((e) => e.id));
     if (ids.length) await c.query('UPDATE time_entries SET payroll_exported_at = now() WHERE id = ANY($1::uuid[])', [ids]);
+    if (ids.length) await c.query('UPDATE pay_adjustments SET exported_at = now() WHERE id = ANY($1::uuid[]) AND exported_at IS NULL', [ids]);
     await c.query('INSERT INTO payroll_exports (tenant_id, provider, period_start, period_end, people, entries, gross, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)', [
       tid, provider, p.from, p.to, people.length, ids.length, Math.round(people.reduce((s, x) => s + (x.gross ?? 0), 0) * 100) / 100, sub,
     ]);

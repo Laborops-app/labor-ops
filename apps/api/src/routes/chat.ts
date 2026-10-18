@@ -149,7 +149,7 @@ export async function chatRoutes(app: FastifyInstance) {
     withTenant(req.user.tid, async (c) => ({
       people: (
         await c.query(
-          `SELECT id, name, role FROM users WHERE active AND id <> $1 AND ($2 OR role IN ('admin','manager')) ORDER BY role, name`,
+          `SELECT id, name, role FROM users WHERE active AND role <> 'client' AND id <> $1 AND ($2 OR role IN ('admin','manager')) ORDER BY role, name`,
           [req.user.sub, isStaff(req.user.role)],
         )
       ).rows,

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
+import CustomerPortal from '@/components/CustomerPortal';
 import Modal from '@/components/Modal';
 import { Banner, Pill } from '@/components/ui';
 import CopyEvent from '@/components/CopyEvent';
@@ -114,6 +115,8 @@ function Body() {
             </div>
           )}
         </form>
+
+        <CustomerPortal customerId={c.id} customerName={c.name} canEdit />
 
         <section style={{ marginTop: 32 }}>
           <div className="row space">

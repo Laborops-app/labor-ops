@@ -28,6 +28,8 @@ export const acctSchema = z.object({
           batchId: z.string().trim().max(20).default('LABOROPS'),
           dtCode: z.string().trim().max(10).default('D'),
           dayCode: z.string().trim().max(10).default('DAY'),
+          /** Earnings code for penalty pay (meal penalties, turnaround) as a dollar amount. */
+          penaltyCode: z.string().trim().max(10).default('PEN'),
           run: z
             .object({
               frequency: z.enum(['W', 'B', 'S', 'M', 'Q']).default('W'),
@@ -35,6 +37,7 @@ export const acctSchema = z.object({
               otCode: z.string().trim().max(10).regex(/^[A-Za-z0-9_ -]*$/, 'Use letters, numbers, _ or -').default('OT'),
               dtCode: z.string().trim().max(10).regex(/^[A-Za-z0-9_ -]*$/, 'Use letters, numbers, _ or -').default('DT'),
               dayCode: z.string().trim().max(10).regex(/^[A-Za-z0-9_ -]*$/, 'Use letters, numbers, _ or -').default('DAY'),
+              penaltyCode: z.string().trim().max(10).regex(/^[A-Za-z0-9_ -]*$/, 'Use letters, numbers, _ or -').default('PEN'),
               /** The pay rates set up on employees in RUN, by Rate Code. */
               rateCodes: z
                 .array(z.object({ code: z.string().trim().toUpperCase().min(1).max(10).regex(/^[A-Z0-9_]+$/, 'Rate codes use letters, numbers and _'), label: z.string().trim().max(60).default('') }))

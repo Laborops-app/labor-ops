@@ -8,6 +8,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { loadDepartments } from '../leads';
 import { tellTimeChange } from '../shiftTimes';
+import { recordCancellation } from '../workRules';
 import { withTenant, audit } from '../db';
 import { CustomerError, advanceStage, createCustomer } from '../crm';
 import { getToken, pushEventRequest, RentmanError } from '../rentman';
@@ -650,7 +651,8 @@ export async function eventRoutes(app: FastifyInstance) {
     const { id: shiftId } = id.parse(req.params);
     const n = await withTenant(req.user.tid, async (c) => {
       const d = await describeShift(c, req.user.tid, shiftId);
-      const crew = d ? (await c.query("SELECT user_id FROM shift_assignments WHERE shift_id = $1 AND status <> 'declined'", [shiftId])).rows : [];
+      const crew = d ? (await c.query("SELECT user_id, status FROM shift_assignments WHERE shift_id = $1 AND status <> 'declined'", [shiftId])).rows : [];
+      for (const x of crew) await recordCancellation(c, req.user.tid, req.user.sub, { userId: x.user_id, status: x.status, shiftId });
       const r = await c.query('DELETE FROM shifts WHERE id = $1', [shiftId]);
       if (r.rowCount && d)
         await notify(c, req.user.tid, crew.map((x) => ({
@@ -723,7 +725,10 @@ export async function eventRoutes(app: FastifyInstance) {
   app.delete('/api/assignments/:id', { preHandler: mgr }, async (req, reply) => {
     const { id: aId } = id.parse(req.params);
     const n = await withTenant(req.user.tid, async (c) => {
-      const prev = (await c.query('SELECT a.user_id, a.shift_id, s.event_id FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE a.id = $1', [aId])).rows[0];
+      const prev = (await c.query('SELECT a.user_id, a.shift_id, a.status, s.event_id FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE a.id = $1', [aId])).rows[0];
+      // A confirmed call cut at short notice is paid under the event's work rules (unless the coordinator says not to).
+      const noPay = (req.query as { noPay?: string }).noPay === '1';
+      if (prev && !noPay) await recordCancellation(c, req.user.tid, req.user.sub, { userId: prev.user_id, status: prev.status, shiftId: prev.shift_id });
       const r = await c.query('DELETE FROM shift_assignments WHERE id = $1', [aId]);
       if (r.rowCount && prev) await syncEventChannel(c, req.user.tid, prev.event_id, prev.user_id, false);
       if (r.rowCount && prev) {

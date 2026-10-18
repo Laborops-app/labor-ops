@@ -232,5 +232,18 @@ async function big(c: PoolClient, tid: string, hash: string) {
       await c.query("INSERT INTO notifications (tenant_id, user_id, category, title, body, link) VALUES ($1,$2,'billing',$3,$4,$5)",
         [tid, uid, `Ready to invoice: ${ready.name}`, `${ready.name} is completed and ready to be invoiced.`, `/events/${ready.id}#invoice`]);
   }
+  // Work rules and the client portal: the first customer uses a union-style rule set, signs off timesheets before
+  // invoicing, and has a portal login.
+  const first = customers[0];
+  if (first) {
+    const ws = (await c.query(
+      `INSERT INTO work_rule_sets (tenant_id, name, is_default, config) VALUES ($1, 'Union stagehands', false, $2) RETURNING id`,
+      [tid, JSON.stringify({ otAfter: 8, dtAfter: 12, otMult: 1.5, dtMult: 2, premiums: { nightPct: null, saturdayPct: null, sundayPct: 50, holidayPct: 100 }, minCallH: 4,
+        rounding: { minutes: 15, mode: 'worker' }, meal: { afterH: 5, breakMin: 30, stepMin: 30, amounts: [10, 12.5, 15] }, turnaround: { restH: 10, mult: 1.5 }, cancellation: { noticeH: 24, payH: 4 } })],
+    )).rows[0].id;
+    await c.query("INSERT INTO work_rule_sets (tenant_id, name, is_default, config) VALUES ($1, 'Non-union', true, $2)", [tid, JSON.stringify({ minCallH: 4, rounding: { minutes: 15, mode: 'nearest' } })]);
+    await c.query('UPDATE customers SET rule_set_id = $2, require_client_approval = true WHERE id = $1', [first, ws]);
+    await c.query("INSERT INTO users (tenant_id, email, name, role, password_hash, customer_id) VALUES ($1,'client@demo.laborops.app','Casey Client','client',$2,$3)", [tid, hash, first]);
+  }
   await audit(c, tid, admin, 'tenant.seed_big', 'tenant', tid);
 }

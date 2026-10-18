@@ -2,8 +2,8 @@ import { adminPool } from './storage';
 import { withTenant } from './db';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
-export type Role = 'admin' | 'manager' | 'crew' | 'hr';
-export type SessionUser = { sub: string; tid: string; role: Role; name: string };
+export type Role = 'admin' | 'manager' | 'crew' | 'hr' | 'client';
+export type SessionUser = { sub: string; tid: string; role: Role; name: string; customerId?: string | null };
 
 declare module '@fastify/jwt' {
   interface FastifyJWT {
@@ -38,19 +38,25 @@ export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
   const cur = await currentUser(req.user.tid, req.user.sub);
   if (!cur || !cur.active) return reply.code(401).send({ error: 'Not signed in' });
   req.user.role = cur.role;
+  req.user.customerId = cur.customerId;
+  // Client (customer) accounts only reach the portal and their own account; every other endpoint is closed to them.
+  if (cur.role === 'client' && !clientMayUse(req.routeOptions?.url ?? req.url)) return reply.code(403).send({ error: 'Not allowed for your role' });
   if (req.user?.tid && (await isSuspended(req.user.tid))) return reply.code(403).send({ error: 'This company account is suspended. Contact LaborOps support.', reason: 'suspended' });
 }
 
-const users = new Map<string, { role: Role; active: boolean; at: number }>();
+const CLIENT_OK = ['/api/client/', '/api/auth/', '/api/notifications', '/api/my/notification-prefs', '/api/my/password', '/api/passkeys', '/api/push/'];
+const clientMayUse = (url: string) => CLIENT_OK.some((p) => url === p.replace(/\/$/, '') || url.startsWith(p));
+
+const users = new Map<string, { role: Role; active: boolean; customerId: string | null; at: number }>();
 async function currentUser(tid: string, uid: string) {
   const hit = users.get(uid);
   if (hit && Date.now() - hit.at < 15_000) return hit;
-  const r = (await adminPool().query('SELECT role, active FROM users WHERE id = $1 AND tenant_id = $2', [uid, tid])).rows[0];
+  const r = (await adminPool().query('SELECT role, active, customer_id FROM users WHERE id = $1 AND tenant_id = $2', [uid, tid])).rows[0];
   if (!r) {
     users.delete(uid);
     return null;
   }
-  const v = { role: r.role as Role, active: !!r.active, at: Date.now() };
+  const v = { role: r.role as Role, active: !!r.active, customerId: (r.customer_id as string | null) ?? null, at: Date.now() };
   users.set(uid, v);
   if (users.size > 20000) users.clear();
   return v;

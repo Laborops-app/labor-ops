@@ -4,6 +4,9 @@ import { reportRoutes } from './routes/reports';
 import { earningsRoutes } from './routes/earnings';
 import { archiveRoutes } from './routes/archive';
 import { eventUpdateRoutes } from './routes/eventUpdates';
+import { workRuleRoutes } from './routes/workRules';
+import { clientRoutes } from './routes/client';
+import { autofillRoutes } from './routes/autofill';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import jwt from '@fastify/jwt';
@@ -74,6 +77,7 @@ export async function buildApp() {
                 { label: 'HR', email: 'hr@demo.laborops.app' },
                 { label: 'Labor Coordinator', email: 'manager@demo.laborops.app' },
                 { label: 'Crew member', email: 'crew1@demo.laborops.app' },
+                { label: 'Client', email: 'client@demo.laborops.app' },
               ]
             : [
                 { label: 'Labor Coordinator', email: 'manager@demo.laborops.app' },
@@ -113,5 +117,8 @@ export async function buildApp() {
   await app.register(earningsRoutes);
   await app.register(archiveRoutes);
   await app.register(eventUpdateRoutes);
+  await app.register(workRuleRoutes);
+  await app.register(clientRoutes);
+  await app.register(autofillRoutes);
   return app;
 }

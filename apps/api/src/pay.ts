@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { rulesForEvents, withPremiums } from './workRules';
 
 /** Hourly rates from the Roles & pay rates list, keyed by lower-case role name. */
 /**
@@ -50,14 +51,14 @@ export function estimate(rate: number | undefined, startsAt: Date | string, ends
 // ---------- labor rules: rest, overtime, premiums ----------
 export type Rules = {
   tz: string; minRest: number; maxDaily: number; dailyOt: number; weeklyOt: number; otMult: number;
-  nightStart: number; nightEnd: number; nightPct: number; sundayPct: number; holidayPct: number; holidays: string[];
+  nightStart: number; nightEnd: number; nightPct: number; saturdayPct: number; sundayPct: number; holidayPct: number; holidays: string[];
 };
 const mins = (t: string) => { const [h, m] = String(t).split(':'); return Number(h) * 60 + Number(m || 0); };
 
 export async function loadRules(c: PoolClient): Promise<Rules> {
   const t = (await c.query(
     `SELECT t.timezone, r.min_rest_hours, r.max_daily_hours, r.daily_ot_after, r.weekly_ot_after, r.ot_multiplier,
-            r.night_start::text, r.night_end::text, r.night_premium_pct, r.sunday_premium_pct, r.holiday_premium_pct,
+            r.night_start::text, r.night_end::text, r.night_premium_pct, r.saturday_premium_pct, r.sunday_premium_pct, r.holiday_premium_pct,
             ARRAY(SELECT to_char(d,'YYYY-MM-DD') FROM unnest(COALESCE(r.holidays,'{}'::date[])) d ORDER BY d) AS holidays
        FROM tenants t LEFT JOIN labor_rules r ON r.tenant_id = t.id LIMIT 1`)).rows[0];
   const n = (v: any, d: number) => (v === null || v === undefined ? d : Number(v));
@@ -65,7 +66,7 @@ export async function loadRules(c: PoolClient): Promise<Rules> {
     tz: t.timezone, minRest: n(t.min_rest_hours, 8), maxDaily: n(t.max_daily_hours, 14), dailyOt: n(t.daily_ot_after, 0),
     weeklyOt: n(t.weekly_ot_after, 40), otMult: n(t.ot_multiplier, 1.5),
     nightStart: mins(t.night_start ?? '22:00'), nightEnd: mins(t.night_end ?? '06:00'),
-    nightPct: n(t.night_premium_pct, 0), sundayPct: n(t.sunday_premium_pct, 0), holidayPct: n(t.holiday_premium_pct, 0),
+    nightPct: n(t.night_premium_pct, 0), saturdayPct: n(t.saturday_premium_pct, 0), sundayPct: n(t.sunday_premium_pct, 0), holidayPct: n(t.holiday_premium_pct, 0),
     holidays: t.holidays ?? [],
   };
 }
@@ -89,7 +90,7 @@ function localParts(tz: string, d: Date) {
   if (!f) { f = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', weekday: 'short' }); fmtCache.set(tz, f); }
   const p: Record<string, string> = {};
   for (const x of f.formatToParts(d)) p[x.type] = x.value;
-  return { ymd: `${p.year}-${p.month}-${p.day}`, min: Number(p.hour) * 60 + Number(p.minute), sunday: p.weekday === 'Sun' };
+  return { ymd: `${p.year}-${p.month}-${p.day}`, min: Number(p.hour) * 60 + Number(p.minute), sunday: p.weekday === 'Sun', saturday: p.weekday === 'Sat' };
 }
 
 export type Priced = { hours: number; rate: number | null; estimate: number | null; otHours: number; dtHours: number; premiumHours: number; notes: string[]; payType: 'hourly' | 'day' };
@@ -118,10 +119,11 @@ export function priceShift(rules: Rules | null, rate: number | undefined, starts
     const night = rules.nightPct > 0 && (rules.nightStart <= rules.nightEnd ? p.min >= rules.nightStart && p.min < rules.nightEnd : p.min >= rules.nightStart || p.min < rules.nightEnd);
     const hol = rules.holidayPct > 0 && rules.holidays.includes(p.ymd);
     const sun = rules.sundayPct > 0 && p.sunday;
-    const pct = Math.max(night ? rules.nightPct : 0, sun ? rules.sundayPct : 0, hol ? rules.holidayPct : 0);
+    const sat = (rules.saturdayPct ?? 0) > 0 && p.saturday;
+    const pct = Math.max(night ? rules.nightPct : 0, sat ? rules.saturdayPct : 0, sun ? rules.sundayPct : 0, hol ? rules.holidayPct : 0);
     const mult = Math.max(isDt ? dtMult : isOt ? otMult : 1, 1 + pct / 100);
     if (isDt) { dt += h; notes.add('double time'); } else if (isOt) { ot += h; notes.add('overtime'); }
-    if (pct > 0) { prem += h; notes.add(hol ? 'holiday' : sun ? 'Sunday' : 'night'); }
+    if (pct > 0) { prem += h; notes.add(hol ? 'holiday' : sun ? 'Sunday' : sat ? 'Saturday' : 'night'); }
     total += h * rate * mult; day += sliceMin; week += sliceMin;
   }
   const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -165,13 +167,15 @@ export async function estimateShift(c: PoolClient, rules: Rules, rates: Map<stri
   const prior = userId && !opts.noPrior ? await priorWeekHours(c, rules, userId, shiftId, startsAt) : 0;
   const priorDay = userId && sh && !opts.noPrior ? await priorJobDayHours(c, rules, userId, sh.event_id, shiftId, startsAt) : 0;
   const st = sh ? await loadStateOt(c, eventState(sh, (await c.query('SELECT default_state FROM labor_rules LIMIT 1')).rows[0]?.default_state), rules) : null;
-  const priced = priceShift(rules, override > 0 ? override : rateFor(rates, role), startsAt, endsAt, prior, {
-    otAfter: sh?.ot_after === null || sh?.ot_after === undefined ? null : Number(sh.ot_after),
-    otMult: st?.otMult, dtAfter: st?.dtAfter, dtMult: st?.dtMult, priorDay,
+  // The event's work-rule set (union local, client contract) replaces overtime, premiums and the minimum call.
+  const wr = sh ? (await rulesForEvents(c, [sh.event_id])).get(sh.event_id)?.rules ?? null : null;
+  const priced = priceShift(withPremiums(rules, wr), override > 0 ? override : rateFor(rates, role), startsAt, endsAt, prior, {
+    otAfter: wr?.otAfter ?? (sh?.ot_after === null || sh?.ot_after === undefined ? null : Number(sh.ot_after)),
+    otMult: wr?.otMult ?? st?.otMult, dtAfter: wr?.dtAfter ?? st?.dtAfter, dtMult: wr?.dtMult ?? st?.dtMult, priorDay,
   });
   if (personal) priced.notes.push('personal rate for this event');
   // Minimum call: a shorter shift is still paid this many hours (as regular time).
-  const min = Number(sh?.min_hours ?? 0);
+  const min = Number(sh?.min_hours ?? 0) || (wr?.minCallH ?? 0);
   if (min > 0 && priced.hours < min) {
     const rate = override > 0 ? override : rateFor(rates, role);
     if (priced.estimate !== null && rate) priced.estimate = Math.round((priced.estimate + (min - priced.hours) * rate) * 100) / 100;

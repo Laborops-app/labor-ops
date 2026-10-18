@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import { notify } from './notify';
+import { recordCancellation } from './workRules';
 
 export const STATUSES = ['pending', 'quote', 'confirmed', 'in_progress', 'completed', 'canceled'] as const;
 export type PipelineStatus = (typeof STATUSES)[number];
@@ -16,6 +17,11 @@ export async function setStatus(c: PoolClient, tid: string, eventId: string, to:
   await c.query('UPDATE events SET pipeline_status = $2, status_changed_at = now(), board_position = $3 WHERE id = $1', [eventId, to, top == null ? 0 : Number(top) - 1]);
   await c.query('INSERT INTO event_status_log (tenant_id, event_id, from_status, to_status, reason, changed_by) VALUES ($1,$2,$3,$4,$5,$6)', [tid, eventId, cur.pipeline_status, to, reason, by]);
   if (to === 'completed') await invoiceAlert(c, tid, eventId, by);
+  // Canceling the event cuts every confirmed call: short-notice cuts are paid under the event's work rules.
+  if (to === 'canceled') {
+    const crew = (await c.query("SELECT a.user_id, a.status, a.shift_id FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE s.event_id = $1 AND a.status = 'accepted' AND s.starts_at > now() - interval '1 minute'", [eventId])).rows;
+    for (const a of crew) await recordCancellation(c, tid, by, { userId: a.user_id, status: a.status, shiftId: a.shift_id });
+  }
   await maybeArchive(c, eventId, by);
   return true;
 }

@@ -90,6 +90,7 @@ export async function authRoutes(app: FastifyInstance) {
         `SELECT 1 FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
           WHERE a.user_id = $1 AND a.is_lead AND a.status = 'accepted' AND e.end_date >= current_date - 14 LIMIT 1`, [u.sub])).rowCount,
     }));
-    return { user: { id: u.sub, name, role: u.role, company, canAdjustRates: rates, fieldRoles: u.role === 'crew' ? fieldRoles : [], leads } };
+    const customer = u.role === 'client' && u.customerId ? await withTenant(u.tid, async (c) => (await c.query('SELECT id, name FROM customers WHERE id = $1', [u.customerId])).rows[0] ?? null) : null;
+    return { user: { id: u.sub, name, role: u.role, company, canAdjustRates: rates, fieldRoles: u.role === 'crew' ? fieldRoles : [], leads, ...(customer ? { customer } : {}) } };
   });
 }

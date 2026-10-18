@@ -49,7 +49,7 @@ export async function crewRoutes(app: FastifyInstance) {
              (SELECT max(v.created_at) FROM crew_reviews v WHERE v.user_id = users.id) AS last_reviewed_at,
              (SELECT count(*)::int FROM crew_reviews v WHERE v.user_id = users.id AND 'no_show' = ANY(v.tags)) AS no_show_count,
              (SELECT count(*)::int FROM crew_reviews v WHERE v.user_id = users.id AND 'no_rehire' = ANY(v.tags)) AS no_rehire_count
-           FROM users ORDER BY role, name`,
+           FROM users WHERE role <> 'client' ORDER BY role, name`,
           [FLAG_TAGS],
         )
       ).rows,

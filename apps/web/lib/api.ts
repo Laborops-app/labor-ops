@@ -21,15 +21,15 @@ export async function api<T = any>(path: string, init: { method?: string; body?:
   return data as T;
 }
 
-export type Role = 'admin' | 'manager' | 'crew' | 'hr';
+export type Role = 'admin' | 'manager' | 'crew' | 'hr' | 'client';
 /** Where each kind of account lands after signing in. */
-export const homeFor = (role: string) => (role === 'crew' ? '/my-shifts' : role === 'hr' ? '/pipeline' : '/dashboard');
-export const roleLabel = (r: string) => (r === 'manager' ? 'Labor Coordinator' : r === 'admin' ? 'Admin' : r === 'crew' ? 'Crew' : r === 'hr' ? 'HR' : r);
+export const homeFor = (role: string) => (role === 'crew' ? '/my-shifts' : role === 'hr' ? '/pipeline' : role === 'client' ? '/client' : '/dashboard');
+export const roleLabel = (r: string) => (r === 'manager' ? 'Labor Coordinator' : r === 'admin' ? 'Admin' : r === 'crew' ? 'Crew' : r === 'hr' ? 'HR' : r === 'client' ? 'Client' : r);
 export type FieldRole = 'onsite_coordinator';
 export const FIELD_ROLES: { key: FieldRole; label: string; help: string }[] = [
   { key: 'onsite_coordinator', label: 'On-site Labor Coordinator', help: 'On every event they work: sees all the crew, checks them in and out, and rates them.' },
 ];
-export type Me = { id: string; name: string; role: Role; company?: string; canAdjustRates?: boolean; fieldRoles?: FieldRole[]; leads?: boolean };
+export type Me = { id: string; name: string; role: Role; company?: string; canAdjustRates?: boolean; fieldRoles?: FieldRole[]; leads?: boolean; customer?: { id: string; name: string } };
 
 export const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 
