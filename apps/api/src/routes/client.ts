@@ -10,6 +10,8 @@ import { issueToken } from '../notify/tokens';
 import { enqueueAccountEmail } from '../notify';
 import { config } from '../config';
 
+const portalOff = () => !config.clientPortal;
+
 /**
  * Client portal. A client account belongs to one customer and sees only that customer's events (and its
  * divisions'): the schedule, who is coming, who is on site, the approved timesheets and the invoices. They can sign
@@ -45,7 +47,8 @@ export async function clientApprovalState(c: PoolClient, eventId: string) {
        FROM client_approvals x LEFT JOIN users u ON u.id = x.user_id WHERE x.event_id = $1 ORDER BY x.created_at DESC LIMIT 1`, [eventId])).rows[0] ?? null;
   const approved = !!last && last.status === 'approved' && last.fingerprint === now.fp;
   return {
-    required: !!ev?.required,
+    // With the portal switched off nobody can sign off, so it is never required.
+    required: !!ev?.required && config.clientPortal,
     customer: ev?.customer ?? null,
     approved,
     // Signed off earlier, but time changed since.
@@ -59,6 +62,7 @@ export async function clientApprovalState(c: PoolClient, eventId: string) {
 
 /** Error to show when invoicing must wait for the client's sign-off, else null. */
 export async function invoiceBlockedByClient(c: PoolClient, eventId: string): Promise<string | null> {
+  if (portalOff()) return null;
   const s = await clientApprovalState(c, eventId);
   if (!s.required || s.approved) return null;
   if (s.disputed) return `${s.customer ?? 'The client'} disputed these timesheets: “${s.last?.note ?? ''}”. Sort it out and ask them to approve again before invoicing.`;
@@ -67,6 +71,12 @@ export async function invoiceBlockedByClient(c: PoolClient, eventId: string): Pr
 }
 
 export async function clientRoutes(app: FastifyInstance) {
+  // Portal switched off: its management endpoints answer 404 (the portal itself is closed in authenticate).
+  app.addHook('onRequest', async (req, reply) => {
+    // (GET /api/customers/:id/portal stays: it also carries the customer's work rules, and says the portal is off.)
+    const readSettings = req.method === 'GET' && /^\/api\/customers\/[^/]+\/portal$/.test(req.url.split('?')[0]);
+    if (portalOff() && !readSettings && /^\/api\/(client\/|customers\/[^/]+\/portal)/.test(req.url)) return reply.code(404).send({ error: 'Not found' });
+  });
   const client = guard('client');
   const staff = guard('admin', 'manager');
   const viewers = guard('admin', 'manager', 'hr');
@@ -238,8 +248,9 @@ export async function clientRoutes(app: FastifyInstance) {
     const out = await withTenant(req.user.tid, async (c) => {
       const cu = (await c.query('SELECT id, require_client_approval, rule_set_id FROM customers WHERE id = $1', [id])).rows[0];
       if (!cu) return null;
+      if (portalOff()) return { enabled: false, requireApproval: false, ruleSetId: cu.rule_set_id, users: [], portalUrl: '' };
       const users = (await c.query("SELECT id, name, email, active, last_seen_at FROM users WHERE role = 'client' AND customer_id = $1 ORDER BY active DESC, name", [id])).rows;
-      return { requireApproval: cu.require_client_approval, ruleSetId: cu.rule_set_id, users, portalUrl: `${config.appUrl}/client` };
+      return { enabled: true, requireApproval: cu.require_client_approval, ruleSetId: cu.rule_set_id, users, portalUrl: `${config.appUrl}/client` };
     });
     return out ?? reply.code(404).send({ error: 'Customer not found' });
   });

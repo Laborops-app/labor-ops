@@ -5,7 +5,7 @@ import { api, fmtDateTime } from '@/lib/api';
 import { RuleSetPicker } from '@/components/WorkRuleSets';
 
 type PortalUser = { id: string; name: string; email: string; active: boolean; last_seen_at: string | null };
-type Portal = { requireApproval: boolean; ruleSetId: string | null; users: PortalUser[]; portalUrl: string };
+type Portal = { enabled: boolean; requireApproval: boolean; ruleSetId: string | null; users: PortalUser[]; portalUrl: string };
 
 /** On a customer: their work rules, whether they sign off timesheets before invoicing, and their portal logins. */
 export default function CustomerPortal({ customerId, customerName, canEdit }: { customerId: string; customerName: string; canEdit: boolean }) {
@@ -23,7 +23,7 @@ export default function CustomerPortal({ customerId, customerName, canEdit }: { 
   const active = d.users.filter((u) => u.active);
   return (
     <section style={{ marginTop: 32 }}>
-      <h2 style={{ margin: '0 0 8px' }}>Work rules and client portal</h2>
+      <h2 style={{ margin: '0 0 8px' }}>{d.enabled ? 'Work rules and client portal' : 'Work rules'}</h2>
       {err && <Banner onClose={() => setErr('')}>{err}</Banner>}
       {ok && <Banner kind="ok" onClose={() => setOk('')}>{ok}</Banner>}
       <div className="card">
@@ -33,11 +33,12 @@ export default function CustomerPortal({ customerId, customerName, canEdit }: { 
             <RuleSetPicker value={d.ruleSetId} disabled={!canEdit} inheritLabel="Company default" onChange={(id) => run(() => api(`/api/customers/${customerId}/rule-set`, { method: 'PUT', body: { ruleSetId: id } }), 'Work rules saved.')} />
             <span className="muted small">Overtime, premiums, meal penalties and the rest. An event can still pick its own.</span>
           </label>
-          <label className="check" style={{ alignSelf: 'center' }}>
+          {d.enabled && <label className="check" style={{ alignSelf: 'center' }}>
             <input type="checkbox" checked={d.requireApproval} disabled={!canEdit} onChange={(e) => run(() => api(`/api/customers/${customerId}/portal`, { method: 'PUT', body: { requireApproval: e.target.checked } }), e.target.checked ? 'Invoices now wait for their sign-off.' : 'Sign-off no longer required.')} />
             They approve timesheets before we invoice
-          </label>
+          </label>}
         </div>
+        {d.enabled && <>
         <h3 style={{ marginBottom: 4 }}>Portal logins</h3>
         <p className="muted small" style={{ marginTop: 0 }}>
           People at {customerName} see their events, who’s coming and who’s on site, approved timesheets and invoices; they can approve timesheets and request crew. They never see pay rates or phone numbers. Portal address: <code>{d.portalUrl}</code>
@@ -67,6 +68,7 @@ export default function CustomerPortal({ customerId, customerName, canEdit }: { 
         ) : (
           <button type="button" className="btn small" style={{ marginTop: 8 }} onClick={() => setF({ name: '', email: '' })}>+ Give someone access</button>
         ))}
+        </>}
       </div>
     </section>
   );

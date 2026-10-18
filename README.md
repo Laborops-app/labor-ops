@@ -35,7 +35,7 @@ docker-compose.yml   The whole stack on one server: Postgres, API, web, Caddy.
 - Payroll exports for ADP (RUN and Workforce Now, with rate codes per role), Gusto and QuickBooks, plus QuickBooks Online time activities.
 
 **Reports**
-- **Client portal** (`/client`): a customer's people sign in to see their events, the schedule, who's confirmed and who's on site (refreshing), approved timesheets and invoices; they **approve or question timesheets** and **request crew** (a pending event with open positions, and staff are told). They never see pay, phone numbers or anything outside their customer and its divisions. Logins are added on the customer's page, where a switch makes invoicing wait for the client's sign-off (a change to the time after sign-off needs a new one).
+- **Client portal** (`/client`, **not public yet**: off unless `CLIENT_PORTAL=true`; while off, client logins are refused, the portal settings are hidden and invoices never wait for a client sign-off): a customer's people sign in to see their events, the schedule, who's confirmed and who's on site (refreshing), approved timesheets and invoices; they **approve or question timesheets** and **request crew** (a pending event with open positions, and staff are told). They never see pay, phone numbers or anything outside their customer and its divisions. Logins are added on the customer's page, where a switch makes invoicing wait for the client's sign-off (a change to the time after sign-off needs a new one).
 - Per event for any period: fill rate, scheduled vs worked hours, overtime and double time, labor cost (approved time, as paid), billed (accepted quote, or hours × billing rates), margin, labor budget vs actual, no-shows and late arrivals. CSV download.
 
 **Messages and the app**

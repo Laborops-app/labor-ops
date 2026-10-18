@@ -4033,3 +4033,30 @@ test('auto-fill: proposes qualified, available people for open seats with reason
   const pv2 = (await call(a, 'POST', `/api/events/${ev}/autofill/preview`, { shiftIds: [sA] })).json;
   assert.equal(pv2.shifts[0].open, 1);
 });
+
+test('client portal switched off (production default): no client sign-in, portal endpoints closed, invoices never wait', async () => {
+  const { config } = await import('../src/config');
+  const bcrypt = (await import('bcryptjs')).default;
+  const a = await register('cpoff');
+  const tid = await tenantOf(a);
+  const cust = (await call(a, 'POST', '/api/customers', { name: 'Off Co' })).json.customer.id;
+  const pu = (await call(a, 'POST', `/api/customers/${cust}/portal-users`, { name: 'Off Client', email: `off-${run}@off.example` })).json.user;
+  await withTenant(tid, async (c) => c.query('UPDATE users SET password_hash = $2 WHERE id = $1', [pu.id, await bcrypt.hash('client-pass-123', 10)]));
+  const cl = await login(`off-${run}@off.example`, 'client-pass-123');
+  assert.equal((await call(a, 'PUT', `/api/customers/${cust}/portal`, { requireApproval: true })).status, 200);
+  config.clientPortal = false;
+  try {
+    assert.equal((await call(null, 'POST', '/api/auth/login', { email: `off-${run}@off.example`, password: 'client-pass-123' })).status, 403);
+    assert.ok([401, 404].includes((await call(cl, 'GET', '/api/client/overview')).status), 'an existing session stops working');
+    assert.equal((await call(cl, 'GET', '/api/auth/me')).status, 401);
+    assert.equal((await call(a, 'POST', `/api/customers/${cust}/portal-users`, { name: 'X', email: `x-${run}@off.example` })).status, 404);
+    const p = (await call(a, 'GET', `/api/customers/${cust}/portal`)).json;
+    assert.deepEqual([p.enabled, p.users.length], [false, 0]);
+    const ev = (await call(a, 'POST', '/api/events', { name: 'Off gig', startDate: '2030-09-01', endDate: '2030-09-01', customerId: cust })).json.event.id;
+    assert.equal((await call(a, 'GET', `/api/events/${ev}/client-approval`)).json.required, false);
+    const demo = (await call(null, 'GET', '/api/demo')).json;
+    assert.ok(!JSON.stringify(demo).includes('client@demo'));
+  } finally {
+    config.clientPortal = true;
+  }
+});

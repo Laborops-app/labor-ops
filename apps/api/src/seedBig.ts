@@ -242,8 +242,12 @@ async function big(c: PoolClient, tid: string, hash: string) {
         rounding: { minutes: 15, mode: 'worker' }, meal: { afterH: 5, breakMin: 30, stepMin: 30, amounts: [10, 12.5, 15] }, turnaround: { restH: 10, mult: 1.5 }, cancellation: { noticeH: 24, payH: 4 } })],
     )).rows[0].id;
     await c.query("INSERT INTO work_rule_sets (tenant_id, name, is_default, config) VALUES ($1, 'Non-union', true, $2)", [tid, JSON.stringify({ minCallH: 4, rounding: { minutes: 15, mode: 'nearest' } })]);
-    await c.query('UPDATE customers SET rule_set_id = $2, require_client_approval = true WHERE id = $1', [first, ws]);
-    await c.query("INSERT INTO users (tenant_id, email, name, role, password_hash, customer_id) VALUES ($1,'client@demo.laborops.app','Casey Client','client',$2,$3)", [tid, hash, first]);
+    await c.query('UPDATE customers SET rule_set_id = $2 WHERE id = $1', [first, ws]);
+    // The client portal isn't public yet: its demo login only when it's switched on.
+    if (config.clientPortal) {
+      await c.query('UPDATE customers SET require_client_approval = true WHERE id = $1', [first]);
+      await c.query("INSERT INTO users (tenant_id, email, name, role, password_hash, customer_id) VALUES ($1,'client@demo.laborops.app','Casey Client','client',$2,$3)", [tid, hash, first]);
+    }
   }
   await audit(c, tid, admin, 'tenant.seed_big', 'tenant', tid);
 }

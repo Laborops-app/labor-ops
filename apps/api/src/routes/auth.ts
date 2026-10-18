@@ -67,6 +67,7 @@ export async function authRoutes(app: FastifyInstance) {
     const hash = u?.password_hash ?? DUMMY_HASH;
     const ok = await bcrypt.compare(body.password, hash);
     if (!u || !ok || !u.active) return reply.code(401).send({ error: 'Incorrect email or password' });
+    if (u.role === 'client' && !config.clientPortal) return reply.code(403).send({ error: 'The client portal isn’t open yet.' });
     if ((await adminPool().query('SELECT 1 FROM tenants WHERE id = $1 AND suspended_at IS NOT NULL', [u.tenant_id])).rowCount)
       return reply.code(403).send({ error: 'This company account is suspended. Contact LaborOps support.', reason: 'suspended' });
     await withTenant(u.tenant_id, (c) => audit(c, u.tenant_id, u.id, 'auth.login', 'user', u.id));

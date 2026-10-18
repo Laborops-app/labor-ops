@@ -1,5 +1,6 @@
 import { adminPool } from './storage';
 import { withTenant } from './db';
+import { config } from './config';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 export type Role = 'admin' | 'manager' | 'crew' | 'hr' | 'client';
@@ -40,6 +41,7 @@ export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
   req.user.role = cur.role;
   req.user.customerId = cur.customerId;
   // Client (customer) accounts only reach the portal and their own account; every other endpoint is closed to them.
+  if (cur.role === 'client' && !config.clientPortal) return reply.code(401).send({ error: 'Not signed in' });
   if (cur.role === 'client' && !clientMayUse(req.routeOptions?.url ?? req.url)) return reply.code(403).send({ error: 'Not allowed for your role' });
   if (req.user?.tid && (await isSuspended(req.user.tid))) return reply.code(403).send({ error: 'This company account is suspended. Contact LaborOps support.', reason: 'suspended' });
 }

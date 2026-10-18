@@ -23,6 +23,9 @@ export const config = {
   // New companies may sign up. Off in production unless SIGNUP_OPEN=true (always on when developing and testing).
   signupOpen: process.env.SIGNUP_OPEN === 'true' || (process.env.NODE_ENV !== 'production' && process.env.SIGNUP_OPEN !== 'false'),
   demoPassword: process.env.DEMO_PASSWORD ?? 'LaborOps-Demo-1',
+  // Client portal (customers sign in to see events, approve timesheets, request crew). Not public yet: off in
+  // production unless CLIENT_PORTAL=true (on when developing and testing).
+  clientPortal: process.env.CLIENT_PORTAL === 'true' || (process.env.NODE_ENV !== 'production' && process.env.CLIENT_PORTAL !== 'false'),
   // Public base URL, used for links in emails and text messages.
   appUrl: (process.env.APP_URL ?? 'http://localhost:3000').replace(/\/+$/, ''),
   // Where the platform console is served (its own subdomain in production; the same server when developing).

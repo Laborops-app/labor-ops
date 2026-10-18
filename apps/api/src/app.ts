@@ -77,7 +77,7 @@ export async function buildApp() {
                 { label: 'HR', email: 'hr@demo.laborops.app' },
                 { label: 'Labor Coordinator', email: 'manager@demo.laborops.app' },
                 { label: 'Crew member', email: 'crew1@demo.laborops.app' },
-                { label: 'Client', email: 'client@demo.laborops.app' },
+                ...(config.clientPortal ? [{ label: 'Client', email: 'client@demo.laborops.app' }] : []),
               ]
             : [
                 { label: 'Labor Coordinator', email: 'manager@demo.laborops.app' },
