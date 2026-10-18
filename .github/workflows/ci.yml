@@ -14,20 +14,18 @@ jobs:
   api:
     name: API tests
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: public.ecr.aws/docker/library/postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: laborops
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 20
+    # PostgreSQL comes preinstalled on GitHub's Ubuntu runners: no image download (Docker Hub / ECR rate limits).
     env:
       DATABASE_ADMIN_URL: postgres://postgres:postgres@localhost:5432/laborops
       DATABASE_URL: postgres://laborops_app:laborops_app@localhost:5432/laborops
       APP_DB_PASSWORD: laborops_app
     steps:
+      - name: Start PostgreSQL
+        run: |
+          sudo systemctl start postgresql.service
+          until pg_isready -h localhost; do sleep 1; done
+          sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'postgres';"
+          sudo -u postgres createdb laborops
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
