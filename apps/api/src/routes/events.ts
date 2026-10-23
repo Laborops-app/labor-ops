@@ -17,6 +17,7 @@ import { flagText, reviewFlags } from '../reviews';
 import { guard } from '../auth';
 import { evaluateShift, evaluateWindow } from '../eligibility';
 import { customerForRentman } from '../rentman';
+import { applyTemplate, templateData } from '../eventTemplates';
 
 const id = z.object({ id: z.string().uuid() });
 const eventBody = z.object({
@@ -47,6 +48,10 @@ const eventBody = z.object({
   pushToRentman: z.boolean().optional(),
   // New event only: phases to create straight away, one per day (e.g. Load in, Show, Strike).
   phases: z.array(z.object({ label: z.string().trim().min(1).max(80), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })).max(62).optional(),
+  // New event only: start from an event template (its phases, groups and positions land on the new dates).
+  templateId: z.string().uuid().optional(),
+  // New event only: build the crew quietly (offers are held until the event is published).
+  buildQuietly: z.boolean().optional(),
 });
 const shiftBody = z.object({
   roleName: z.string().trim().min(1).max(100),
@@ -93,8 +98,12 @@ export async function assignCrew(c: PoolClient, tid: string, actorId: string, sh
   const user = (await c.query("SELECT id, name, active FROM users WHERE id = $1 AND role = 'crew'", [userId])).rows[0];
   if (!user || !user.active) return { code: 404, error: 'Crew member not found or inactive' };
 
+  // Seats taken: people on the shift, plus picks still held back while the event is built quietly.
   const filled = (
-    await c.query("SELECT count(*)::int AS n FROM shift_assignments WHERE shift_id = $1 AND status <> 'declined'", [shiftId])
+    await c.query(
+      "SELECT (SELECT count(*) FROM shift_assignments WHERE shift_id = $1 AND status <> 'declined') + (SELECT count(*) FROM planned_picks WHERE shift_id = $1) AS n",
+      [shiftId],
+    )
   ).rows[0].n;
   if (filled >= shift.headcount) return { code: 409, error: 'This shift is already full' };
 
@@ -103,6 +112,11 @@ export async function assignCrew(c: PoolClient, tid: string, actorId: string, sh
       `SELECT e.name AS event_name, s.role_name, s.starts_at, s.ends_at
        FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
        WHERE a.user_id = $1 AND a.status <> 'declined' AND s.id <> $2
+         AND tstzrange(s.starts_at, s.ends_at) && tstzrange($3::timestamptz, $4::timestamptz)
+       UNION ALL
+       SELECT e.name, s.role_name || ' (planned)', s.starts_at, s.ends_at
+       FROM planned_picks p JOIN shifts s ON s.id = p.shift_id JOIN events e ON e.id = s.event_id
+       WHERE p.user_id = $1 AND s.id <> $2
          AND tstzrange(s.starts_at, s.ends_at) && tstzrange($3::timestamptz, $4::timestamptz)
        LIMIT 1`,
       [userId, shiftId, shift.starts_at, shift.ends_at],
@@ -115,7 +129,7 @@ export async function assignCrew(c: PoolClient, tid: string, actorId: string, sh
       conflict: clash,
     };
 
-  const dup = await c.query('SELECT 1 FROM shift_assignments WHERE shift_id = $1 AND user_id = $2', [shiftId, userId]);
+  const dup = await c.query('SELECT 1 FROM shift_assignments WHERE shift_id = $1 AND user_id = $2 UNION ALL SELECT 1 FROM planned_picks WHERE shift_id = $1 AND user_id = $2', [shiftId, userId]);
   if (dup.rowCount) return { code: 409, error: `${user.name} is already on this shift` };
 
   const [el] = await evaluateShift(c, shiftId, userId);
@@ -135,6 +149,18 @@ export async function assignCrew(c: PoolClient, tid: string, actorId: string, sh
   // Past reviews tagged No-show or Do not rehire: ask the coordinator before booking them again.
   const flags = (await reviewFlags(c, [userId])).get(userId);
   if (flags && !acceptFlags) return { code: 409, error: flagText(user.name, flags), reason: 'flagged', flags };
+
+  // Building quietly: keep the pick as a plan. Nobody is told until the event is published.
+  if ((await c.query('SELECT staffing_draft FROM events WHERE id = $1', [shift.event_id])).rows[0]?.staffing_draft) {
+    const p = (
+      await c.query(
+        'INSERT INTO planned_picks (tenant_id, event_id, shift_id, user_id, confirmed, is_lead, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
+        [tid, shift.event_id, shiftId, userId, !!confirmed, lead ?? null, actorId],
+      )
+    ).rows[0];
+    await audit(c, tid, actorId, 'assignment.plan', 'planned_pick', p.id, { shiftId, userId });
+    return { code: 201, planned: true, assignment: { ...p, status: 'planned' }, warnings: chk.warns };
+  }
 
   const a = (
     await c.query(
@@ -187,8 +213,26 @@ export async function eventRoutes(app: FastifyInstance) {
             -- People who worked a finished shift and have no review for it yet.
             (SELECT count(*)::int FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id
                WHERE s.event_id = e.id AND a.status = 'accepted' AND s.ends_at < now()
-                 AND NOT EXISTS (SELECT 1 FROM crew_reviews r WHERE r.user_id = a.user_id AND r.shift_id = s.id)) AS to_rate
-          FROM events e WHERE e.archived_at IS NULL ORDER BY e.start_date DESC, e.name`)
+                 AND NOT EXISTS (SELECT 1 FROM crew_reviews r WHERE r.user_id = a.user_id AND r.shift_id = s.id)) AS to_rate,
+            -- Seats by state, per shift up to its headcount: confirmed, waiting for an answer, planned (not sent yet), open.
+            st.confirmed, st.waiting, st.planned, GREATEST(0, COALESCE(st.slots, 0) - st.confirmed - st.waiting - st.planned)::int AS open,
+            e.staffing_draft
+          FROM events e
+          LEFT JOIN LATERAL (
+            SELECT COALESCE(sum(x.c), 0)::int AS confirmed, COALESCE(sum(x.w), 0)::int AS waiting, COALESCE(sum(x.p), 0)::int AS planned, COALESCE(sum(x.h), 0)::int AS slots
+              FROM (
+                SELECT s.headcount AS h,
+                       LEAST(s.headcount, k.acc) AS c,
+                       LEAST(s.headcount - LEAST(s.headcount, k.acc), k.wait) AS w,
+                       LEAST(GREATEST(0, s.headcount - k.acc - k.wait), k.plan) AS p
+                  FROM shifts s,
+                  LATERAL (SELECT count(*) FILTER (WHERE a.status = 'accepted') AS acc, count(*) FILTER (WHERE a.status IN ('offered', 'pending')) AS wait,
+                                  (SELECT count(*) FROM planned_picks pp WHERE pp.shift_id = s.id) AS plan
+                             FROM shift_assignments a WHERE a.shift_id = s.id) k
+                 WHERE s.event_id = e.id
+              ) x
+          ) st ON true
+          WHERE e.archived_at IS NULL ORDER BY e.start_date DESC, e.name`)
       ).rows,
     })),
   );
@@ -298,11 +342,19 @@ export async function eventRoutes(app: FastifyInstance) {
         const token = await getToken(c);
         if (token) await syncEquipment(c, req.user.tid, token, rentmanId).catch(() => {});
       }
-      for (const p of [...(b.phases ?? [])].sort((x, y) => x.date.localeCompare(y.date)))
-        await addDayPhases(c, req.user.tid, r.rows[0].id, p.label, p.date, p.date);
+      let fromTemplate: { phases: number; shifts: number } | null = null;
+      if (b.templateId) {
+        const t = (await c.query('SELECT data FROM event_templates WHERE id = $1', [b.templateId])).rows[0];
+        if (!t) throw new CustomerError('Template not found', 404);
+        fromTemplate = await applyTemplate(c, req.user.tid, r.rows[0].id, templateData.parse(t.data));
+      } else
+        for (const p of [...(b.phases ?? [])].sort((x, y) => x.date.localeCompare(y.date)))
+          await addDayPhases(c, req.user.tid, r.rows[0].id, p.label, p.date, p.date);
+      if (b.buildQuietly) await c.query('UPDATE events SET staffing_draft = true WHERE id = $1', [r.rows[0].id]);
       await advanceStage(c, custId, 'active');
-      await audit(c, req.user.tid, req.user.sub, 'event.create', 'event', r.rows[0].id, b.phases?.length ? { phases: b.phases.length } : undefined);
-      return { ...r.rows[0], new_customer: made };
+      await audit(c, req.user.tid, req.user.sub, 'event.create', 'event', r.rows[0].id, fromTemplate ? { templateId: b.templateId, ...fromTemplate } : b.phases?.length ? { phases: b.phases.length } : undefined);
+      const fresh = (await c.query('SELECT * FROM events WHERE id = $1', [r.rows[0].id])).rows[0];
+      return { ...fresh, new_customer: made, from_template: fromTemplate };
     });
     } catch (e) {
       if (e instanceof CustomerError) return reply.code(e.status).send({ error: e.message });
@@ -337,11 +389,16 @@ export async function eventRoutes(app: FastifyInstance) {
       const shifts = (await c.query('SELECT * FROM shifts WHERE event_id = $1 ORDER BY starts_at, role_name', [eventId])).rows;
       const assigns = (
         await c.query(
-          `SELECT a.id, a.shift_id, a.user_id, a.status, a.is_lead, u.name AS user_name,
+          `SELECT a.id, a.shift_id, a.user_id, a.status, a.is_lead, u.name AS user_name, a.created_at, a.nudged_at, false AS planned,
              (SELECT t.clock_in FROM time_entries t WHERE t.assignment_id = a.id AND t.clock_out IS NULL LIMIT 1) AS clocked_in_at,
              (SELECT max(t.clock_out) FROM time_entries t WHERE t.assignment_id = a.id) AS last_clock_out
            FROM shift_assignments a JOIN users u ON u.id = a.user_id
-           JOIN shifts s ON s.id = a.shift_id WHERE s.event_id = $1 ORDER BY u.name`,
+           JOIN shifts s ON s.id = a.shift_id WHERE s.event_id = $1
+           UNION ALL
+           -- Held back while the event is built quietly (not sent yet).
+           SELECT p.id, p.shift_id, p.user_id, 'planned', COALESCE(p.is_lead, false), u.name, p.created_at, NULL, true, NULL, NULL
+           FROM planned_picks p JOIN users u ON u.id = p.user_id WHERE p.event_id = $1
+           ORDER BY user_name`,
           [eventId],
         )
       ).rows;

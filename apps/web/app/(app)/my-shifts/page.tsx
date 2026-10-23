@@ -8,6 +8,7 @@ import { onPunchesChanged, pendingPunches, punch, type Punch } from '@/lib/punch
 import IosInstallHint from '@/components/IosInstallHint';
 import MyEarnings from '@/components/MyEarnings';
 import PastShifts from '@/components/PastShifts';
+import MyAvailChecks from '@/components/MyAvailChecks';
 
 /** Offline, the server can't say whether clock-in is open, so the window is worked out on the phone (1 h before start to 2 h after end). */
 const canClock = (s: { can_clock_in: boolean; starts_at: string; ends_at: string }) =>
@@ -140,6 +141,7 @@ function Body() {
       {error && <Banner onClose={() => setError('')}>{error}</Banner>}
       {notice && <Banner kind="info" onClose={() => setNotice('')}>{notice}</Banner>}
       {offline && <p className="muted small">Offline: showing your shifts as of the last time they loaded.</p>}
+      {!offline && <MyAvailChecks />}
       {!offline && <MyEarnings />}
       <div className="row space my-view">
         <div className="seg" role="tablist" aria-label="Which shifts">

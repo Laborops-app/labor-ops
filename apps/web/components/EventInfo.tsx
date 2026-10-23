@@ -5,7 +5,7 @@ import { api, fmtDate, getPosition } from '@/lib/api';
 import CustomerSelect from '@/components/CustomerSelect';
 import LocationPick from '@/components/LocationPick';
 
-export type EventFull = { id: string; customer_id?: string | null; name: string; client: string | null; venue: string | null; address: string | null; notes: string | null; start_date: string; end_date: string; clock_mode?: 'self' | 'coordinator'; geo_lat?: number | null; geo_lng?: number | null; geofence_m?: number | null; pipeline_status?: string; priority?: string };
+export type EventFull = { id: string; customer_id?: string | null; name: string; client: string | null; venue: string | null; address: string | null; notes: string | null; start_date: string; end_date: string; clock_mode?: 'self' | 'coordinator'; geo_lat?: number | null; geo_lng?: number | null; geofence_m?: number | null; pipeline_status?: string; priority?: string; staffing_draft?: boolean };
 export type Phase = { id: string; label: string; starts_on: string; ends_on: string };
 
 export const PRESETS = ['Load in', 'Setup', 'Rehearsal', 'Tech', 'Show day', 'Show days', 'Strike', 'Load out'];

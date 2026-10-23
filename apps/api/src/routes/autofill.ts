@@ -12,7 +12,7 @@ export async function autofillRoutes(app: FastifyInstance) {
   // Proposed crew for the open seats on an event (or some of its shifts). Nothing is sent.
   app.post('/api/events/:id/autofill/preview', { preHandler: mgr }, async (req, reply) => {
     const { id } = idParam.parse(req.params);
-    const b = z.object({ shiftIds: z.array(z.string().uuid()).max(500).optional(), groupId: z.string().uuid().nullable().optional() }).parse(req.body ?? {});
+    const b = z.object({ shiftIds: z.array(z.string().uuid()).max(500).optional(), groupId: z.string().uuid().nullable().optional(), availCheckId: z.string().uuid().nullable().optional() }).parse(req.body ?? {});
     const out = await withTenant(req.user.tid, (c) => proposeEvent(c, id, b));
     return out ?? reply.code(404).send({ error: 'Event not found' });
   });
@@ -41,6 +41,8 @@ export async function autofillRoutes(app: FastifyInstance) {
       return results;
     });
     const sent = out.filter((r) => r.ok).length;
-    return reply.send({ sent, failed: out.filter((r) => !r.ok), results: out });
+    // Built quietly: the picks are held as a plan until the event is published.
+    const held = await withTenant(req.user.tid, async (c) => !!(await c.query('SELECT staffing_draft FROM events WHERE id = $1', [id])).rows[0]?.staffing_draft);
+    return reply.send({ sent, held, failed: out.filter((r) => !r.ok), results: out });
   });
 }

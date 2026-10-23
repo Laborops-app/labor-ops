@@ -7,6 +7,7 @@ import { eventUpdateRoutes } from './routes/eventUpdates';
 import { workRuleRoutes } from './routes/workRules';
 import { clientRoutes } from './routes/client';
 import { autofillRoutes } from './routes/autofill';
+import { staffingRoutes } from './routes/staffing';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import jwt from '@fastify/jwt';
@@ -93,6 +94,7 @@ export async function buildApp() {
   await app.register(pipelineRoutes);
   await app.register(platformRoutes);
   await app.register(eventRoutes);
+  await app.register(staffingRoutes);
   await app.register(timeRoutes);
   await app.register(onsiteRoutes);
   await app.register(schedulingRoutes);

@@ -1,4 +1,5 @@
 'use client';
+import RoleDefaults from '@/components/RoleDefaults';
 import { Fragment, useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
@@ -61,6 +62,7 @@ function RatesOnly() {
           </table>
         </div>
       )}
+      <RoleDefaults />
     </>
   );
 }
@@ -419,6 +421,7 @@ function Body() {
           </div>
         )}
       </section>
+      <RoleDefaults />
     </>
   );
 }

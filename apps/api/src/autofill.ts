@@ -16,13 +16,15 @@ export type ShiftProposal = {
  * ranked by: lists the position, stars for the position, has worked for this customer, no overtime, fewer hours.
  * One person is never proposed for two overlapping shifts in the same proposal.
  */
-export async function proposeEvent(c: PoolClient, eventId: string, o: { shiftIds?: string[]; groupId?: string | null } = {}) {
+export async function proposeEvent(c: PoolClient, eventId: string, o: { shiftIds?: string[]; groupId?: string | null; availCheckId?: string | null } = {}) {
   const ev = (await c.query('SELECT id, name, customer_id FROM events WHERE id = $1', [eventId])).rows[0];
   if (!ev) return null;
   const shifts = (
     await c.query(
       `SELECT s.id, s.role_name, s.starts_at, s.ends_at, s.headcount, p.label AS phase, g.label AS group_label,
-              (SELECT count(*)::int FROM shift_assignments a WHERE a.shift_id = s.id AND a.status <> 'declined') AS taken
+              to_char(s.starts_at AT TIME ZONE (SELECT timezone FROM tenants LIMIT 1), 'YYYY-MM-DD') AS day,
+              ((SELECT count(*) FROM shift_assignments a WHERE a.shift_id = s.id AND a.status <> 'declined')
+               + (SELECT count(*) FROM planned_picks pp WHERE pp.shift_id = s.id))::int AS taken
          FROM shifts s LEFT JOIN event_phases p ON p.id = s.phase_id LEFT JOIN phase_groups g ON g.id = s.group_id
         WHERE s.event_id = $1 AND s.ends_at > now() AND ($2::uuid[] IS NULL OR s.id = ANY($2::uuid[]))
         ORDER BY s.starts_at, s.role_name`,
@@ -42,6 +44,14 @@ export async function proposeEvent(c: PoolClient, eventId: string, o: { shiftIds
       [o.groupId ?? null, ev.customer_id ?? null],
     )
   ).rows as { id: string; name: string; skills: string[] | null; ratings: Record<string, number>; customer_events: number }[];
+  // Only people who answered an "Are you free?" check, on the days they said.
+  const free = o.availCheckId
+    ? new Map(
+        (await c.query("SELECT user_id, ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(free_dates) d) AS days FROM avail_answers WHERE check_id = $1 AND answered_at IS NOT NULL AND cardinality(free_dates) > 0", [o.availCheckId])).rows.map(
+          (r) => [r.user_id as string, new Set(r.days as string[])],
+        ),
+      )
+    : null;
   const flags = await reviewFlags(c, pool.map((p) => p.id));
   const planned = new Map<string, { s: number; e: number }[]>(); // people proposed in this run
   const out: ShiftProposal[] = [];
@@ -49,7 +59,7 @@ export async function proposeEvent(c: PoolClient, eventId: string, o: { shiftIds
     const open = s.headcount - s.taken;
     const key = roleKeyOf(s.role_name);
     const lead = key.replace(/lead$/, '');
-    const onShift = new Set((await c.query('SELECT user_id FROM shift_assignments WHERE shift_id = $1', [s.id])).rows.map((r) => r.user_id));
+    const onShift = new Set((await c.query('SELECT user_id FROM shift_assignments WHERE shift_id = $1 UNION SELECT user_id FROM planned_picks WHERE shift_id = $1', [s.id])).rows.map((r) => r.user_id));
     const elig = new Map((await evaluateShift(c, s.id)).map((e) => [e.user_id, e]));
     const skipped: Record<string, number> = {};
     const skip = (why: string) => { skipped[why] = (skipped[why] ?? 0) + 1; };
@@ -58,6 +68,8 @@ export async function proposeEvent(c: PoolClient, eventId: string, o: { shiftIds
     const ranked = [];
     for (const p of pool) {
       if (onShift.has(p.id)) continue;
+      if (free && !free.has(p.id)) continue;
+      if (free && !free.get(p.id)!.has(s.day)) { skip("didn't say they're free that day"); continue; }
       const e = elig.get(p.id);
       if (e?.missing_certs.length) { skip('missing a certificate'); continue; }
       if (e?.time_off) { skip('time off'); continue; }

@@ -11,8 +11,22 @@ const day = (iso: string) => new Date(iso).toLocaleDateString([], { weekday: 'sh
  * Auto-fill: the best available people for every open seat on the event, with why. Untick anyone you don't want,
  * then send the offers (or confirm them straight away). Nothing goes out until you press the button.
  */
-export default function AutoFill({ eventId, groups, onDone }: { eventId: string; groups: { id: string; name: string }[]; onDone: (msg: string) => void }) {
-  const [groupId, setGroupId] = useState('');
+export default function AutoFill({
+  eventId, groups, onDone, freeChecks = [], initialCheck = '', held = false,
+}: {
+  eventId: string;
+  groups: { id: string; name: string }[];
+  onDone: (msg: string) => void;
+  // "Are you free?" checks with answers: choose only from the people who said they're free.
+  freeChecks?: { id: string; label: string }[];
+  initialCheck?: string;
+  // The event is built quietly: picks are kept as a plan until it is published.
+  held?: boolean;
+}) {
+  // '' = all crew, 'g:<id>' = a crew group, 'a:<id>' = people who said they're free in that check.
+  const [from, setFrom] = useState(initialCheck ? `a:${initialCheck}` : '');
+  const groupId = from.startsWith('g:') ? from.slice(2) : '';
+  const availCheckId = from.startsWith('a:') ? from.slice(2) : '';
   const [d, setD] = useState<Prop[] | null>(null);
   const [off, setOff] = useState<Set<string>>(new Set()); // shiftId|userId unticked
   const [confirmed, setConfirmed] = useState(false);
@@ -20,11 +34,11 @@ export default function AutoFill({ eventId, groups, onDone }: { eventId: string;
   const [err, setErr] = useState('');
   const load = () => {
     setD(null); setErr('');
-    api<{ shifts: Prop[] }>(`/api/events/${eventId}/autofill/preview`, { body: { groupId: groupId || null } })
+    api<{ shifts: Prop[] }>(`/api/events/${eventId}/autofill/preview`, { body: { groupId: groupId || null, availCheckId: availCheckId || null } })
       .then((r) => { setD(r.shifts); setOff(new Set()); })
       .catch((e) => setErr(e.message));
   };
-  useEffect(load, [eventId, groupId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(load, [eventId, from]); // eslint-disable-line react-hooks/exhaustive-deps
   const key = (s: string, u: string) => `${s}|${u}`;
   const chosen = (d ?? []).flatMap((s) => s.picks.filter((p) => !off.has(key(s.id, p.userId))).map((p) => ({ shiftId: s.id, userId: p.userId })));
   const seats = (d ?? []).reduce((n, s) => n + s.open, 0);
@@ -35,10 +49,11 @@ export default function AutoFill({ eventId, groups, onDone }: { eventId: string;
             <button type="button" className="btn primary" disabled={busy || !chosen.length} onClick={async () => {
               setBusy(true); setErr('');
               try {
-                const r = await api<{ sent: number; failed: { error?: string }[] }>(`/api/events/${eventId}/autofill/send`, { body: { offers: chosen, confirmed } });
-                onDone(`${confirmed ? 'Confirmed' : 'Offered'} ${r.sent} ${r.sent === 1 ? 'seat' : 'seats'}${r.failed.length ? `; ${r.failed.length} couldn’t be added (${[...new Set(r.failed.map((f) => f.error))].join('; ')})` : ''}.`);
+                const r = await api<{ sent: number; held?: boolean; failed: { error?: string }[] }>(`/api/events/${eventId}/autofill/send`, { body: { offers: chosen, confirmed } });
+                const what = r.held ? `Planned ${r.sent} ${r.sent === 1 ? 'seat' : 'seats'} (not sent yet: press Publish when the crew is ready)` : `${confirmed ? 'Confirmed' : 'Offered'} ${r.sent} ${r.sent === 1 ? 'seat' : 'seats'}`;
+                onDone(`${what}${r.failed.length ? `; ${r.failed.length} couldn’t be added (${[...new Set(r.failed.map((f) => f.error))].join('; ')})` : ''}.`);
               } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
-            }}>{busy ? 'Sending…' : `${confirmed ? 'Confirm' : 'Send offers to'} ${chosen.length} ${chosen.length === 1 ? 'person' : 'people'}`}</button>
+            }}>{busy ? 'Sending…' : held ? `Plan ${chosen.length} ${chosen.length === 1 ? 'person' : 'people'}` : `${confirmed ? 'Confirm' : 'Send offers to'} ${chosen.length} ${chosen.length === 1 ? 'person' : 'people'}`}</button>
           </div>
   );
   return (
@@ -49,9 +64,10 @@ export default function AutoFill({ eventId, groups, onDone }: { eventId: string;
       <div className="row" style={{ flexWrap: 'wrap', marginBottom: 10 }}>
         <label className="row" style={{ gap: 6 }}>
           From
-          <select value={groupId} onChange={(e) => setGroupId(e.target.value)} aria-label="Who to choose from">
+          <select value={from} onChange={(e) => setFrom(e.target.value)} aria-label="Who to choose from">
             <option value="">All active crew</option>
-            {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+            {groups.length > 0 && <optgroup label="Crew group">{groups.map((g) => <option key={g.id} value={`g:${g.id}`}>{g.name}</option>)}</optgroup>}
+            {freeChecks.length > 0 && <optgroup label="Said they're free">{freeChecks.map((k) => <option key={k.id} value={`a:${k.id}`}>{k.label}</option>)}</optgroup>}
           </select>
         </label>
         <button type="button" className="btn ghost small" onClick={load}>↻ Refresh</button>

@@ -2110,7 +2110,7 @@ test('coordinator can confirm crew straight onto a shift (no accept step)', asyn
   const a = await register('autoc');
   const [c1, c2] = [await mkCrew(a, 'ac1'), await mkCrew(a, 'ac2')];
   const ev = await mkEvent(a);
-  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Tech', startsAt: start(80), endsAt: start(86), headcount: 2 })).json.shift.id;
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Tech', startsAt: start(1), endsAt: start(6), headcount: 2 })).json.shift.id;
   assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, confirmed: true })).status, 201);
   assert.equal((await call(c1.session, 'GET', '/api/my/shifts')).json.shifts[0].status, 'accepted');
   assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c2.id })).status, 201);
@@ -2122,7 +2122,7 @@ test('coordinator can confirm crew straight onto a shift (no accept step)', asyn
   const g = (await call(a, 'POST', '/api/crew-groups', { name: 'AC' })).json.group.id;
   const c3 = await mkCrew(a, 'ac3');
   await call(a, 'PUT', `/api/crew-groups/${g}/members`, { userIds: [c3.id] });
-  const sh2 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Tech', startsAt: start(120), endsAt: start(126), headcount: 1 })).json.shift.id;
+  const sh2 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Tech', startsAt: start(2), endsAt: start(5), headcount: 1 })).json.shift.id;
   assert.equal((await call(a, 'POST', `/api/shifts/${sh2}/fill-from-group`, { groupId: g, mode: 'auto', confirmed: true })).status, 200);
   assert.equal((await call(c3.session, 'GET', '/api/my/shifts')).json.shifts[0].status, 'accepted');
 });
@@ -2131,7 +2131,7 @@ test('coordinator can confirm an offered shift on the crew member\'s behalf', as
   const a = await register('cfm');
   const c1 = await mkCrew(a, 'cf1');
   const ev = await mkEvent(a);
-  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Tech', startsAt: start(90), endsAt: start(96), headcount: 1 })).json.shift.id;
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Tech', startsAt: start(1), endsAt: start(6), headcount: 1 })).json.shift.id;
   const asg = (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id })).json.assignment.id;
   assert.equal((await call(c1.session, 'POST', `/api/assignments/${asg}/confirm`)).status, 403);
   assert.equal((await call(a, 'POST', `/api/assignments/${asg}/confirm`)).status, 200);
@@ -4119,4 +4119,113 @@ test('breaks: a rest break keeps the clock running; lunch clocks out, reminds af
   // The reminder time is a labor rule.
   const r = await call(a, 'GET', '/api/labor-rules');
   assert.equal(r.json.lunchReminderMin, 45);
+});
+
+test('fast staffing: event template, duplicate, copy a day, role defaults', async () => {
+  const a = await register('fst');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Arena', startDate: '2031-03-01', endDate: '2031-03-02', phases: [{ label: 'Load in', date: '2031-03-01' }, { label: 'Show', date: '2031-03-02' }] })).json.event.id;
+  const d0 = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  const loadIn = d0.phases[0].id;
+  const grp = (await call(a, 'POST', `/api/event-phases/${loadIn}/groups`, { label: 'Loaders' })).json;
+  const groupId = grp.group?.id ?? grp.id;
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: '2031-03-01T15:00:00Z', endsAt: '2031-03-01T23:00:00Z', headcount: 6, phaseId: loadIn, groupId })).json.shift.id;
+
+  // Duplicate a position
+  const dup = await call(a, 'POST', `/api/shifts/${sh}/duplicate`);
+  assert.equal(dup.status, 201);
+  // Copy the Load in day to two more days (one new phase each, groups and positions come too)
+  const cp = await call(a, 'POST', `/api/event-phases/${loadIn}/copy`, { dates: ['2031-03-03', '2031-03-04'] });
+  assert.equal(cp.status, 201);
+  assert.deepEqual(cp.json, { phases: 2, shifts: 4 });
+  const d1 = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  assert.equal(d1.event.end_date.slice(0, 10), '2031-03-04');
+  assert.equal(d1.groups.filter((g: { label: string }) => g.label === 'Loaders').length, 3);
+  assert.equal(d1.shifts.length, 6);
+
+  // Save as an event template, then start a new event from it on another date
+  const t = await call(a, 'POST', `/api/events/${ev}/save-template`, { name: 'Arena 4-day' });
+  assert.equal(t.status, 201, t.text);
+  assert.equal(t.json.template.positions, 6);
+  assert.equal(t.json.template.days, 4);
+  const list = (await call(a, 'GET', '/api/event-templates')).json.templates;
+  assert.equal(list.find((x: { id: string }) => x.id === t.json.template.id).people, 36);
+  const ne = await call(a, 'POST', '/api/events', { name: 'Arena again', startDate: '2031-06-10', endDate: '2031-06-10', templateId: t.json.template.id });
+  assert.equal(ne.status, 201, ne.text);
+  assert.equal(ne.json.event.end_date.slice(0, 10), '2031-06-13');
+  assert.deepEqual(ne.json.event.from_template ?? ne.json.event.fromTemplate ?? ne.json.event.from_template, { phases: 4, shifts: 6 });
+  const d2 = (await call(a, 'GET', `/api/events/${ne.json.event.id}`)).json;
+  assert.equal(d2.phases.length, 4);
+  assert.equal(d2.groups.length, 3);
+  // Same wall-clock time on the new date (Denver company time zone or whatever the tenant has): same hour/minute offset as the original
+  const orig = d1.shifts.find((x: { id: string }) => x.id === sh);
+  const copy = d2.shifts.find((x: { phase_id: string; starts_at: string }) => x.phase_id === d2.phases[0].id);
+  assert.equal(new Date(copy.ends_at).getTime() - new Date(copy.starts_at).getTime(), new Date(orig.ends_at).getTime() - new Date(orig.starts_at).getTime());
+  assert.equal(copy.group_id !== null, true);
+  // Unknown template
+  assert.equal((await call(a, 'POST', '/api/events', { name: 'X', startDate: '2031-06-10', endDate: '2031-06-10', templateId: '00000000-0000-0000-0000-000000000000' })).status, 404);
+
+  // Role defaults
+  const roles = (await call(a, 'GET', '/api/role-defaults')).json.roles;
+  if (roles.length) {
+    assert.equal((await call(a, 'PUT', `/api/skills/${roles[0].id}/defaults`, { headcount: 4, start: '07:00', end: '15:30' })).status, 200);
+    const r2 = (await call(a, 'GET', '/api/role-defaults')).json.roles.find((x: { id: string }) => x.id === roles[0].id);
+    assert.deepEqual([r2.headcount, r2.start, r2.end], [4, '07:00', '15:30']);
+  }
+});
+
+test('fast staffing: build quietly then publish, honest counts, nudges, Are you free? into auto-fill', async () => {
+  const a = await register('fst2');
+  const c1 = await mkCrew(a, 'fs1');
+  const c2 = await mkCrew(a, 'fs2');
+  const c3 = await mkCrew(a, 'fs3');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Quiet build', startDate: '2031-04-01', endDate: '2031-04-02', buildQuietly: true })).json.event.id;
+  const day1 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: start(2), endsAt: start(8), headcount: 3 })).json.shift.id;
+
+  // Picks are held: crew aren't told and don't see them
+  assert.equal((await call(a, 'POST', `/api/shifts/${day1}/assign`, { userId: c1.id })).json.planned, true);
+  assert.equal((await call(a, 'POST', `/api/shifts/${day1}/assign`, { userId: c2.id, confirmed: true })).status, 201);
+  assert.equal((await call(a, 'POST', `/api/shifts/${day1}/assign`, { userId: c1.id })).status, 409); // already planned
+  assert.equal((await call(c1.session, 'GET', '/api/my/shifts')).json.shifts.length, 0);
+  assert.equal((await call(c1.session, "GET", "/api/notifications")).json.items.length, 0);
+  let row = (await call(a, 'GET', '/api/events')).json.events.find((e: { id: string }) => e.id === ev);
+  assert.deepEqual([row.confirmed, row.waiting, row.planned, row.open, row.staffing_draft], [0, 0, 2, 1, true]);
+  const det = (await call(a, 'GET', `/api/events/${ev}`)).json.shifts[0].assignments;
+  assert.equal(det.filter((x: { status: string }) => x.status === 'planned').length, 2);
+  // Can't switch back to live while picks are held
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/build-quietly`, { on: false })).status, 409);
+
+  // Publish: one offer, one confirmed booking
+  const pub = await call(a, 'POST', `/api/events/${ev}/publish`);
+  assert.equal(pub.status, 200, pub.text);
+  assert.deepEqual([pub.json.offered, pub.json.confirmed, pub.json.failed.length], [1, 1, 0]);
+  assert.equal((await call(c1.session, 'GET', '/api/my/shifts')).json.shifts[0].status, 'offered');
+  assert.equal((await call(c2.session, 'GET', '/api/my/shifts')).json.shifts[0].status, 'accepted');
+  row = (await call(a, 'GET', '/api/events')).json.events.find((e: { id: string }) => e.id === ev);
+  assert.deepEqual([row.confirmed, row.waiting, row.planned, row.open, row.staffing_draft], [1, 1, 0, 1, false]);
+
+  // Nudge the one who hasn't answered (once an hour)
+  const asg = (await call(a, 'GET', `/api/events/${ev}`)).json.shifts[0].assignments.find((x: { user_id: string }) => x.user_id === c1.id);
+  assert.equal((await call(a, 'POST', `/api/assignments/${asg.id}/nudge`)).status, 200);
+  assert.equal((await call(a, 'POST', `/api/assignments/${asg.id}/nudge`)).status, 409);
+  assert.deepEqual((await call(a, 'POST', `/api/events/${ev}/nudge`, {})).json, { sent: 0, skipped: 1 });
+  const notes = (await call(c1.session, "GET", "/api/notifications")).json.items;
+  assert.ok(notes.some((n: { title: string }) => /Reminder: please answer/.test(n.title)));
+
+  // Are you free? Ask two people about the second day; one says yes
+  const dayTwo = start(72).slice(0, 10);
+  const day2 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: start(72), endsAt: start(76), headcount: 2 })).json.shift.id;
+  const ask = await call(a, 'POST', `/api/events/${ev}/avail-checks`, { userIds: [c1.id, c3.id], dates: [dayTwo] });
+  assert.equal(ask.status, 201, ask.text);
+  assert.equal(ask.json.asked, 2);
+  const mine = (await call(c3.session, 'GET', '/api/my/avail-checks')).json.checks;
+  assert.equal(mine.length, 1);
+  assert.equal((await call(c3.session, 'POST', `/api/avail-checks/${mine[0].id}/answer`, { freeDates: [dayTwo, '1999-01-01'] })).json.free, 1);
+  assert.equal((await call(c2.session, 'POST', `/api/avail-checks/${mine[0].id}/answer`, { freeDates: [dayTwo] })).status, 404); // not asked
+  const checks = (await call(a, 'GET', `/api/events/${ev}/avail-checks`)).json.checks;
+  assert.equal(checks[0].answers.filter((x: { answered_at: string | null }) => x.answered_at).length, 1);
+  // Auto-fill from the free people only
+  const prop = (await call(a, 'POST', `/api/events/${ev}/autofill/preview`, { shiftIds: [day2], availCheckId: mine[0].id })).json;
+  assert.deepEqual(prop.shifts[0].picks.map((p: { userId: string }) => p.userId), [c3.id]);
+  assert.equal((await call(a, 'POST', `/api/avail-checks/${mine[0].id}/close`)).status, 200);
+  assert.equal((await call(c3.session, 'GET', '/api/my/avail-checks')).json.checks.length, 0);
 });

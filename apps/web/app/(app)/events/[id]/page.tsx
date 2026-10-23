@@ -21,12 +21,16 @@ import { EventRuleSet } from '@/components/WorkRuleSets';
 import AutoFill from '@/components/AutoFill';
 import TopbarAction, { PlusIcon, TrashIcon, avClass, initialsOf } from '@/components/TopbarAction';
 import CopyEvent from '@/components/CopyEvent';
+import QuickAdd, { type RoleDefault } from '@/components/QuickAdd';
+import CopyPhase from '@/components/CopyPhase';
+import NeedsAttention from '@/components/NeedsAttention';
+import AvailCheck from '@/components/AvailCheck';
 import { api, ApiError, Me, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
 import LaborBudget from '@/components/LaborBudget';
 import { EventDetails, Phases, Clocking, RentmanCard, EventFull, Phase, RmView } from '@/components/EventInfo';
 import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 
-type Assignment = { id: string; user_id: string; user_name: string; status: string; is_lead?: boolean; clocked_in_at?: string | null; last_clock_out?: string | null; pay_type?: 'hourly' | 'day'; rate?: number | null; estimated_pay?: number | null };
+type Assignment = { id: string; user_id: string; user_name: string; status: string; is_lead?: boolean; created_at?: string; nudged_at?: string | null; planned?: boolean; clocked_in_at?: string | null; last_clock_out?: string | null; pay_type?: 'hourly' | 'day'; rate?: number | null; estimated_pay?: number | null };
 type CrewRate = { user_id: string; user_name: string; role_name?: string; pay_type: 'hourly' | 'day'; rate: number; note: string | null };
 type Elig = { user_id: string; missing_certs: string[]; time_off: boolean; outside_availability: boolean; booked?: { role_name: string; event_name: string; starts_at: string; ends_at: string } | null };
 /** Stars for a position; on a lead role ("Audio Lead") the rating as that position ("Audio") counts. */
@@ -194,7 +198,16 @@ function Body({ me }: { me: Me }) {
   const [tplId, setTplId] = useState('');
   const [tplPhase, setTplPhase] = useState('');
   // Event settings panel: clock-in, overtime and shift templates live here to keep the page short.
-  const [settings, setSettings] = useState<null | 'clock' | 'ot' | 'tpl' | 'pay' | 'rentman' | 'invoice' | 'rate' | 'update' | 'autofill'>(null);
+  const [settings, setSettings] = useState<null | 'clock' | 'ot' | 'tpl' | 'pay' | 'rentman' | 'invoice' | 'rate' | 'update' | 'autofill' | 'avail'>(null);
+  // Quick add (grid) or copy-to-other-days open under one phase.
+  const [quick, setQuick] = useState<{ phaseId: string; kind: 'add' | 'copy' } | null>(null);
+  // Defaults each role starts with (people needed, start and end).
+  const [roleDefaults, setRoleDefaults] = useState<RoleDefault[]>([]);
+  // Auto-fill from the people who said they're free in an "Are you free?" check.
+  const [afCheck, setAfCheck] = useState('');
+  const [freeChecks, setFreeChecks] = useState<{ id: string; label: string }[]>([]);
+  const [evTplName, setEvTplName] = useState('');
+  const [evTplCust, setEvTplCust] = useState(false);
   const [rateInfo, setRateInfo] = useState<{ rated: number; total: number; due: number } | null>(null);
   const loadRateInfo = () =>
     api<{ workers: { ended: boolean; review_id: string | null }[]; rated: number; total: number }>(`/api/events/${id}/reviews`)
@@ -224,6 +237,19 @@ function Body({ me }: { me: Me }) {
   useEffect(() => {
     api<RmView>(`/api/events/${id}/rentman`).then(setRm).catch(() => setRm(null));
   }, [id]);
+  useEffect(() => {
+    if (settings !== 'autofill') return;
+    api<{ checks: { id: string; dates: string[]; answers: { answered_at: string | null; free_dates: string[] | null }[] }[] }>(`/api/events/${id}/avail-checks`)
+      .then((r) =>
+        setFreeChecks(
+          r.checks
+            .map((k) => ({ k, n: k.answers.filter((a) => a.answered_at && a.free_dates?.length).length }))
+            .filter((x) => x.n > 0)
+            .map(({ k, n }) => ({ id: k.id, label: `${n} free · ${k.dates.map((d) => new Date(`${d}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' })).join(', ')}` })),
+        ),
+      )
+      .catch(() => setFreeChecks([]));
+  }, [settings, id]);
   useEffect(() => {
     if (!settings) return;
     const esc = (e: KeyboardEvent) => e.key === 'Escape' && setSettings(null);
@@ -265,6 +291,7 @@ function Body({ me }: { me: Me }) {
     load();
     api<{ crew: Member[] }>('/api/crew').then((r) => setCrew(r.crew.filter((m) => m.role === 'crew' && m.active)));
     api<{ groups: { id: string; name: string }[] }>('/api/crew-groups').then((r) => setCrewGroups(r.groups)).catch(() => {});
+    api<{ roles: RoleDefault[] }>('/api/role-defaults').then((r) => setRoleDefaults(r.roles)).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
   useEffect(() => {
@@ -315,6 +342,20 @@ function Body({ me }: { me: Me }) {
     } catch (err) {
       setError((err as Error).message);
     }
+  };
+
+  /** A role's defaults (people needed, start and end on the same day) applied to the add-shift form. */
+  const withRole = <T extends { roleName: string; headcount: number; startsAt: string; endsAt: string }>(x: T, role: string): T => {
+    const df = roleDefaults.find((r) => r.name.toLowerCase() === role.trim().toLowerCase());
+    if (!df) return { ...x, roleName: role };
+    const day = x.startsAt.slice(0, 10);
+    const st = df.start ? `${day}T${df.start}` : x.startsAt;
+    let en = x.endsAt;
+    if (df.end) {
+      en = `${day}T${df.end}`;
+      if (new Date(en) <= new Date(st)) en = localInput(new Date(new Date(en).getTime() + 86_400_000));
+    } else if (df.start) en = localInput(new Date(new Date(st).getTime() + (new Date(x.endsAt).getTime() - new Date(x.startsAt).getTime())));
+    return { ...x, roleName: role, headcount: x.headcount === 1 && df.headcount ? df.headcount : x.headcount, startsAt: st, endsAt: en };
   };
 
   const addShift = async (e: React.FormEvent) => {
@@ -674,6 +715,9 @@ function Body({ me }: { me: Me }) {
                   <button className="btn ghost small" onClick={() => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { isOpen: !s.is_open } }))}>
                     {s.is_open ? 'Close to claims' : 'Open for claiming'}
                   </button>
+                  <button className="btn ghost small" title="Add the same position again (same times and pay, no crew)" onClick={() => run(() => api(`/api/shifts/${s.id}/duplicate`, { body: {} }), `Added another ${s.role_name}.`)}>
+                    ⧉ Duplicate
+                  </button>
                   <button className="btn ghost small danger" onClick={() => confirm('Delete this shift?') && run(() => api(`/api/shifts/${s.id}`, { method: 'DELETE' }))}>
                     Delete
                   </button>
@@ -690,6 +734,7 @@ function Body({ me }: { me: Me }) {
                     <li key={a.id} className="row space" style={{ flexWrap: 'wrap' }}>
                       <span>
                         {a.user_name} <Pill status={a.status} />
+                        {a.planned && <span className="muted small" title="Building quietly: they'll get the offer when you publish"> not sent yet</span>}
                         {a.is_lead && a.status !== 'declined' && <span className="chip lead-chip" title="Leads their department on this event: checks the team in and out and rates them on the On site page">★ Lead</span>}
                         {a.rate != null && a.status !== 'declined' && (
                           <button type="button" className="chip" style={{ border: 0, cursor: 'pointer', marginLeft: 4 }} title="This person's own rate on this event" onClick={() => setSettings('pay')}>
@@ -697,6 +742,13 @@ function Body({ me }: { me: Me }) {
                           </button>
                         )}
                       </span>
+                      {a.planned ? (
+                      <span className="row">
+                        <button className="btn ghost small" aria-label={`Take ${a.user_name} out of the plan`} onClick={() => run(() => api(`/api/planned-picks/${a.id}`, { method: 'DELETE' }), `${a.user_name} taken out of the plan.`)}>
+                          ✕ Remove
+                        </button>
+                      </span>
+                      ) : (
                       <span className="row">
                         {(a.status === 'offered' || a.status === 'pending') && (
                           <button className="btn small primary" onClick={() => run(() => api(`/api/assignments/${a.id}/confirm`, { body: {} }), `Confirmed ${a.user_name}.`)}>
@@ -734,6 +786,7 @@ function Body({ me }: { me: Me }) {
                           ✕ Remove
                         </button>
                       </span>
+                      )}
                       {addTime === a.id && (
                         <div style={{ flexBasis: '100%' }}>
                           <TimeEdit
@@ -978,6 +1031,12 @@ function Body({ me }: { me: Me }) {
               <button className="btn small" title="Add a named group of shifts inside this phase (Loaders, Pushers …)" onClick={() => { const n = new Set(closed); n.delete(g.key); setClosedSaved(n); setGroupEdit({ phaseId: g.phase!.id, label: '' }); }}>
                 + Group
               </button>
+              <button className="btn small" title="Add many positions at once: a grid, or type “10 stagehands 8a-4p”" onClick={() => { const n = new Set(closed); n.delete(g.key); setClosedSaved(n); setQuick(quick?.phaseId === g.phase!.id && quick.kind === 'add' ? null : { phaseId: g.phase!.id, kind: 'add' }); }}>
+                ⚡ Quick add
+              </button>
+              <button className="btn small" title="Copy this day's groups and positions to other days" disabled={g.shifts.length === 0} onClick={() => setQuick(quick?.phaseId === g.phase!.id && quick.kind === 'copy' ? null : { phaseId: g.phase!.id, kind: 'copy' })}>
+                ⧉ Copy day
+              </button>
               <button className="btn small" onClick={() => templateForPhase(g.phase!)}>
                 Use template
               </button>
@@ -990,9 +1049,43 @@ function Body({ me }: { me: Me }) {
           )}
         </div>
       )}
+      {g.phase && quick?.phaseId === g.phase.id && quick.kind === 'add' && (
+        <QuickAdd
+          eventId={id}
+          phase={g.phase}
+          groups={groupsOf(g.phase.id)}
+          roles={skillNames}
+          defaults={roleDefaults}
+          onClose={() => setQuick(null)}
+          onError={setError}
+          onDone={(m) => { setQuick(null); setNote(m); load(); }}
+        />
+      )}
+      {g.phase && quick?.phaseId === g.phase.id && quick.kind === 'copy' && (
+        <CopyPhase
+          phase={g.phase}
+          eventStart={d.event.start_date}
+          eventEnd={d.event.end_date}
+          onClose={() => setQuick(null)}
+          onError={setError}
+          onDone={(m) => { setQuick(null); setNote(m); load(); }}
+        />
+      )}
       {closed.has(g.key) ? null : phaseBody(g)}
     </div>
   );
+
+  /** Open the crew picker on a shift (expanding its phase and group) and bring it into view. */
+  const openPicker = (shiftId: string) => {
+    const s = d.shifts.find((x) => x.id === shiftId);
+    if (!s) return;
+    const n = new Set(closed);
+    n.delete(s.phase_id && d.phases.some((p) => p.id === s.phase_id) ? s.phase_id : 'none');
+    if (s.group_id) n.delete(gKey(s.group_id));
+    setClosedSaved(n);
+    setAdding(shiftId);
+    setTimeout(() => document.getElementById(`shift-${shiftId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+  };
 
   const shiftModalTitle = (() => {
     const ph = d.phases.find((p) => p.id === f.phaseId);
@@ -1038,7 +1131,7 @@ function Body({ me }: { me: Me }) {
                   if (e.target.value === '__other') {
                     setOtherRole(true);
                     setF({ ...f, roleName: '' });
-                  } else setF({ ...f, roleName: e.target.value });
+                  } else setF(withRole(f, e.target.value));
                 }}
               >
                 <option value="">Choose a role…</option>
@@ -1201,10 +1294,25 @@ function Body({ me }: { me: Me }) {
           <div className="row small" style={{ gap: '.35rem', marginTop: '.35rem', flexWrap: 'wrap' }}>
             {(() => {
               const slots = d.shifts.reduce((n, s) => n + s.headcount, 0);
-              const filled = d.shifts.reduce((n, s) => n + Math.min(s.headcount, s.assignments.filter((a) => a.status !== 'declined').length), 0);
               if (!slots) return <span className="pill">No shifts yet</span>;
-              const cls = filled >= slots ? 'staff-good' : filled > 0 ? 'staff-warn' : 'staff-bad';
-              return <span className={`pill ${cls}`} title="Seats with crew on them (offered, pending or accepted)">{filled >= slots ? 'Fully staffed' : filled > 0 ? 'Partly staffed' : 'No crew yet'} · {filled}/{slots}</span>;
+              // Only people who said yes count as staffed; offers waiting and quiet plans are shown apart.
+              let conf = 0, wait = 0, plan = 0;
+              for (const s of d.shifts) {
+                const c = Math.min(s.headcount, s.assignments.filter((a) => a.status === 'accepted').length);
+                const w = Math.min(s.headcount - c, s.assignments.filter((a) => a.status === 'offered' || a.status === 'pending').length);
+                const p = Math.min(s.headcount - c - w, s.assignments.filter((a) => a.planned).length);
+                conf += c; wait += w; plan += p;
+              }
+              const open = slots - conf - wait - plan;
+              const cls = conf >= slots ? 'staff-good' : conf + wait + plan > 0 ? 'staff-warn' : 'staff-bad';
+              return (
+                <>
+                  <span className={`pill ${cls}`} title="Seats where the person said yes">{conf >= slots ? 'Fully confirmed' : conf + wait + plan > 0 ? 'Partly staffed' : 'No crew yet'} · {conf}/{slots} confirmed</span>
+                  {wait > 0 && <span className="pill offered" title="Offered, waiting for an answer">{wait} waiting</span>}
+                  {plan > 0 && <span className="pill draft-pill" title="Picked while building quietly: not sent yet">{plan} not sent</span>}
+                  {open > 0 && <span className="pill staff-bad" title="Seats with nobody on them">{open} open</span>}
+                </>
+              );
             })()}
             {ev.pipeline_status && (
               <select
@@ -1247,7 +1355,13 @@ function Body({ me }: { me: Me }) {
             </button>
             <button className="btn small" onClick={() => setSettings('clock')} aria-haspopup="dialog">⚙ Settings</button>
             <button className="btn small" onClick={() => setSettings('update')} aria-haspopup="dialog" title="Send an update to the crew scheduled on this event">📣 Send update</button>
-            <button className="btn small" onClick={() => setSettings('autofill')} aria-haspopup="dialog" title="Propose the best available crew for every open seat">✨ Auto-fill</button>
+            <button className="btn small" onClick={() => { setAfCheck(''); setSettings('autofill'); }} aria-haspopup="dialog" title="Propose the best available crew for every open seat">✨ Auto-fill</button>
+            <button className="btn small" onClick={() => setSettings('avail')} aria-haspopup="dialog" title="Ask crew which days they're free before booking">🙋 Who&apos;s free?</button>
+            {!ev.staffing_draft && (
+              <button className="btn small" title="Pick crew without telling anyone, then send every offer at once with Publish" onClick={() => run(() => api(`/api/events/${id}/build-quietly`, { method: 'PUT', body: { on: true } }), 'Building quietly: picks are kept as a plan until you press Publish.')}>
+                ✎ Build quietly
+              </button>
+            )}
             {rm && (rm.connected || rm.linked) && (
               <button className="btn small" onClick={() => setSettings('rentman')} aria-haspopup="dialog" title={rm.project ? rm.project.name : 'Link a Rentman project'}>
                 Rentman{rm.linked && rm.project ? ` · ${rm.project.number ? `#${rm.project.number}` : rm.project.name}` : ''}
@@ -1292,6 +1406,55 @@ function Body({ me }: { me: Me }) {
         </Banner>
       )}
 
+      {ev.staffing_draft && (
+        <div className="draft-bar" role="status">
+          <span className="draft-ico" aria-hidden="true">✎</span>
+          <span>
+            <b>Building quietly.</b>{' '}
+            <span className="muted">
+              {(() => { const n = d.shifts.reduce((k, s) => k + s.assignments.filter((a) => a.planned).length, 0); return n ? `${n} pick${n === 1 ? '' : 's'} not sent yet.` : 'Pick crew: nobody is told yet.'; })()} Press Publish to send every offer at once.
+            </span>
+          </span>
+          <span className="row" style={{ gap: 6, marginLeft: 'auto' }}>
+            {!d.shifts.some((s) => s.assignments.some((a) => a.planned)) && (
+              <button type="button" className="btn ghost small" onClick={() => run(() => api(`/api/events/${id}/build-quietly`, { method: 'PUT', body: { on: false } }), 'Picks now go out straight away.')}>Stop building quietly</button>
+            )}
+            <button
+              type="button"
+              className="btn primary small"
+              onClick={async () => {
+                setError(''); setNote('');
+                try {
+                  const r = await api<{ offered: number; confirmed: number; failed: { name: string; role: string; error: string }[] }>(`/api/events/${id}/publish`, { body: {} });
+                  const parts = [r.offered && `${r.offered} offer${r.offered === 1 ? '' : 's'} sent`, r.confirmed && `${r.confirmed} confirmed booking${r.confirmed === 1 ? '' : 's'} sent`].filter(Boolean).join(', ');
+                  setNote(`Published${parts ? `: ${parts}` : ''}.`);
+                  if (r.failed.length) setError(`Not sent: ${r.failed.map((f) => `${f.name} (${f.role}): ${f.error}`).join(' ')}`);
+                } catch (e) { setError((e as Error).message); }
+                load();
+              }}
+            >
+              Publish
+            </button>
+          </span>
+        </div>
+      )}
+      <NeedsAttention
+        eventId={id}
+        shifts={d.shifts}
+        onDone={(m) => { setNote(m); load(); }}
+        onError={setError}
+        onFill={(sid) => openPicker(sid)}
+        onReplace={async (sid, aid) => {
+          const a = d.shifts.find((s) => s.id === sid)?.assignments.find((x) => x.id === aid);
+          if (a && a.status !== 'declined' && !confirm(`Take ${a.user_name} off this shift and pick someone else? They'll be told.`)) return;
+          setError('');
+          try {
+            await api(`/api/assignments/${aid}`, { method: 'DELETE' });
+            await load();
+            openPicker(sid);
+          } catch (e) { setError((e as Error).message); }
+        }}
+      />
       <EventDetails ev={ev} hasPhases={d.phases.length > 0} shiftCount={d.shifts.length} onSaved={load} onError={setError} />
       {d.shifts.some((s) => s.assignments.length > 0) && (
         <EventCrewSearch
@@ -1331,18 +1494,36 @@ function Body({ me }: { me: Me }) {
 
       {settings && typeof document !== 'undefined' && createPortal(
         <div className="drawer-backdrop" onMouseDown={() => setSettings(null)}>
-          <aside className={settings === 'rentman' || settings === 'invoice' || settings === 'rate' || settings === 'update' || settings === 'autofill' ? 'drawer wide' : 'drawer'} role="dialog" aria-modal="true" aria-label={settings === 'rentman' ? 'Rentman' : settings === 'invoice' ? 'Invoice' : settings === 'rate' ? 'Rate crew' : settings === 'update' ? 'Send an update' : settings === 'autofill' ? 'Auto-fill' : 'Event settings'} onMouseDown={(e) => e.stopPropagation()}>
+          <aside className={settings === 'rentman' || settings === 'invoice' || settings === 'rate' || settings === 'update' || settings === 'autofill' || settings === 'avail' ? 'drawer wide' : 'drawer'} role="dialog" aria-modal="true" aria-label={settings === 'rentman' ? 'Rentman' : settings === 'invoice' ? 'Invoice' : settings === 'rate' ? 'Rate crew' : settings === 'update' ? 'Send an update' : settings === 'autofill' ? 'Auto-fill' : settings === 'avail' ? 'Who is free' : 'Event settings'} onMouseDown={(e) => e.stopPropagation()}>
             <div className="row space">
-              <h2 style={{ margin: 0 }}>{settings === 'rentman' ? 'Rentman' : settings === 'invoice' ? `Invoice · ${ev.name}` : settings === 'rate' ? `Rate crew · ${ev.name}` : settings === 'update' ? `Send an update · ${ev.name}` : settings === 'autofill' ? `Auto-fill · ${ev.name}` : 'Event settings'}</h2>
+              <h2 style={{ margin: 0 }}>{settings === 'rentman' ? 'Rentman' : settings === 'invoice' ? `Invoice · ${ev.name}` : settings === 'rate' ? `Rate crew · ${ev.name}` : settings === 'update' ? `Send an update · ${ev.name}` : settings === 'autofill' ? `Auto-fill · ${ev.name}` : settings === 'avail' ? `Who's free? · ${ev.name}` : 'Event settings'}</h2>
               <button className="btn ghost small" aria-label="Close" onClick={() => setSettings(null)}>✕</button>
             </div>
             {settings === 'rentman' && <div style={{ marginTop: 12 }}><RentmanCard eventId={id} isAdmin={me.role === 'admin'} onError={setError} onView={setRm} /></div>}
             {settings === 'invoice' && <InvoicePanel eventId={id} isAdmin={me.role === 'admin'} />}
             {settings === 'rate' && <div style={{ marginTop: 12 }}><EventRatings me={me} eventId={id} onProgress={() => loadRateInfo()} /></div>}
-            {settings === 'autofill' && <div style={{ marginTop: 12 }}><AutoFill eventId={id} groups={crewGroups} onDone={(m) => { setSettings(null); setNote(m); load(); }} /></div>}
+            {settings === 'autofill' && <div style={{ marginTop: 12 }}><AutoFill key={afCheck || 'all'} eventId={id} groups={crewGroups} freeChecks={freeChecks} initialCheck={afCheck} held={!!ev.staffing_draft} onDone={(m) => { setSettings(null); setNote(m); load(); }} /></div>}
+            {settings === 'avail' && (
+              <div style={{ marginTop: 12 }}>
+                <AvailCheck
+                  eventId={id}
+                  days={(() => {
+                    const out: string[] = [];
+                    for (let x = ev.start_date.slice(0, 10); x <= ev.end_date.slice(0, 10) && out.length < 62; x = new Date(Date.parse(`${x}T12:00:00Z`) + 86400_000).toISOString().slice(0, 10)) out.push(x);
+                    return out;
+                  })()}
+                  groups={crewGroups}
+                  roles={skillNames}
+                  crew={crew}
+                  onBook={(k) => { setAfCheck(k); setSettings('autofill'); }}
+                  onDone={setNote}
+                  onError={setError}
+                />
+              </div>
+            )}
             {settings === 'update' && <div style={{ marginTop: 12 }}><EventUpdates eventId={id} eventName={ev.name} shifts={d.shifts} phases={d.phases} groups={d.groups ?? []} /></div>}
-            {settings !== 'rentman' && settings !== 'invoice' && settings !== 'rate' && settings !== 'update' && settings !== 'autofill' && <div className="phase-tabs" role="tablist" aria-label="Settings section" style={{ margin: '12px 0' }}>
-              {([['clock', 'Clock-in'], ['ot', 'Overtime & work rules'], ['tpl', 'Shift templates'], ...((me.role === 'admin' || me.canAdjustRates) ? [['pay', 'Crew pay']] as const : [])] as const).map(([k, label]) => (
+            {settings !== 'rentman' && settings !== 'invoice' && settings !== 'rate' && settings !== 'update' && settings !== 'autofill' && settings !== 'avail' && <div className="phase-tabs" role="tablist" aria-label="Settings section" style={{ margin: '12px 0' }}>
+              {([['clock', 'Clock-in'], ['ot', 'Overtime & work rules'], ['tpl', 'Templates'], ...((me.role === 'admin' || me.canAdjustRates) ? [['pay', 'Crew pay']] as const : [])] as const).map(([k, label]) => (
                 <button key={k} type="button" role="tab" aria-selected={settings === k} className={settings === k ? 'tab on' : 'tab'} onClick={() => setSettings(k)}>
                   {label}
                 </button>
@@ -1353,6 +1534,30 @@ function Body({ me }: { me: Me }) {
             {settings === 'ot' && <EventRuleSet eventId={id} onSaved={load} />}
             {settings === 'pay' && <CrewPay eventId={id} shifts={d.shifts} rates={d.crewRates ?? []} onSaved={load} />}
             {settings === 'tpl' && (
+              <>
+              <section className="card">
+                <h2>Event template</h2>
+                <p className="muted small">Save this whole event (its days, groups and positions with times and people needed) to start new events from it in one step: Add New Event → Template.</p>
+                <div className="row" style={{ flexWrap: 'wrap' }}>
+                  <input value={evTplName} onChange={(e) => setEvTplName(e.target.value)} placeholder={`${ev.name} template`} aria-label="Event template name" />
+                  <button
+                    className="btn small primary"
+                    disabled={d.shifts.length === 0 && d.phases.length === 0}
+                    onClick={async () => {
+                      const name = evTplName.trim() || `${ev.name} template`;
+                      setError(''); setNote('');
+                      try {
+                        const r = await api<{ template: { positions: number; days: number }; replaced: boolean }>(`/api/events/${id}/save-template`, { body: { name, customerOnly: evTplCust && !!customerId } });
+                        setNote(`${r.replaced ? 'Updated' : 'Saved'} event template “${name}”: ${r.template.days} day${r.template.days === 1 ? '' : 's'}, ${r.template.positions} position${r.template.positions === 1 ? '' : 's'}.`);
+                        setEvTplName('');
+                      } catch (e) { setError((e as Error).message); }
+                    }}
+                  >
+                    Save as event template
+                  </button>
+                  {customerId && <label className="check"><input type="checkbox" checked={evTplCust} onChange={(e) => setEvTplCust(e.target.checked)} /> Only for {d.event.client}</label>}
+                </div>
+              </section>
               <section className="card">
                 <h2>Shift templates</h2>
                 <p className="muted small">Create a whole day or week of shifts in one step, or save this event&apos;s shifts for next time.</p>
@@ -1406,6 +1611,7 @@ function Body({ me }: { me: Me }) {
           </div>
         </div>
               </section>
+              </>
             )}
             {error && <Banner onClose={() => setError('')}>{error}</Banner>}
             {note && <Banner kind="ok" onClose={() => setNote('')}>{note}</Banner>}
