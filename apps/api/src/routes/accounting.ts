@@ -10,6 +10,7 @@ import { config } from '../config';
 import { canBill } from '../rates';
 import { acctSchema, loadAcct, saveAcct, eventBilling, invoiceIif, PAYROLL_PROVIDERS, baseRole, localDate } from '../accounting';
 import { payrollSummary, payrollFile } from '../payroll';
+import { compareQuote, overQuote, quotesForEvent } from '../quoteCompare';
 import { loadQbo, saveQbo, qboConnected, authorizeUrl, exchangeCode, Qbo, qboSession, appLink, QboError, QBO_REVOKE } from '../quickbooks';
 
 const adm = guard('admin');
@@ -179,18 +180,27 @@ export async function accountingRoutes(app: FastifyInstance) {
   });
 
   // ---------- billing an event ----------
-  const sourceQ = z.object({ source: z.enum(['time', 'schedule']).default('time') });
+  const sourceQ = z.object({ source: z.enum(['time', 'schedule']).default('time'), quoteId: uuid.optional() });
+  /** The quote to hold the invoice against (the one asked for, else the event's accepted or newest), and the comparison. */
+  const checkQuote = async (c: any, eventId: string, lines: any[], quoteId?: string | null) => {
+    const { list, chosen } = await quotesForEvent(c, eventId, quoteId);
+    return { quotes: list, comparison: chosen ? await compareQuote(c, chosen.id, lines) : null };
+  };
+  const overMsg = (cmp: any) => `This invoice is $${cmp.invoiced.toFixed(2)}, $${cmp.diff.toFixed(2)} (${cmp.pct}%) more than quote #${cmp.quote.number} ($${cmp.quoted.toFixed(2)} for labor).`;
 
   app.get('/api/events/:id/billing', { preHandler: billers }, async (req, reply) => {
     const { id } = z.object({ id: uuid }).parse(req.params);
-    const { source } = sourceQ.parse(req.query);
+    const { source, quoteId } = sourceQ.parse(req.query);
     const out = await withTenant(req.user.tid, async (c) => {
       const b = await eventBilling(c, id, source);
       if (!b) return null;
       const q = await loadQbo(c);
       const allowed = await canBill(c, req.user);
+      const rm = (await c.query('SELECT rentman_project_id FROM events WHERE id = $1', [id])).rows[0]?.rentman_project_id ?? null;
       return {
         ...b,
+        ...(await checkQuote(c, id, b.lines, quoteId)),
+        rentmanProject: rm,
         canBill: allowed,
         quickbooks: { connected: qboConnected(q), environment: q?.environment ?? 'sandbox' },
         clientApproval: await clientApprovalState(c, id),
@@ -203,7 +213,7 @@ export async function accountingRoutes(app: FastifyInstance) {
 
   app.post('/api/events/:id/billing/quickbooks', { preHandler: billers }, async (req, reply) => {
     const { id } = z.object({ id: uuid }).parse(req.params);
-    const b = z.object({ source: z.enum(['time', 'schedule']), again: z.boolean().optional() }).parse(req.body);
+    const b = z.object({ source: z.enum(['time', 'schedule']), again: z.boolean().optional(), quoteId: uuid.nullable().optional(), overQuoteOk: z.boolean().optional() }).parse(req.body);
     try {
       const out = await withTenant(req.user.tid, async (c) => {
         if (!(await canBill(c, req.user))) return { code: 403, error: 'Only admins, HR and coordinators allowed to adjust rates can create invoices.' };
@@ -214,6 +224,9 @@ export async function accountingRoutes(app: FastifyInstance) {
         const blocked = await invoiceBlockedByClient(c, id);
         if (blocked) return { code: 409, error: blocked, reason: 'client_approval' };
         if (!b.again && bill.invoices.some((i: any) => i.provider === 'qbo')) return { code: 409, error: 'This event already has a QuickBooks invoice. Create another one only if that is intended.', reason: 'duplicate' };
+        // More than was quoted: say so, and create it only when they confirm.
+        const { comparison } = await checkQuote(c, id, bill.lines, b.quoteId);
+        if (overQuote(comparison) && !b.overQuoteOk) return { code: 409, error: overMsg(comparison), reason: 'over_quote', comparison };
         const missing = bill.lines.filter((l) => !l.qboItemId);
         if (missing.length) return { code: 400, error: `Choose a QuickBooks item for ${[...new Set(missing.map((l) => l.role))].join(', ')} (or a default item) under Integrations.` };
         const qb = await qboSession(c, req.user.tid);
@@ -231,10 +244,10 @@ export async function accountingRoutes(app: FastifyInstance) {
           lines: bill.lines.map((l) => ({ itemId: l.qboItemId!, description: l.description, qty: l.qty, rate: l.rate, amount: l.amount, date: l.date })),
         });
         await c.query(
-          'INSERT INTO event_invoices (tenant_id, event_id, provider, source, external_id, doc_number, total, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
-          [req.user.tid, id, 'qbo', b.source, inv.id, inv.docNumber, inv.total || bill.total, req.user.sub],
+          'INSERT INTO event_invoices (tenant_id, event_id, provider, source, external_id, doc_number, total, created_by, quote_id, quoted_total) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+          [req.user.tid, id, 'qbo', b.source, inv.id, inv.docNumber, inv.total || bill.total, req.user.sub, comparison?.quote.id ?? null, comparison?.quoted ?? null],
         );
-        await audit(c, req.user.tid, req.user.sub, 'billing.quickbooks', 'event', id, { invoice: inv.id, total: inv.total || bill.total });
+        await audit(c, req.user.tid, req.user.sub, 'billing.quickbooks', 'event', id, { invoice: inv.id, total: inv.total || bill.total, quoted: comparison?.quoted ?? null, overQuote: overQuote(comparison) });
         await maybeArchive(c, id, req.user.sub);
         return { code: 201, invoice: { ...inv, url: appLink(qb.env, 'invoice', inv.id) } };
       });
@@ -248,13 +261,15 @@ export async function accountingRoutes(app: FastifyInstance) {
   // QuickBooks Desktop: the same invoice as an .IIF file to import (File > Utilities > Import > IIF Files).
   app.get('/api/events/:id/billing/iif', { preHandler: billers }, async (req, reply) => {
     const { id } = z.object({ id: uuid }).parse(req.params);
-    const q = sourceQ.extend({ docNumber: z.string().trim().max(21).regex(/^[\w-]*$/).optional() }).parse(req.query);
+    const q = sourceQ.extend({ docNumber: z.string().trim().max(21).regex(/^[\w-]*$/).optional(), overQuote: z.enum(['1']).optional() }).parse(req.query);
     const out = await withTenant(req.user.tid, async (c) => {
       if (!(await canBill(c, req.user))) return { code: 403 as const };
       const bill = await eventBilling(c, id, q.source);
       if (!bill) return { code: 404 as const };
       if (!bill.lines.length) return { code: 400 as const };
       if (await invoiceBlockedByClient(c, id)) return { code: 409 as const };
+      const { comparison } = await checkQuote(c, id, bill.lines, q.quoteId);
+      if (overQuote(comparison) && !q.overQuote) return { code: 412 as const, msg: overMsg(comparison) };
       const s = await loadAcct(c);
       const body = invoiceIif(s.desktop, {
         customer: bill.customer?.name ?? bill.event.client ?? bill.event.name,
@@ -263,7 +278,7 @@ export async function accountingRoutes(app: FastifyInstance) {
         memo: bill.event.name,
         lines: bill.lines,
       });
-      await c.query('INSERT INTO event_invoices (tenant_id, event_id, provider, source, doc_number, total, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7)', [req.user.tid, id, 'iif', q.source, q.docNumber || null, bill.total, req.user.sub]);
+      await c.query('INSERT INTO event_invoices (tenant_id, event_id, provider, source, doc_number, total, created_by, quote_id, quoted_total) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)', [req.user.tid, id, 'iif', q.source, q.docNumber || null, bill.total, req.user.sub, comparison?.quote.id ?? null, comparison?.quoted ?? null]);
       await audit(c, req.user.tid, req.user.sub, 'billing.iif', 'event', id, { total: bill.total });
       await maybeArchive(c, id, req.user.sub);
       return { code: 200 as const, body, name: `${slug(bill.event.name)}-invoice.iif` };
@@ -272,6 +287,7 @@ export async function accountingRoutes(app: FastifyInstance) {
     if (out.code === 404) return reply.code(404).send({ error: 'Event not found' });
     if (out.code === 400) return reply.code(400).send({ error: 'Nothing to bill yet.' });
     if (out.code === 409) return reply.code(409).send({ error: 'The client has to approve this event’s timesheets before it can be invoiced.', reason: 'client_approval' });
+    if (out.code === 412) return reply.code(409).send({ error: `${(out as any).msg} Confirm it on the event’s Invoice tab first.`, reason: 'over_quote' });
     return download(reply, out.name!, 'text/plain', out.body!);
   });
 

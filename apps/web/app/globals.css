@@ -2021,3 +2021,25 @@ details.card.profile-fold > summary::before { content: none; }
   .draft-bar .row { margin-left: 0 !important; width: 100%; }
   .att-list li > .row { width: 100%; justify-content: flex-end; }
 }
+
+/* ---------- Quoted vs invoiced ---------- */
+.quote-compare .qc-sum { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 12px 0 6px; }
+.quote-compare .qc-sum > div { display: grid; gap: 2px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.quote-compare .qc-sum b { font-size: 1.25rem; }
+.qc-diff.over { border-color: color-mix(in srgb, var(--bad) 45%, transparent) !important; background: var(--bad-bg) !important; }
+.qc-diff.over b, .qc-diff.over .small { color: var(--bad); }
+.qc-diff.under { border-color: color-mix(in srgb, var(--warn) 45%, transparent) !important; background: var(--warn-bg) !important; }
+.qc-diff.under b, .qc-diff.under .small { color: var(--warn); }
+.qc-diff.match { border-color: color-mix(in srgb, var(--good) 45%, transparent) !important; background: var(--good-bg) !important; }
+.qc-diff.match b, .qc-diff.match .small { color: var(--good); }
+.qc-chip { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; background: var(--surface-2); color: var(--muted, inherit); }
+.qc-chip.match { background: var(--good-bg); color: var(--good); }
+.qc-chip.over, .qc-chip.not_quoted { background: var(--bad-bg); color: var(--bad); }
+.qc-chip.under, .qc-chip.not_invoiced { background: var(--warn-bg); color: var(--warn); }
+.rm-quotes { border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin: 12px 0; display: grid; gap: 8px; background: var(--surface-2); }
+.rm-quotes li { padding: 6px 0; border-top: 1px solid var(--border); gap: 8px; flex-wrap: wrap; }
+.rm-quotes li:first-child { border-top: 0; }
+.quote-over-note { color: var(--bad); }
+.pill.rentman-pill { background: var(--surface-2); color: inherit; border: 1px solid var(--border-strong); }
+@media (max-width: 640px) { .quote-compare .qc-sum { grid-template-columns: 1fr; } }
+.quote-compare .sub { display: block; font-size: 13px; color: var(--muted); line-height: 1.4; }

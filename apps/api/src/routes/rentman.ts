@@ -2,7 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
 import { guard } from '../auth';
-import { checkEventRequest, checkOpenRequests, clearToken, getToken, pullCustomers, pushCustomer, pushEventRequest, RentmanError, saveToken, syncEquipment, syncProjects, testToken } from '../rentman';
+import { checkEventRequest, checkOpenRequests, clearToken, getToken, projectQuotes, pullCustomers, pushCustomer, pushEventRequest, RentmanError, saveToken, syncEquipment, syncProjects, testToken } from '../rentman';
+import { importRentmanQuote } from '../quoteCompare';
 
 const uuid = z.string().uuid();
 const adm = guard('admin');
@@ -216,6 +217,50 @@ export async function rentmanRoutes(app: FastifyInstance) {
         return view(c, id, req.user.role === 'admin');
       });
       return out === undefined ? reply.code(404).send({ error: 'Event not found' }) : out;
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+
+  // ---------- quotes ----------
+  // The Rentman quotes of the project this event is linked to, and which of them are already pulled in.
+  app.get('/api/events/:id/rentman/quotes', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    try {
+      return await withTenant(req.user.tid, async (c) => {
+        const ev = (await c.query('SELECT rentman_project_id FROM events WHERE id = $1', [id])).rows[0];
+        if (!ev) throw new RentmanError('Event not found', 404);
+        if (!ev.rentman_project_id) throw new RentmanError('Link this event to a Rentman project first (Rentman, on the event page).', 409);
+        const token = await getToken(c);
+        if (!token) throw new RentmanError('Connect Rentman first (Integrations page).', 409);
+        const list = await projectQuotes(token, Number(ev.rentman_project_id));
+        const have = new Map(
+          (await c.query('SELECT id, rentman_quote_id, rentman_version, status, imported_at FROM quotes WHERE rentman_quote_id = ANY($1::int[])', [list.map((q) => q.id)])).rows.map((r) => [r.rentman_quote_id as number, r]),
+        );
+        return {
+          project: Number(ev.rentman_project_id),
+          quotes: list.map((q) => {
+            const h = have.get(q.id);
+            return { ...q, imported: h ? { id: h.id, version: h.rentman_version, status: h.status, at: h.imported_at } : null };
+          }),
+        };
+      });
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+
+  // Pull one in (again): a read-only copy on the event, used to check the invoice against.
+  app.post('/api/events/:id/rentman/quotes/:quoteId/import', { preHandler: mgr }, async (req, reply) => {
+    const p = z.object({ id: uuid, quoteId: z.coerce.number().int().positive() }).parse(req.params);
+    const b = z.object({ accepted: z.boolean().default(true) }).parse(req.body ?? {});
+    try {
+      const out = await withTenant(req.user.tid, async (c) => {
+        const token = await getToken(c);
+        if (!token) throw new RentmanError('Connect Rentman first (Integrations page).', 409);
+        return importRentmanQuote(c, req.user.tid, req.user.sub, p.id, token, p.quoteId, b.accepted);
+      });
+      return reply.code(out.updated ? 200 : 201).send(out);
     } catch (e) {
       return fail(reply, e);
     }

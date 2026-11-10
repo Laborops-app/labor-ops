@@ -475,3 +475,51 @@ export async function checkOpenRequests(c: PoolClient, tid: string, token: strin
   }
   return linked;
 }
+
+// ---------- quotes ----------
+export type RentmanQuote = {
+  id: number; number: string; version: number; subject: string | null; date: string | null; expires: string | null;
+  price: number; crew: number; transport: number; project: number | null;
+};
+const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+const quoteRow = (q: any): RentmanQuote => ({
+  id: Number(q.id), number: String(q.number ?? q.displayname ?? q.id), version: Number(q.version) || 1, subject: text(q.subject, q.displayname),
+  date: ts(q.date), expires: ts(q.expiration_date), price: num(q.price), crew: num(q.project_crew_price), transport: num(q.project_transport_price), project: refId(q.project),
+});
+
+/** The quotes made for a project, newest version first. */
+export async function projectQuotes(token: string, projectId: number): Promise<RentmanQuote[]> {
+  return (await getAll(token, `/projects/${projectId}/quotes`)).map(quoteRow).sort((a, b) => b.version - a.version || b.id - a.id);
+}
+export async function rentmanQuote(token: string, quoteId: number): Promise<RentmanQuote> {
+  const j = await get(token, `/quotes/${quoteId}`);
+  return quoteRow(j?.data ?? j);
+}
+
+/**
+ * A project's crew functions that are on the financial documents (the labor part of its quotes), with their groups.
+ * Rentman's API gives a quote's totals but not its lines, so the lines are the project's crew functions now.
+ */
+export async function projectCrewFunctions(token: string, projectId: number) {
+  const [fns, groups] = await Promise.all([
+    getAll(token, `/projects/${projectId}/projectfunctions`),
+    getAll(token, `/projects/${projectId}/projectfunctiongroups`).catch(() => [] as any[]),
+  ]);
+  const g = new Map<number, { name: string; sort: number }>();
+  groups.forEach((x: any, i: number) => g.set(Number(x.id), { name: String(x.displayname || x.name || 'Crew'), sort: Number.isFinite(Number(x.order)) ? Number(x.order) : i }));
+  return fns
+    .filter((f: any) => (f.type ?? 'crew_function') === 'crew_function' && f.in_financial !== false)
+    .map((f: any) => {
+      const grp = g.get(refId(f.group) ?? -1);
+      return {
+        id: Number(f.id),
+        name: String(text(f.name_external, f.name, f.displayname) ?? 'Crew'),
+        group: grp?.name ?? null, groupSort: grp?.sort ?? 9999,
+        people: Math.max(1, num(f.amount) || 1),
+        start: ts(f.usageperiod_start) ?? ts(f.planperiod_start),
+        end: ts(f.usageperiod_end) ?? ts(f.planperiod_end),
+        variable: num(f.price_variable), fixed: num(f.price_fixed), total: num(f.price_total),
+      };
+    })
+    .sort((a: any, b: any) => a.groupSort - b.groupSort || String(a.start ?? '').localeCompare(String(b.start ?? '')) || a.id - b.id);
+}

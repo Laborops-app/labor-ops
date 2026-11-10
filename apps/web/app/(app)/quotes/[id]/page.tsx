@@ -7,14 +7,15 @@ import Shell from '@/components/Shell';
 import { Banner, Pill } from '@/components/ui';
 import CustomerSelect from '@/components/CustomerSelect';
 import { api, money } from '@/lib/api';
+import RentmanQuoteView from '@/components/RentmanQuoteView';
 
 type Line = { section: string; description: string; day: string; start: string; end: string; qty: string; hours: string; rate: string };
 type Skill = { id: string; name: string; active: boolean; groupId: string | null; billRate?: number };
 const span = (a: string, b: string) => { const m = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3)); let d = m(b) - m(a); if (d <= 0) d += 1440; return Math.round((d / 60) * 100) / 100; };
 type Totals = { subtotal: number; discount: number; tax: number; total: number };
 type Detail = {
-  quote: { id: string; number: number; title: string; status: string; customer_id: string | null; customer_email: string | null; customer_name: string | null; event_id: string | null; event_name: string | null; valid_until: string | null; intro: string | null; terms: string | null; tax_pct: number; discount: number; sent_at: string | null; sent_to: string | null; responded_at: string | null; response_note: string | null; layout_id: string | null };
-  lines: { section: string | null; description: string; day: string | null; startTime: string | null; endTime: string | null; qty: number; hours: number; rate: number }[];
+  quote: { id: string; number: number; title: string; status: string; customer_id: string | null; customer_email: string | null; customer_name: string | null; event_id: string | null; event_name: string | null; valid_until: string | null; intro: string | null; terms: string | null; tax_pct: number; discount: number; sent_at: string | null; sent_to: string | null; responded_at: string | null; response_note: string | null; layout_id: string | null; source?: string; rentman_number?: string | null; rentman_version?: number | null; rentman_total?: string | null; rentman_crew_total?: string | null; rentman_transport_total?: string | null; imported_at?: string | null };
+  lines: { section: string | null; description: string; day: string | null; startTime: string | null; endTime: string | null; qty: number; hours: number; rate: number; amount?: number }[];
   totals: Totals;
   link: string;
   canAdjustRates?: boolean;
@@ -125,6 +126,8 @@ function Body() {
 
   useTabTitle(d ? `Quote #${d.quote.number}` : null);
   if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
+  // A quote pulled in from Rentman is a read-only copy: change it in Rentman and pull it again.
+  if (d.quote.source === 'rentman') return <RentmanQuoteView d={d} onChange={apply} />;
   const q = d.quote;
   const email = to || q.customer_email || '';
   const send = async () => {

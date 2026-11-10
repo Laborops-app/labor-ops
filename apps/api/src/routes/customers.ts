@@ -73,7 +73,7 @@ export async function customerRoutes(app: FastifyInstance) {
            FROM events e WHERE e.customer_id = $1 ORDER BY e.start_date DESC`, [id])).rows;
       const quotes = (await c.query(
         `SELECT q.id, q.number, q.title, q.status, q.created_at,
-                (SELECT coalesce(sum(l.qty*l.hours*l.rate),0) FROM quote_lines l WHERE l.quote_id = q.id) AS subtotal, q.discount, q.tax_pct
+                (SELECT coalesce(sum(coalesce(l.amount, l.qty*l.hours*l.rate)),0) FROM quote_lines l WHERE l.quote_id = q.id) AS subtotal, q.discount, q.tax_pct
            FROM quotes q WHERE q.customer_id = $1 ORDER BY q.number DESC`, [id])).rows
         .map((q) => ({ ...q, total: Math.round(((Number(q.subtotal) - Number(q.discount)) * (1 + Number(q.tax_pct) / 100)) * 100) / 100 }));
       const divisions = (await c.query(`SELECT id, name, (SELECT count(*)::int FROM events e WHERE e.customer_id = d.id) AS event_count FROM customers d WHERE d.parent_id = $1 ORDER BY lower(name)`, [id])).rows;

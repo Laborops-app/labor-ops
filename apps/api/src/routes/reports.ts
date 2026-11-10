@@ -60,7 +60,7 @@ export async function buildReport(c: PoolClient, from: string, to: string) {
   ).rows;
   const quotes = (
     await c.query(
-      `SELECT q.event_id, sum(l.qty * l.hours * l.rate) * (1 + q.tax_pct / 100) - q.discount AS total
+      `SELECT q.event_id, sum(coalesce(l.amount, l.qty * l.hours * l.rate)) * (1 + q.tax_pct / 100) - q.discount AS total
          FROM quotes q JOIN quote_lines l ON l.quote_id = q.id
         WHERE q.event_id = ANY($1::uuid[]) AND q.status = 'accepted' GROUP BY q.id`,
       [ids],

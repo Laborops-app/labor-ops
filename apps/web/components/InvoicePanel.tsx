@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError, money, fmtDate } from '@/lib/api';
 import { Banner, Empty } from '@/components/ui';
+import QuoteCompare, { type Comparison, type QuoteChoice } from '@/components/QuoteCompare';
 
 type Line = { role: string; date: string; kind: 'regular' | 'overtime' | 'double' | 'day'; qty: number; unit: 'hour' | 'day'; rate: number; amount: number; description: string; qboItemId: string | null };
 type Billing = {
@@ -10,7 +11,10 @@ type Billing = {
   customer: { name: string; qbo_customer_id: string | null } | null;
   quickbooks: { connected: boolean; environment: string };
   overtime: { otAfter: number | null; otMult: number; dtAfter: number | null; dtMult: number };
-  invoices: { id: string; provider: 'qbo' | 'iif'; source: string; doc_number: string | null; total: string; created_at: string; created_by: string | null; url: string | null }[];
+  invoices: { id: string; provider: 'qbo' | 'iif'; source: string; doc_number: string | null; total: string; quoted_total?: string | null; created_at: string; created_by: string | null; url: string | null }[];
+  quotes: QuoteChoice[];
+  comparison: Comparison | null;
+  rentmanProject: number | null;
 };
 const KIND: Record<Line['kind'], string> = { regular: 'Regular', overtime: 'Overtime', double: 'Double time', day: 'Day rate' };
 
@@ -22,23 +26,35 @@ export default function InvoicePanel({ eventId, isAdmin }: { eventId: string; is
   const [error, setError] = useState('');
   const [ok, setOk] = useState<{ text: string; url?: string } | null>(null);
   const [busy, setBusy] = useState(false);
-  const load = () => api<Billing>(`/api/events/${eventId}/billing?source=${source}`).then(setB).catch((e) => setError(e.message));
+  // The quote to hold the invoice against ('' = the event's accepted or newest quote).
+  const [quoteId, setQuoteId] = useState('');
+  const load = () => api<Billing>(`/api/events/${eventId}/billing?source=${source}${quoteId ? `&quoteId=${quoteId}` : ''}`).then(setB).catch((e) => setError(e.message));
   useEffect(() => {
-    setB(null);
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eventId, source]);
+  }, [eventId, source, quoteId]);
+  const cmp = b?.comparison ?? null;
+  const over = !!cmp && cmp.status === 'over';
+  const overText = cmp ? `This invoice is ${money(cmp.invoiced)}: ${money(cmp.diff)}${cmp.pct !== null ? ` (${cmp.pct}%)` : ''} more than quote #${cmp.quote.number} (${money(cmp.quoted)} for labor).` : '';
 
-  const toQbo = async (again = false) => {
+  const toQbo = async (again = false, overOk = false) => {
+    // More than was quoted: ask before creating it.
+    if (over && !overOk) {
+      if (!confirm(`${overText}\n\nCreate the invoice anyway?`)) return;
+      overOk = true;
+    }
     setBusy(true);
     setError('');
     setOk(null);
     try {
-      const r = await api<{ invoice: { id: string; docNumber: string | null; url: string } }>(`/api/events/${eventId}/billing/quickbooks`, { body: { source, again: again || undefined } });
+      const r = await api<{ invoice: { id: string; docNumber: string | null; url: string } }>(`/api/events/${eventId}/billing/quickbooks`, {
+        body: { source, again: again || undefined, quoteId: cmp?.quote.id ?? null, overQuoteOk: overOk || undefined },
+      });
       setOk({ text: `Invoice ${r.invoice.docNumber ? `#${r.invoice.docNumber} ` : ''}created in QuickBooks. Review and send it from there.`, url: r.invoice.url });
       await load();
     } catch (e) {
-      if (e instanceof ApiError && e.reason === 'duplicate' && confirm(`${e.message}\n\nCreate another invoice?`)) return toQbo(true);
+      if (e instanceof ApiError && e.reason === 'duplicate' && confirm(`${e.message}\n\nCreate another invoice?`)) return toQbo(true, overOk);
+      if (e instanceof ApiError && e.reason === 'over_quote' && confirm(`${e.message}\n\nCreate the invoice anyway?`)) return toQbo(again, true);
       setError((e as Error).message);
     } finally {
       setBusy(false);
@@ -74,6 +90,16 @@ export default function InvoicePanel({ eventId, isAdmin }: { eventId: string; is
                     ? `Time changed after ${b.clientApproval.customer ?? 'the client'} approved it; they need to approve again in their portal before you invoice.`
                     : `${b.clientApproval.customer ?? 'This client'} approves timesheets in their portal before you invoice. Waiting for them.`}</Banner>
           )}
+          <QuoteCompare
+            eventId={eventId}
+            quotes={b.quotes}
+            comparison={b.comparison}
+            rentmanProject={b.rentmanProject}
+            quoteId={quoteId || cmp?.quote.id || ''}
+            onPick={setQuoteId}
+            onChanged={(msg, id) => { if (id) setQuoteId(id); setOk({ text: msg }); load(); }}
+            onError={setError}
+          />
           <section className="card">
             <div className="row space">
               <h2 style={{ margin: 0 }}>{b.customer ? b.customer.name : 'No customer'}</h2>
@@ -110,6 +136,7 @@ export default function InvoicePanel({ eventId, isAdmin }: { eventId: string; is
           {b.canBill && b.lines.length > 0 && (
             <section className="card">
               <h2>Send to QuickBooks</h2>
+              {over && <p className="small quote-over-note"><b>Over the quote.</b> {overText} You&apos;ll be asked to confirm.</p>}
               {b.quickbooks.connected ? (
                 <>
                   {b.unmapped.length > 0 && <p className="small" style={{ color: 'var(--warn)' }}>Choose a QuickBooks item for {b.unmapped.join(', ')} under Integrations first.</p>}
@@ -124,7 +151,14 @@ export default function InvoicePanel({ eventId, isAdmin }: { eventId: string; is
               <h3 style={{ marginTop: 14 }}>QuickBooks Desktop</h3>
               <div className="row">
                 <input value={doc} onChange={(e) => setDoc(e.target.value.replace(/[^\w-]/g, '').slice(0, 21))} placeholder="Invoice number (optional)" aria-label="Invoice number" style={{ maxWidth: 220 }} />
-                <a className="btn" href={`/api/events/${eventId}/billing/iif?source=${source}${doc ? `&docNumber=${encodeURIComponent(doc)}` : ''}`} onClick={() => setTimeout(load, 1500)}>
+                <a
+                  className="btn"
+                  href={`/api/events/${eventId}/billing/iif?source=${source}${doc ? `&docNumber=${encodeURIComponent(doc)}` : ''}${cmp ? `&quoteId=${cmp.quote.id}` : ''}${over ? '&overQuote=1' : ''}`}
+                  onClick={(e) => {
+                    if (over && !confirm(`${overText}\n\nDownload the invoice anyway?`)) return e.preventDefault();
+                    setTimeout(load, 1500);
+                  }}
+                >
                   Download .IIF file
                 </a>
               </div>
@@ -141,6 +175,7 @@ export default function InvoicePanel({ eventId, isAdmin }: { eventId: string; is
                     <span>
                       {i.provider === 'qbo' ? 'QuickBooks Online' : 'Desktop file'}
                       {i.doc_number ? ` #${i.doc_number}` : ''} · {money(Number(i.total))} · from {i.source === 'time' ? 'approved time' : 'schedule'}
+                      {i.quoted_total != null && <span className="muted small"> · quoted {money(Number(i.quoted_total))}</span>}
                       <span className="muted small"> · {new Date(i.created_at).toLocaleString()}{i.created_by ? ` · ${i.created_by}` : ''}</span>
                     </span>
                     {i.url && <a href={i.url} target="_blank" rel="noreferrer" className="small">Open</a>}

@@ -67,8 +67,9 @@ const fields = z.object({
   lines: z.array(line).max(300).optional(),
 });
 
-export function totals(lines: { qty: unknown; hours: unknown; rate: unknown }[], discount: unknown, taxPct: unknown) {
-  const subtotal = r2(lines.reduce((a, l) => a + Number(l.qty) * Number(l.hours) * Number(l.rate), 0));
+export function totals(lines: { qty: unknown; hours: unknown; rate: unknown; amount?: unknown }[], discount: unknown, taxPct: unknown) {
+  // A line with an exact amount (imported from Rentman) counts that amount; others are people × hours × rate.
+  const subtotal = r2(lines.reduce((a, l) => a + (l.amount !== undefined && l.amount !== null ? Number(l.amount) : Number(l.qty) * Number(l.hours) * Number(l.rate)), 0));
   const disc = Math.min(Number(discount) || 0, subtotal);
   const taxable = r2(subtotal - disc);
   const tax = r2(taxable * (Number(taxPct) || 0) / 100);
@@ -80,8 +81,8 @@ async function load(c: PoolClient, id: string) {
     `SELECT q.*, cu.name AS customer_name, cu.email AS customer_email, cu.contact_name, ev.name AS event_name
        FROM quotes q LEFT JOIN (${CUSTOMER_SQL}) cu ON cu.id = q.customer_id LEFT JOIN events ev ON ev.id = q.event_id WHERE q.id = $1`, [id])).rows[0];
   if (!q) return null;
-  const lines = (await c.query("SELECT id, section, description, to_char(day,'YYYY-MM-DD') AS day, start_time, end_time, qty, hours, rate FROM quote_lines WHERE quote_id = $1 ORDER BY sort", [id])).rows
-    .map((l) => ({ id: l.id, section: l.section, description: l.description, day: l.day, startTime: l.start_time, endTime: l.end_time, qty: Number(l.qty), hours: Number(l.hours), rate: Number(l.rate), amount: r2(Number(l.qty) * Number(l.hours) * Number(l.rate)) }));
+  const lines = (await c.query("SELECT id, section, description, to_char(day,'YYYY-MM-DD') AS day, start_time, end_time, qty, hours, rate, amount FROM quote_lines WHERE quote_id = $1 ORDER BY sort", [id])).rows
+    .map((l) => ({ id: l.id, section: l.section, description: l.description, day: l.day, startTime: l.start_time, endTime: l.end_time, qty: Number(l.qty), hours: Number(l.hours), rate: Number(l.rate), amount: l.amount === null ? r2(Number(l.qty) * Number(l.hours) * Number(l.rate)) : Number(l.amount) }));
   return { quote: { ...q, tax_pct: Number(q.tax_pct), discount: Number(q.discount) }, lines, totals: totals(lines, q.discount, q.tax_pct) };
 }
 
@@ -165,8 +166,8 @@ export async function quoteRoutes(app: FastifyInstance) {
   app.get('/api/quotes', { preHandler: mgr }, async (req) =>
     withTenant(req.user.tid, async (c) => ({
       quotes: (await c.query(
-        `SELECT q.id, q.number, q.title, q.status, q.valid_until, q.sent_at, q.created_at, cu.name AS customer_name,
-                (SELECT coalesce(sum(l.qty*l.hours*l.rate),0) FROM quote_lines l WHERE l.quote_id = q.id) AS subtotal, q.discount, q.tax_pct
+        `SELECT q.id, q.number, q.title, q.status, q.valid_until, q.sent_at, q.created_at, q.source, q.rentman_number, q.rentman_version, cu.name AS customer_name,
+                (SELECT coalesce(sum(coalesce(l.amount, l.qty*l.hours*l.rate)),0) FROM quote_lines l WHERE l.quote_id = q.id) AS subtotal, q.discount, q.tax_pct
            FROM quotes q LEFT JOIN customers cu ON cu.id = q.customer_id ORDER BY q.number DESC`)).rows
         .map((q) => ({ ...q, total: totals([{ qty: 1, hours: 1, rate: q.subtotal }], q.discount, q.tax_pct).total })),
     })),
@@ -235,6 +236,8 @@ export async function quoteRoutes(app: FastifyInstance) {
       }
       if (b.layoutId && !(await c.query('SELECT 1 FROM quote_layouts WHERE id = $1', [b.layoutId])).rowCount) return { code: 404, error: 'Quote layout not found' };
       const has = (k: keyof typeof b) => b[k] !== undefined;
+      if (cur.source === 'rentman' && (has('lines') || has('taxPct') || has('discount') || has('title') || has('intro') || has('terms')))
+        return { code: 409, error: 'This quote comes from Rentman. Change it in Rentman, then pull it again from the event’s Invoice tab.', reason: 'rentman' };
       // Anything the customer has already answered is a record; changing the content makes it a new revision, so it goes back to draft.
       const reopen = cur.status !== 'draft' && (has('lines') || has('taxPct') || has('discount') || has('title') || has('intro') || has('terms'));
       await c.query(
@@ -256,11 +259,29 @@ export async function quoteRoutes(app: FastifyInstance) {
   app.post('/api/quotes/:id/refresh-lines', { preHandler: mgr }, async (req, reply) => {
     const { id } = z.object({ id: uuid }).parse(req.params);
     const out = await withTenant(req.user.tid, async (c) => {
-      const q = (await c.query('SELECT event_id FROM quotes WHERE id = $1', [id])).rows[0];
+      const q = (await c.query('SELECT event_id, source FROM quotes WHERE id = $1', [id])).rows[0];
       if (!q) return { code: 404, error: 'Quote not found' };
+      if (q.source === 'rentman') return { code: 409, error: 'This quote comes from Rentman; its lines come from there.', reason: 'rentman' };
       if (!q.event_id) return { code: 400, error: 'This quote is not linked to an event' };
       await writeLines(c, req.user.tid, id, await linesFromEvent(c, q.event_id));
       await c.query("UPDATE quotes SET updated_at = now(), status = 'draft', responded_at = NULL WHERE id = $1", [id]);
+      return { code: 200, ...(await load(c, id)) };
+    });
+    const { code, ...rest } = out as { code: number; [k: string]: unknown };
+    return reply.code(code).send(rest);
+  });
+
+  // A Rentman quote's answer is recorded in Rentman, not through our accept link: set it by hand.
+  app.post('/api/quotes/:id/status', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const { status } = z.object({ status: z.enum(['sent', 'accepted', 'declined']) }).parse(req.body);
+    const out = await withTenant(req.user.tid, async (c) => {
+      const q = (await c.query('SELECT source, event_id FROM quotes WHERE id = $1', [id])).rows[0];
+      if (!q) return { code: 404, error: 'Quote not found' };
+      if (q.source !== 'rentman') return { code: 409, error: 'The customer accepts or declines this quote from the link they were sent.' };
+      await c.query("UPDATE quotes SET status = $2, responded_at = CASE WHEN $2 = 'sent' THEN NULL ELSE now() END, updated_at = now() WHERE id = $1", [id, status]);
+      await audit(c, req.user.tid, req.user.sub, 'quote.status', 'quote', id, { status });
+      await onQuote(c, req.user.tid, q.event_id, status, req.user.sub);
       return { code: 200, ...(await load(c, id)) };
     });
     const { code, ...rest } = out as { code: number; [k: string]: unknown };
@@ -283,6 +304,7 @@ export async function quoteRoutes(app: FastifyInstance) {
     const out = await withTenant(req.user.tid, async (c) => {
       const d = await load(c, id);
       if (!d) return { code: 404, error: 'Quote not found' };
+      if (d.quote.source === 'rentman') return { code: 409, error: 'This quote comes from Rentman; the client gets it from Rentman.', reason: 'rentman' };
       const to = b.to ?? d.quote.customer_email;
       if (!to) return { code: 400, error: 'Add an email address for the customer, or type one in' };
       if (!d.lines.length) return { code: 400, error: 'Add at least one line before sending' };

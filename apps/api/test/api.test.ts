@@ -4229,3 +4229,99 @@ test('fast staffing: build quietly then publish, honest counts, nudges, Are you 
   assert.equal((await call(a, 'POST', `/api/avail-checks/${mine[0].id}/close`)).status, 200);
   assert.equal((await call(c3.session, 'GET', '/api/my/avail-checks')).json.checks.length, 0);
 });
+
+test('Rentman quotes: pull a quote onto an event and hold the invoice against it', async () => {
+  const a = await register('rmq');
+  const tid = await tenantOf(a);
+  await call(a, 'POST', '/api/skills', { name: 'Stagehand', payRate: 25, billRate: 45 });
+  await call(a, 'POST', '/api/skills', { name: 'Rigger', payRate: 35, billRate: 60 });
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Arena', startDate: '2031-05-01', endDate: '2031-05-01' })).json.event.id;
+  await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: '2031-05-01T15:00:00Z', endsAt: '2031-05-01T23:00:00Z', headcount: 4 });
+
+  const real = globalThis.fetch;
+  const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: { 'content-type': 'application/json' } });
+  const quote = (id: number, version: number) => ({ id, number: 'Q-2031', version, subject: 'Arena labor', project: '/projects/400', price: 9000, project_crew_price: 1600, project_transport_price: 200, date: '2031-04-01', expiration_date: '2031-04-30' });
+  let functions: any[] = [
+    { id: 1, type: 'crew_function', in_financial: true, name: 'Stage hand', name_external: 'Stagehands', amount: 4, usageperiod_start: '2031-05-01T15:00:00Z', usageperiod_end: '2031-05-01T23:00:00Z', price_variable: 1280, price_fixed: 0, price_total: 1280, group: '/projectfunctiongroups/9' },
+    { id: 2, type: 'crew_function', in_financial: true, name: 'Truck driver', amount: 1, planperiod_start: '2031-05-01T14:00:00Z', planperiod_end: '2031-05-01T22:00:00Z', price_variable: 0, price_fixed: 320, price_total: 320, group: '/projectfunctiongroups/9' },
+    { id: 3, type: 'transport_function', in_financial: true, name: 'Truck', amount: 1, price_total: 200 },
+    { id: 4, type: 'crew_function', in_financial: false, name: 'Internal planner', amount: 1, price_total: 999 },
+  ];
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = String(input);
+    if (!url.startsWith('https://api.rentman.net')) return real(input, init);
+    if (url.includes('/projects/400/quotes')) return json({ data: [quote(76, 1), quote(77, 2)] });
+    if (url.includes('/quotes/77')) return json({ data: quote(77, 2) });
+    if (url.includes('/quotes/55')) return json({ data: { ...quote(55, 1), project: '/projects/999' } });
+    if (url.includes('/projects/400/projectfunctiongroups')) return json({ data: [{ id: 9, displayname: 'Load in', order: 1 }] });
+    if (url.includes('/projects/400/projectfunctions')) return json({ data: functions });
+    if (url.includes('/projects')) return json({ data: [] });
+    return json({ error: 'unexpected' }, 404);
+  }) as typeof fetch;
+  try {
+    // not linked / not connected
+    assert.equal((await call(a, 'GET', `/api/events/${ev}/rentman/quotes`)).status, 409);
+    await withTenant(tid, (c) => c.query('UPDATE events SET rentman_project_id = 400 WHERE id = $1', [ev]));
+    assert.equal((await call(a, 'GET', `/api/events/${ev}/rentman/quotes`)).status, 409); // Rentman not connected
+    assert.equal((await call(a, 'PUT', '/api/rentman/settings', { token: 'good-token-123456' })).status, 200);
+
+    const list = await call(a, 'GET', `/api/events/${ev}/rentman/quotes`);
+    assert.equal(list.status, 200, list.text);
+    assert.deepEqual(list.json.quotes.map((q: any) => [q.id, q.version, q.crew, q.imported]), [[77, 2, 1600, null], [76, 1, 1600, null]]);
+    assert.equal((await call(a, 'POST', `/api/events/${ev}/rentman/quotes/55/import`, {})).status, 400); // another project
+
+    const imp = await call(a, 'POST', `/api/events/${ev}/rentman/quotes/77/import`, { accepted: true });
+    assert.equal(imp.status, 201, imp.text);
+    assert.deepEqual([imp.json.lines, imp.json.crewTotal, imp.json.warnings.length], [2, 1600, 0]);
+    const q = (await call(a, 'GET', `/api/quotes/${imp.json.id}`)).json;
+    assert.equal(q.quote.source, 'rentman');
+    assert.equal(q.quote.status, 'accepted');
+    assert.equal(q.quote.rentman_version, 2);
+    assert.deepEqual(q.lines.map((l: any) => [l.section, l.description, l.qty, l.hours, l.amount]), [['Load in', 'Truck driver · travel and other costs', 1, 1, 320], ['Load in', 'Stagehands', 4, 8, 1280]]);
+    assert.equal(q.totals.subtotal, 1600);
+    // the event moved to Confirmed with an accepted quote
+    assert.equal((await withTenant(tid, (c) => c.query('SELECT pipeline_status FROM events WHERE id = $1', [ev]))).rows[0].pipeline_status, 'confirmed');
+    // read-only here
+    assert.equal((await call(a, 'PUT', `/api/quotes/${q.quote.id}`, { lines: [] })).status, 409);
+    assert.equal((await call(a, 'POST', `/api/quotes/${q.quote.id}/send`, { to: 'x@example.com' })).status, 409);
+    assert.equal((await call(a, 'POST', `/api/quotes/${q.quote.id}/refresh-lines`)).status, 409);
+    assert.equal((await call(a, 'PUT', `/api/quotes/${q.quote.id}`, { validUntil: '2031-05-15' })).status, 200);
+
+    // Billing from the schedule: Stagehand quoted 1280 (32 h), billed 4 × 8 × 45 = 1440; truck driver quoted, not billed.
+    let bill = (await call(a, 'GET', `/api/events/${ev}/billing?source=schedule`)).json;
+    assert.equal(bill.comparison.quote.id, q.quote.id);
+    assert.equal(bill.comparison.quoted, 1600);
+    assert.equal(bill.comparison.invoiced, 1440);
+    assert.equal(bill.comparison.status, 'under');
+    const sh = bill.comparison.rows.find((r: any) => r.role === 'Stagehands' || r.role === 'Stagehand');
+    assert.deepEqual([sh.quotedHours, sh.invoicedHours, sh.diff, sh.pct, sh.status], [32, 32, 160, 12.5, 'over']);
+    assert.equal(bill.comparison.rows.find((r: any) => /Truck driver/.test(r.role)).status, 'not_invoiced');
+
+    // A rigger that was never quoted puts the invoice over: the download needs a confirmation.
+    await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Rigger', startsAt: '2031-05-01T15:00:00Z', endsAt: '2031-05-01T23:00:00Z', headcount: 2 });
+    bill = (await call(a, 'GET', `/api/events/${ev}/billing?source=schedule`)).json;
+    assert.equal(bill.comparison.invoiced, 2400);
+    assert.equal(bill.comparison.status, 'over');
+    assert.equal(bill.comparison.rows.find((r: any) => r.role === 'Rigger').status, 'not_quoted');
+    const blocked = await call(a, 'GET', `/api/events/${ev}/billing/iif?source=schedule`);
+    assert.equal(blocked.status, 409);
+    assert.equal(blocked.json.reason, 'over_quote');
+    assert.equal((await call(a, 'GET', `/api/events/${ev}/billing/iif?source=schedule&overQuote=1`)).status, 200);
+    const inv = (await call(a, 'GET', `/api/events/${ev}/billing?source=schedule`)).json.invoices[0];
+    assert.equal(Number(inv.quoted_total), 1600);
+
+    // Pulling again (crew changed in Rentman) replaces the copy, keeps the same quote, and warns about the mismatch.
+    functions = functions.map((f) => (f.id === 1 ? { ...f, amount: 5, price_variable: 1600, price_total: 1600 } : f));
+    const again = await call(a, 'POST', `/api/events/${ev}/rentman/quotes/77/import`, { accepted: true });
+    assert.equal(again.status, 200);
+    assert.equal(again.json.id, q.quote.id);
+    assert.equal(again.json.crewTotal, 1920);
+    assert.match(again.json.warnings[0], /crew may have changed/);
+    assert.equal((await call(a, 'GET', `/api/events/${ev}/rentman/quotes`)).json.quotes[0].imported.id, q.quote.id);
+
+    // Status is set by hand for a Rentman quote
+    assert.equal((await call(a, 'POST', `/api/quotes/${q.quote.id}/status`, { status: 'declined' })).json.quote.status, 'declined');
+  } finally {
+    globalThis.fetch = real;
+  }
+});

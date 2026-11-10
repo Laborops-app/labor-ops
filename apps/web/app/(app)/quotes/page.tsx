@@ -7,7 +7,7 @@ import TopbarAction, { PlusIcon, EditIcon, SearchIcon } from '@/components/Topba
 import { Banner, Empty } from '@/components/ui';
 import { api, fmtDate, money } from '@/lib/api';
 
-type Q = { id: string; number: number; title: string; status: string; customer_name: string | null; total: number; valid_until: string | null; sent_at: string | null; created_at: string };
+type Q = { id: string; number: number; title: string; status: string; source?: string; rentman_number?: string | null; rentman_version?: number | null; customer_name: string | null; total: number; valid_until: string | null; sent_at: string | null; created_at: string };
 const VIEWS = ['all', 'draft', 'sent', 'accepted', 'declined'] as const;
 type View = (typeof VIEWS)[number];
 const PAGE = 25;
@@ -90,7 +90,7 @@ function Body() {
                     <td className="av-col"><span className="av c2" aria-hidden="true" style={{ fontSize: 12 }}>#{x.number}</span></td>
                     <td>
                       <Link href={`/quotes/${x.id}`} className="rowlink" onClick={(e) => e.stopPropagation()}>{x.title}</Link>
-                      <span className="sub">Created {fmtDate(String(x.created_at).slice(0, 10))}</span>
+                      <span className="sub">{x.source === 'rentman' ? `From Rentman ${x.rentman_number ?? ''}${x.rentman_version ? ` v${x.rentman_version}` : ''} · ` : ''}Created {fmtDate(String(x.created_at).slice(0, 10))}</span>
                     </td>
                     <td>{x.customer_name ?? <span className="muted">—</span>}</td>
                     <td><b>{money(Number(x.total))}</b></td>

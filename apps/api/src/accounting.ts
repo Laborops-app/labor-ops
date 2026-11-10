@@ -205,7 +205,7 @@ export async function eventBilling(c: PoolClient, eventId: string, source: BillS
     ? (await c.query('SELECT cu.id, cu.name, cu.qbo_customer_id, pc.email, pc.phone FROM customers cu LEFT JOIN LATERAL (SELECT email, phone FROM customer_contacts WHERE customer_id = cu.id ORDER BY is_primary DESC LIMIT 1) pc ON true WHERE cu.id = $1', [ev.customer_id])).rows[0] ?? null
     : null;
   if (!customer) warnings.push(ev.client ? `Link this event to a customer in the CRM ("${ev.client}" is only typed in) so the invoice goes to the right QuickBooks customer.` : 'This event has no customer. Pick one in Event details.');
-  const invoices = (await c.query(`SELECT i.id, i.provider, i.source, i.external_id, i.doc_number, i.total, i.created_at, u.name AS created_by FROM event_invoices i LEFT JOIN users u ON u.id = i.created_by WHERE i.event_id = $1 ORDER BY i.created_at DESC`, [eventId])).rows;
+  const invoices = (await c.query(`SELECT i.id, i.provider, i.source, i.external_id, i.doc_number, i.total, i.quoted_total, i.created_at, u.name AS created_by FROM event_invoices i LEFT JOIN users u ON u.id = i.created_by WHERE i.event_id = $1 ORDER BY i.created_at DESC`, [eventId])).rows;
   return {
     event: { id: ev.id, name: ev.name, start_date: ev.start_date, end_date: ev.end_date, timezone: ev.timezone as string, client: ev.client },
     customer,
