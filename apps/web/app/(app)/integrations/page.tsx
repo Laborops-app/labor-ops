@@ -8,22 +8,23 @@ import type { Me } from '@/lib/api';
 import { Banner } from '@/components/ui';
 import { api } from '@/lib/api';
 
-type RunResult = { created: number; moved: number; datesUpdated: number; flagged: number; skipped: number; errors?: string };
+type RunResult = { created: number; moved: number; datesUpdated: number; flagged: number; skipped: number; built?: number; shiftChanges?: number; errors?: string };
 type St = {
   connected: boolean; projects: number; lastSync: string | null;
-  pipeline?: { autoEvents: boolean; fromDate: string | null; skipCanceled: boolean; lastRunAt: string | null; lastResult: RunResult | null };
+  pipeline?: { autoEvents: boolean; fromDate: string | null; skipCanceled: boolean; buildShifts?: boolean; lastRunAt: string | null; lastResult: RunResult | null };
 };
 const runText = (r: RunResult) =>
-  r.errors ? `Failed: ${r.errors}` : [`${r.created} new event${r.created === 1 ? '' : 's'}`, `${r.moved} moved`, r.datesUpdated ? `${r.datesUpdated} re-dated` : '', r.flagged ? `${r.flagged} sent to a coordinator to check` : ''].filter(Boolean).join(', ');
+  r.errors ? `Failed: ${r.errors}` : [`${r.created} new event${r.created === 1 ? '' : 's'}`, `${r.moved} moved`, r.datesUpdated ? `${r.datesUpdated} re-dated` : '', r.shiftChanges ? `${r.shiftChanges} shift change${r.shiftChanges === 1 ? '' : 's'} from Rentman` : '', r.flagged ? `${r.flagged} sent to a coordinator to check` : ''].filter(Boolean).join(', ');
 
 /** Rentman projects into the pipeline: on/off, from which date, skip canceled projects. */
 function RentmanPipeline({ s, busy, act }: { s: St; busy: string; act: (key: string, msg: string, fn: () => Promise<unknown>) => Promise<boolean> }) {
-  const p = s.pipeline ?? { autoEvents: false, fromDate: null, skipCanceled: true, lastRunAt: null, lastResult: null };
+  const p = s.pipeline ?? { autoEvents: false, fromDate: null, skipCanceled: true, buildShifts: true, lastRunAt: null, lastResult: null };
   const [from, setFrom] = useState(p.fromDate ?? '');
   const [skip, setSkip] = useState(p.skipCanceled);
+  const [build, setBuild] = useState(p.buildShifts ?? true);
   const save = (autoEvents: boolean) =>
     act('pipe', autoEvents ? 'Rentman projects now come into the pipeline. Syncing…' : 'Rentman projects no longer come into the pipeline on their own.', async () => {
-      await api('/api/rentman/pipeline', { method: 'PUT', body: { autoEvents, fromDate: from || null, skipCanceled: skip } });
+      await api('/api/rentman/pipeline', { method: 'PUT', body: { autoEvents, fromDate: from || null, skipCanceled: skip, buildShifts: build } });
       if (autoEvents) await api('/api/rentman/sync', { body: {} });
     });
   return (
@@ -46,13 +47,56 @@ function RentmanPipeline({ s, busy, act }: { s: St; busy: string; act: (key: str
         <label className="check">
           <input type="checkbox" checked={skip} onChange={(e) => setSkip(e.target.checked)} /> Skip projects already canceled
         </label>
-        {(from !== (p.fromDate ?? '') || skip !== p.skipCanceled) && (
+        <label className="check">
+          <input type="checkbox" checked={build} onChange={(e) => setBuild(e.target.checked)} /> Build days and shifts from Rentman’s crew and transport
+        </label>
+        {(from !== (p.fromDate ?? '') || skip !== p.skipCanceled || build !== (p.buildShifts ?? true)) && (
           <button type="button" className="btn small" disabled={!!busy} onClick={() => save(p.autoEvents)}>Save</button>
         )}
       </div>
       {p.lastRunAt && p.lastResult && (
         <p className="small">Last run {new Date(p.lastRunAt).toLocaleString()}: {runText(p.lastResult)}.</p>
       )}
+      <RoleMap />
+    </>
+  );
+}
+
+/** Rentman function names that aren't a LaborOps role by name: pick the role once. */
+function RoleMap() {
+  const [d, setD] = useState<{ map: { rentman_name: string; role_name: string | null }[]; roles: string[] } | null>(null);
+  const [msg, setMsg] = useState('');
+  const load = () => api<NonNullable<typeof d>>('/api/rentman/role-map').then(setD).catch(() => {});
+  useEffect(() => { load(); }, []);
+  if (!d || !d.map.length) return null;
+  const set = async (rentmanName: string, roleName: string) => {
+    await api('/api/rentman/role-map', { method: 'PUT', body: { rentmanName, roleName: roleName || null } });
+    setMsg(`“${rentmanName}” ${roleName ? `becomes ${roleName}` : 'keeps its Rentman name'} from the next sync.`);
+    load();
+  };
+  return (
+    <>
+      <h3>Role names</h3>
+      <p className="muted small">Rentman crew functions whose names aren’t a LaborOps role. Pick the role each one becomes; shifts not yet staffed or edited change on the next sync.</p>
+      {msg && <p className="small">{msg}</p>}
+      <div className="table-wrap">
+        <table className="table">
+          <thead><tr><th>Rentman function</th><th>LaborOps role</th></tr></thead>
+          <tbody>
+            {d.map.map((m) => (
+              <tr key={m.rentman_name}>
+                <td>{m.rentman_name}</td>
+                <td>
+                  <select value={m.role_name ?? ''} onChange={(e) => set(m.rentman_name, e.target.value)} aria-label={`Role for ${m.rentman_name}`}>
+                    <option value="">Keep Rentman’s name</option>
+                    {d.roles.map((r) => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }

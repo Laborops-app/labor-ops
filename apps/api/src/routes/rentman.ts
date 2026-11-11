@@ -5,6 +5,7 @@ import { guard } from '../auth';
 import { checkEventRequest, checkOpenRequests, clearToken, getToken, projectQuotes, pushCustomer, pushEventRequest, RentmanError, saveToken, syncEquipment, testToken } from '../rentman';
 import { importRentmanQuote } from '../quoteCompare';
 import { loadPipelineSettings, pullRentman, savePipelineSettings } from '../rentmanPipeline';
+import { buildFromRentman, keepConflict } from '../rentmanBuild';
 
 const uuid = z.string().uuid();
 const adm = guard('admin');
@@ -26,12 +27,12 @@ export async function rentmanRoutes(app: FastifyInstance) {
   // New Rentman projects become events in the pipeline (every 30 minutes and on each sync), from a date on.
   app.put('/api/rentman/pipeline', { preHandler: adm }, async (req) => {
     const b = z
-      .object({ autoEvents: z.boolean(), fromDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(), skipCanceled: z.boolean().default(true) })
+      .object({ autoEvents: z.boolean(), fromDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(), skipCanceled: z.boolean().default(true), buildShifts: z.boolean().default(true) })
       .parse(req.body);
     return withTenant(req.user.tid, async (c) => {
       // Turning it on starts from today unless a date is given, so years of old projects don't flood the pipeline.
       const fromDate = b.fromDate ?? (b.autoEvents ? (await c.query("SELECT to_char((now() AT TIME ZONE timezone)::date, 'YYYY-MM-DD') AS d FROM tenants LIMIT 1")).rows[0].d : null);
-      await savePipelineSettings(c, req.user.tid, req.user.sub, { autoEvents: b.autoEvents, fromDate, skipCanceled: b.skipCanceled });
+      await savePipelineSettings(c, req.user.tid, req.user.sub, { autoEvents: b.autoEvents, fromDate, skipCanceled: b.skipCanceled, buildShifts: b.buildShifts });
       await audit(c, req.user.tid, req.user.sub, 'rentman.pipeline', 'integration', null, { ...b, fromDate });
       return { pipeline: await loadPipelineSettings(c) };
     });
@@ -277,5 +278,82 @@ export async function rentmanRoutes(app: FastifyInstance) {
     } catch (e) {
       return fail(reply, e);
     }
+  });
+
+  // ---------- days and shifts from Rentman's crew and transport ----------
+  const buildOut = async (c: any, tid: string, by: string, id: string, apply: boolean) => {
+    const token = await getToken(c);
+    if (!token) throw new RentmanError('Connect Rentman first (Integrations page).', 409);
+    const r = await buildFromRentman(c, tid, by, id, token, { apply });
+    const built = (await c.query('SELECT rentman_build FROM events WHERE id = $1', [id])).rows[0]?.rentman_build ?? false;
+    return {
+      built,
+      result: r.result,
+      unmatched: r.unmatched,
+      unscheduled: r.unscheduled,
+      adds: r.plan.adds.map((w) => ({ key: w.key, role: w.role, start: w.start, end: w.end, headcount: w.headcount, group: w.group })),
+      updates: r.plan.updates.map((u) => ({ shiftId: u.shiftId, role: u.want.role, start: u.want.start, end: u.want.end, headcount: u.want.headcount, headcountOnly: u.headcountOnly })),
+      removes: r.plan.removes,
+      conflicts: r.plan.conflicts,
+      unchanged: r.plan.unchanged,
+    };
+  };
+  // What building (or re-syncing) would do, without changing anything.
+  app.get('/api/events/:id/rentman/build', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    try {
+      return await withTenant(req.user.tid, (c) => buildOut(c, req.user.tid, req.user.sub, id, false));
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+  // Build: days, groups and shifts from Rentman; kept in step from now on (safe changes only).
+  app.post('/api/events/:id/rentman/build', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    try {
+      return await withTenant(req.user.tid, (c) => buildOut(c, req.user.tid, req.user.sub, id, true));
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+  // Stop keeping this event in step with Rentman (its shifts stay).
+  app.delete('/api/events/:id/rentman/build', { preHandler: mgr }, async (req) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    return withTenant(req.user.tid, async (c) => {
+      await c.query('UPDATE events SET rentman_build = false WHERE id = $1', [id]);
+      await audit(c, req.user.tid, req.user.sub, 'event.rentman_build_off', 'event', id);
+      return { ok: true };
+    });
+  });
+  // A change a coordinator handled: keep the shift as it is here (for a removed one: keep it as an ordinary shift).
+  app.post('/api/events/:id/rentman/build/keep', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const b = z.object({ key: z.string().min(1).max(40), hash: z.string().max(400).nullable() }).parse(req.body);
+    const n = await withTenant(req.user.tid, async (c) => {
+      const n = await keepConflict(c, id, b.key, b.hash);
+      if (n) await audit(c, req.user.tid, req.user.sub, 'event.rentman_keep', 'event', id, b);
+      return n;
+    });
+    return n ? { ok: true } : reply.code(404).send({ error: 'Shift not found' });
+  });
+
+  // Rentman function names and the LaborOps role each one becomes.
+  app.get('/api/rentman/role-map', { preHandler: mgr }, async (req) =>
+    withTenant(req.user.tid, async (c) => ({
+      map: (await c.query('SELECT rentman_name, role_name FROM rentman_role_map ORDER BY role_name IS NOT NULL, rentman_name')).rows,
+      roles: (await c.query('SELECT name FROM skills WHERE active ORDER BY lower(name)')).rows.map((r) => r.name),
+    })),
+  );
+  app.put('/api/rentman/role-map', { preHandler: mgr }, async (req) => {
+    const b = z.object({ rentmanName: z.string().trim().min(1).max(200), roleName: z.string().trim().min(1).max(100).nullable() }).parse(req.body);
+    return withTenant(req.user.tid, async (c) => {
+      await c.query(
+        `INSERT INTO rentman_role_map (tenant_id, rentman_name, role_name) VALUES ($1, lower(regexp_replace(trim($2), '\\s+', ' ', 'g')), $3)
+         ON CONFLICT (tenant_id, rentman_name) DO UPDATE SET role_name = $3, updated_at = now()`,
+        [req.user.tid, b.rentmanName, b.roleName],
+      );
+      await audit(c, req.user.tid, req.user.sub, 'rentman.role_map', 'integration', null, b);
+      return { ok: true };
+    });
   });
 }

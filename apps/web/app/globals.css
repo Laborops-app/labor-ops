@@ -2043,3 +2043,12 @@ details.card.profile-fold > summary::before { content: none; }
 .pill.rentman-pill { background: var(--surface-2); color: inherit; border: 1px solid var(--border-strong); }
 @media (max-width: 640px) { .quote-compare .qc-sum { grid-template-columns: 1fr; } }
 .quote-compare .sub { display: block; font-size: 13px; color: var(--muted); line-height: 1.4; }
+
+/* ---------- Crew & transport from Rentman ---------- */
+.rm-build { border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin: 14px 0; display: grid; gap: 8px; background: var(--surface-2); }
+.rm-plan li { padding: 4px 0; border-top: 1px solid var(--border); font-size: 14px; }
+.rm-plan li:first-child { border-top: 0; }
+.rm-unmatched { color: var(--warn); }
+.rm-conflicts { border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); background: var(--warn-bg); border-radius: 10px; padding: 10px 12px; }
+.rm-conflicts li { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 0; border-top: 1px solid color-mix(in srgb, var(--warn) 25%, transparent); }
+.rm-conflicts li:first-child { border-top: 0; }

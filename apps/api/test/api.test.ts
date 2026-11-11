@@ -4362,6 +4362,7 @@ test('Rentman projects into the pipeline: new projects become events, linked eve
     ] });
     if (url.includes('/subprojects')) return json({ data: subs });
     if (url.includes('/statuses')) return json({ data: [{ id: 1, name: 'Concept' }, { id: 2, name: 'Option' }, { id: 3, name: 'Confirmed' }, { id: 4, name: 'Canceled' }] });
+    if (url.includes('/projectfunction')) return json({ data: [] }); // no crew in Rentman: nothing to build
     if (url.includes('/projects')) return json({ data: projects });
     return json({ error: 'unexpected' }, 404);
   }) as typeof fetch;
@@ -4416,6 +4417,103 @@ test('Rentman projects into the pipeline: new projects become events, linked eve
     // A deleted event isn't made again
     assert.equal((await call(a, 'DELETE', `/api/events/${st['Spring Gala'].id}`)).status, 200);
     assert.equal((await call(a, 'POST', '/api/rentman/sync')).json.pipeline.created, 0);
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+test('Rentman crew and transport: days, groups and shifts built from a project and kept in step safely', async () => {
+  const a = await register('rmb');
+  const tid = await tenantOf(a);
+  await call(a, 'POST', '/api/skills', { name: 'Stagehand', payRate: 25, billRate: 45 });
+  await call(a, 'POST', '/api/skills', { name: 'Truck Driver', payRate: 28, billRate: 50 });
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Arena', startDate: '2031-05-01', endDate: '2031-05-01' })).json.event.id;
+  await withTenant(tid, (c) => c.query('UPDATE events SET rentman_project_id = 600 WHERE id = $1', [ev]));
+  const real = globalThis.fetch;
+  const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: { 'content-type': 'application/json' } });
+  let fns: any[] = [
+    { id: 11, type: 'crew_function', name: 'Stage hands', amount: 6, planperiod_start: '2031-05-01T14:00:00Z', planperiod_end: '2031-05-01T22:00:00Z', group: '/projectfunctiongroups/1' },
+    { id: 12, type: 'crew_function', name: 'Rigger IATSE', amount: 2, planperiod_start: '2031-05-01T13:00:00Z', planperiod_end: '2031-05-01T21:00:00Z', group: '/projectfunctiongroups/1' },
+    { id: 13, type: 'crew_function', name: 'Stagehand', amount: 4, planperiod_start: '2031-05-02T16:00:00Z', planperiod_end: '2031-05-04T23:00:00Z', group: '/projectfunctiongroups/2' }, // 3 days
+    { id: 14, type: 'transport_function', name: '26ft box truck', amount: 1, planperiod_start: '2031-05-01T12:00:00Z', planperiod_end: '2031-05-01T20:00:00Z' },
+    { id: 15, type: 'remark', name: 'Note' },
+    { id: 16, type: 'crew_function', name: 'Unscheduled', amount: 1 },
+  ];
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = String(input);
+    if (!url.startsWith('https://api.rentman.net')) return real(input, init);
+    if (url.includes('/projects/600/projectfunctiongroups')) return json({ data: [{ id: 1, displayname: 'Load in', order: 1 }, { id: 2, displayname: 'Show', order: 2 }] });
+    if (url.includes('/projects/600/projectfunctions')) return json({ data: fns });
+    if (url.includes('/projects')) return json({ data: [] });
+    return json({ error: 'unexpected' }, 404);
+  }) as typeof fetch;
+  try {
+    assert.equal((await call(a, 'PUT', '/api/rentman/settings', { token: 'good-token-123456' })).status, 200);
+    // Preview changes nothing
+    const pre = await call(a, 'GET', `/api/events/${ev}/rentman/build`);
+    assert.equal(pre.status, 200, pre.text);
+    assert.equal(pre.json.adds.length, 6); // 2 crew + 3 days of the show crew + 1 driver
+    assert.equal(pre.json.unscheduled, 1);
+    assert.deepEqual(pre.json.unmatched, ['Rigger IATSE']);
+    assert.equal(pre.json.built, false);
+    assert.equal((await call(a, 'GET', `/api/events/${ev}`)).json.shifts.length, 0);
+
+    // Build
+    const b1 = await call(a, 'POST', `/api/events/${ev}/rentman/build`);
+    assert.deepEqual(b1.json.result, { added: 6, updated: 0, removed: 0, unchanged: 0, conflicts: 0 });
+    let d = (await call(a, 'GET', `/api/events/${ev}`)).json;
+    assert.equal(d.event.end_date.slice(0, 10) >= '2031-05-04', true);
+    const roles = d.shifts.map((s: any) => s.role_name).sort();
+    assert.deepEqual(roles, ['Rigger IATSE', 'Stagehand', 'Stagehand', 'Stagehand', 'Stagehand', 'Truck Driver (26ft box truck)']);
+    const phase1 = d.phases.find((p: any) => p.starts_on.slice(0, 10) === d.shifts.find((s: any) => s.headcount === 6).starts_at.slice(0, 10) || p.label === 'Load in');
+    assert.ok(phase1);
+    assert.equal(d.phases.length >= 3, true);
+    assert.ok(d.groups.some((g: any) => g.label === 'Transport'));
+    assert.ok(d.groups.some((g: any) => g.label === 'Load in'));
+    // Same clock times on each day of the multi-day function
+    const show = d.shifts.filter((s: any) => s.headcount === 4).map((s: any) => [s.starts_at.slice(11, 16), s.ends_at.slice(11, 16)]);
+    assert.equal(show.length, 3);
+    assert.ok(show.every((x: string[]) => x[0] === show[0][0] && x[1] === show[0][1]));
+    assert.equal((await call(a, 'GET', `/api/events/${ev}/rentman/build`)).json.unchanged, 6);
+
+    // Map the unmatched name once: the shift takes the role on the next sync
+    await call(a, 'POST', '/api/skills', { name: 'Rigger', payRate: 35, billRate: 60 });
+    const map = (await call(a, 'GET', '/api/rentman/role-map')).json;
+    assert.ok(map.map.some((m: any) => m.rentman_name === 'rigger iatse' && m.role_name === null));
+    assert.equal((await call(a, 'PUT', '/api/rentman/role-map', { rentmanName: 'Rigger IATSE', roleName: 'Rigger' })).status, 200);
+
+    // Staff the stagehands (6), edit the driver here, then Rentman changes: stagehands 6→8 (seats only), riggers move an hour,
+    // driver moves, one show day's function is removed... (the whole 3-day function shortened to 2 days).
+    d = (await call(a, 'GET', `/api/events/${ev}`)).json;
+    const sh6 = d.shifts.find((s: any) => s.headcount === 6);
+    const drv = d.shifts.find((s: any) => /Driver/.test(s.role_name));
+    const m = await mkCrew(a, 'rmb1');
+    assert.equal((await call(a, 'POST', `/api/shifts/${sh6.id}/assign`, { userId: m.id, confirmed: true, override: true })).status, 201);
+    assert.equal((await call(a, 'PATCH', `/api/shifts/${drv.id}`, { headcount: 2 })).status, 200);
+    fns = fns.map((f) =>
+      f.id === 11 ? { ...f, amount: 8 } :
+      f.id === 12 ? { ...f, planperiod_start: '2031-05-01T14:00:00Z', planperiod_end: '2031-05-01T22:00:00Z' } :
+      f.id === 13 ? { ...f, planperiod_end: '2031-05-03T23:00:00Z' } :
+      f.id === 14 ? { ...f, planperiod_start: '2031-05-01T11:00:00Z' } : f);
+    const b2 = (await call(a, 'POST', `/api/events/${ev}/rentman/build`)).json;
+    // stagehands 6→8 with crew (seats only) and riggers (time + new role name) updated; show day 3 removed; driver edited here → conflict
+    assert.deepEqual([b2.result.updated, b2.result.removed, b2.result.conflicts], [2, 1, 1], JSON.stringify(b2));
+    assert.equal(b2.conflicts[0].shiftId, drv.id);
+    d = (await call(a, 'GET', `/api/events/${ev}`)).json;
+    assert.equal(d.shifts.find((s: any) => s.id === sh6.id).headcount, 8);
+    assert.ok(d.shifts.some((s: any) => s.role_name === 'Rigger'));
+    assert.equal(d.shifts.filter((s: any) => s.role_name === 'Stagehand' && s.headcount === 4).length, 2);
+
+    // Keep the driver shift as it is here: no longer flagged
+    assert.equal((await call(a, 'POST', `/api/events/${ev}/rentman/build/keep`, { key: b2.conflicts[0].key, hash: b2.conflicts[0].rentman.hash })).status, 200);
+    assert.equal((await call(a, 'GET', `/api/events/${ev}/rentman/build`)).json.conflicts.length, 0);
+
+    // Removing a staffed function in Rentman is a conflict, not a deletion
+    fns = fns.filter((f) => f.id !== 11);
+    const b3 = (await call(a, 'POST', `/api/events/${ev}/rentman/build`)).json;
+    assert.equal(b3.result.removed, 0);
+    assert.equal(b3.conflicts[0].kind, 'removed');
+    assert.ok((await call(a, 'GET', `/api/events/${ev}`)).json.shifts.some((s: any) => s.id === sh6.id));
   } finally {
     globalThis.fetch = real;
   }

@@ -3,6 +3,7 @@ import { pool, withTenant, audit } from './db';
 import { checkOpenRequests, customerForRentman, getAll, getToken, pullCustomers, refId, syncProjects } from './rentman';
 import { setStatus, type PipelineStatus } from './pipeline';
 import { notify, type NotifyInput } from './notify';
+import { buildFromRentman } from './rentmanBuild';
 
 /**
  * Rentman projects in the pipeline. Rentman keeps a project's status on its subprojects, under status names each
@@ -57,25 +58,25 @@ export async function syncStatuses(c: PoolClient, token: string) {
   return ids.length;
 }
 
-export type PipelineSettings = { autoEvents: boolean; fromDate: string | null; skipCanceled: boolean; lastRunAt: string | null; lastResult: RunResult | null };
-export type RunResult = { created: number; moved: number; datesUpdated: number; flagged: number; skipped: number; errors?: string };
+export type PipelineSettings = { autoEvents: boolean; fromDate: string | null; skipCanceled: boolean; buildShifts: boolean; lastRunAt: string | null; lastResult: RunResult | null };
+export type RunResult = { created: number; moved: number; datesUpdated: number; flagged: number; skipped: number; built?: number; shiftChanges?: number; errors?: string };
 
 export async function loadPipelineSettings(c: PoolClient): Promise<PipelineSettings> {
-  const r = (await c.query("SELECT auto_events, to_char(from_date, 'YYYY-MM-DD') AS from_date, skip_canceled, last_run_at, last_result FROM rentman_settings LIMIT 1")).rows[0];
-  return { autoEvents: !!r?.auto_events, fromDate: r?.from_date ?? null, skipCanceled: r ? !!r.skip_canceled : true, lastRunAt: r?.last_run_at ?? null, lastResult: r?.last_result ?? null };
+  const r = (await c.query("SELECT auto_events, to_char(from_date, 'YYYY-MM-DD') AS from_date, skip_canceled, build_shifts, last_run_at, last_result FROM rentman_settings LIMIT 1")).rows[0];
+  return { autoEvents: !!r?.auto_events, fromDate: r?.from_date ?? null, skipCanceled: r ? !!r.skip_canceled : true, buildShifts: r ? !!r.build_shifts : true, lastRunAt: r?.last_run_at ?? null, lastResult: r?.last_result ?? null };
 }
-export async function savePipelineSettings(c: PoolClient, tid: string, by: string, s: { autoEvents: boolean; fromDate: string | null; skipCanceled: boolean }) {
+export async function savePipelineSettings(c: PoolClient, tid: string, by: string, s: { autoEvents: boolean; fromDate: string | null; skipCanceled: boolean; buildShifts: boolean }) {
   await c.query(
-    `INSERT INTO rentman_settings (tenant_id, auto_events, from_date, skip_canceled, updated_by) VALUES ($1,$2,$3,$4,$5)
-     ON CONFLICT (tenant_id) DO UPDATE SET auto_events = $2, from_date = $3, skip_canceled = $4, updated_by = $5, updated_at = now()`,
-    [tid, s.autoEvents, s.fromDate, s.skipCanceled, by],
+    `INSERT INTO rentman_settings (tenant_id, auto_events, from_date, skip_canceled, build_shifts, updated_by) VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (tenant_id) DO UPDATE SET auto_events = $2, from_date = $3, skip_canceled = $4, build_shifts = $5, updated_by = $6, updated_at = now()`,
+    [tid, s.autoEvents, s.fromDate, s.skipCanceled, s.buildShifts, by],
   );
 }
 
 const staff = async (c: PoolClient) => (await c.query("SELECT id FROM users WHERE active AND role IN ('admin', 'manager')")).rows.map((r) => r.id as string);
 
 /** New Rentman projects become events; linked events follow Rentman's status and dates where that is safe. */
-export async function applyToPipeline(c: PoolClient, tid: string): Promise<RunResult> {
+export async function applyToPipeline(c: PoolClient, tid: string, token?: string): Promise<RunResult> {
   const s = await loadPipelineSettings(c);
   const out: RunResult = { created: 0, moved: 0, datesUpdated: 0, flagged: 0, skipped: 0 };
   const tz = (await c.query('SELECT timezone FROM tenants LIMIT 1')).rows[0]?.timezone ?? 'UTC';
@@ -114,6 +115,8 @@ export async function applyToPipeline(c: PoolClient, tid: string): Promise<RunRe
       ).rows[0];
       await c.query('INSERT INTO event_status_log (tenant_id, event_id, from_status, to_status, reason) VALUES ($1,$2,NULL,$3,$4)', [tid, ev.id, status, `Pulled from Rentman${p.status_name ? `: ${p.status_name}` : ''}`]);
       await c.query('INSERT INTO rentman_imports (tenant_id, project_id, event_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [tid, p.id, ev.id]);
+      // Its days and shifts from Rentman's crew and transport, kept in step from then on.
+      if (s.buildShifts) await c.query('UPDATE events SET rentman_build = true WHERE id = $1', [ev.id]);
       await audit(c, tid, null, 'event.rentman_import', 'event', ev.id, { project: p.id, status });
       out.created++;
     }
@@ -167,6 +170,39 @@ export async function applyToPipeline(c: PoolClient, tid: string): Promise<RunRe
     const seen = seenDates + (seenFlag ? `#${seenFlag}` : '');
     if (seen !== (e.rentman_seen ?? '')) await c.query('UPDATE events SET rentman_seen = $2 WHERE id = $1', [e.id, seen]);
   }
+  // ---- days and shifts follow Rentman's crew and transport (events set to build) ----
+  if (token) {
+    const building = (
+      await c.query(
+        `SELECT e.id, e.name, e.rentman_build_seen FROM events e
+          WHERE e.rentman_build AND e.rentman_project_id IS NOT NULL AND e.archived_at IS NULL
+            AND e.pipeline_status NOT IN ('completed', 'canceled') AND e.end_date >= current_date - 1
+          ORDER BY e.start_date LIMIT 60`,
+      )
+    ).rows;
+    out.built = 0;
+    out.shiftChanges = 0;
+    for (const e of building) {
+      await c.query('SAVEPOINT build');
+      try {
+        const r = await buildFromRentman(c, tid, null, e.id, token, { apply: true });
+        await c.query('RELEASE SAVEPOINT build');
+        out.built++;
+        out.shiftChanges += (r.result?.added ?? 0) + (r.result?.updated ?? 0) + (r.result?.removed ?? 0);
+        // Changes that need a person (shift staffed or edited here): tell coordinators once per set of changes.
+        const sig = r.plan.conflicts.map((x) => `${x.key}:${x.kind}:${x.rentman?.hash ?? ''}`).sort().join(',');
+        if (sig !== (e.rentman_build_seen ?? '')) {
+          if (r.plan.conflicts.length) {
+            tell(`Rentman changed shifts on ${e.name}`, `${r.plan.conflicts.length} shift${r.plan.conflicts.length === 1 ? '' : 's'} changed or removed in Rentman ${r.plan.conflicts.length === 1 ? 'has' : 'have'} crew on ${r.plan.conflicts.length === 1 ? 'it' : 'them'} or ${r.plan.conflicts.length === 1 ? 'was' : 'were'} edited here. Review them on the event's Rentman panel.`, e.id);
+            out.flagged++;
+          }
+          await c.query('UPDATE events SET rentman_build_seen = $2 WHERE id = $1', [e.id, sig]);
+        }
+      } catch {
+        await c.query('ROLLBACK TO SAVEPOINT build');
+      }
+    }
+  }
   if (msgs.length) await notify(c, tid, msgs);
   return out;
 }
@@ -177,7 +213,7 @@ export async function pullRentman(c: PoolClient, tid: string, token: string) {
   const customers = await pullCustomers(c, tid, token);
   const linked = await checkOpenRequests(c, tid, token);
   const statuses = await syncStatuses(c, token);
-  const pipeline = await applyToPipeline(c, tid);
+  const pipeline = await applyToPipeline(c, tid, token);
   await c.query('UPDATE rentman_settings SET last_run_at = now(), last_result = $1', [JSON.stringify(pipeline)]);
   return { projects, customers, linked, statuses, pipeline };
 }

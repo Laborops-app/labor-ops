@@ -1499,7 +1499,7 @@ function Body({ me }: { me: Me }) {
               <h2 style={{ margin: 0 }}>{settings === 'rentman' ? 'Rentman' : settings === 'invoice' ? `Invoice · ${ev.name}` : settings === 'rate' ? `Rate crew · ${ev.name}` : settings === 'update' ? `Send an update · ${ev.name}` : settings === 'autofill' ? `Auto-fill · ${ev.name}` : settings === 'avail' ? `Who's free? · ${ev.name}` : 'Event settings'}</h2>
               <button className="btn ghost small" aria-label="Close" onClick={() => setSettings(null)}>✕</button>
             </div>
-            {settings === 'rentman' && <div style={{ marginTop: 12 }}><RentmanCard eventId={id} isAdmin={me.role === 'admin'} onError={setError} onView={setRm} /></div>}
+            {settings === 'rentman' && <div style={{ marginTop: 12 }}><RentmanCard eventId={id} isAdmin={me.role === 'admin'} onError={setError} onView={setRm} onShifts={(m) => { setNote(m); load(); }} /></div>}
             {settings === 'invoice' && <InvoicePanel eventId={id} isAdmin={me.role === 'admin'} />}
             {settings === 'rate' && <div style={{ marginTop: 12 }}><EventRatings me={me} eventId={id} onProgress={() => loadRateInfo()} /></div>}
             {settings === 'autofill' && <div style={{ marginTop: 12 }}><AutoFill key={afCheck || 'all'} eventId={id} groups={crewGroups} freeChecks={freeChecks} initialCheck={afCheck} held={!!ev.staffing_draft} onDone={(m) => { setSettings(null); setNote(m); load(); }} /></div>}
