@@ -17,9 +17,12 @@ type Card = {
   id: string; name: string; client: string | null; venue: string | null; start_date: string; end_date: string; status: PipelineStatus; priority: Priority;
   status_changed_at: string; customer_id: string | null; customer_name: string | null; created_by: string | null;
   slots: number; filled: number; accepted: number; waiting: number; shift_count: number; on_clock: number; missing_time?: number; to_approve: number; to_rate: number; invoiced: boolean; messages: number;
-  quote: { id: string; number: number; status: string } | null; rentman?: { id: number; number: number | null; status: string | null } | null; rentman_invoices?: { count: number; total: number | null; outstanding: number | null; paid: boolean } | null; crew: { id: string; name: string; status: string }[];
+  quote: { id: string; number: number; status: string } | null; rentman?: { id: number; number: number | null; status: string | null; kind?: string | null } | null; rentman_invoices?: { count: number; total: number | null; outstanding: number | null; paid: boolean } | null; crew: { id: string; name: string; status: string }[];
 };
-type Board = { events: Card[]; team: { id: string; name: string; role: string }[] };
+type Board = { events: Card[]; team: { id: string; name: string; role: string }[]; rentmanAccount?: string | null };
+// Pipeline columns that mean the same as a Rentman status (Rentman's API can't be told a new status, so a move here is flagged).
+const RM_SAME = ['pending', 'quote', 'confirmed', 'canceled'];
+const rmUrl = (acct: string | null | undefined, id: number) => (acct ? `https://${acct}.rentmanapp.com/#/projects/${id}/details` : null);
 type Range = 'upcoming' | '30d' | 'month' | 'all';
 const RANGES: [Range, string][] = [['upcoming', 'Upcoming'], ['30d', 'Next 30 days'], ['month', 'This month'], ['all', 'All dates']];
 
@@ -98,7 +101,7 @@ function CardMenu({ c, onMove, onPriority }: { c: Card; onMove: (s: PipelineStat
   );
 }
 
-function CardView({ c, onMove, onPriority, onDragStart, onDragEnd, dragging }: { c: Card; onMove: (s: PipelineStatus) => void; onPriority: (p: Priority) => void; onDragStart: (e: React.DragEvent, c: Card) => void; onDragEnd: () => void; dragging: boolean }) {
+function CardView({ c, onMove, onPriority, onDragStart, onDragEnd, dragging, rmAccount }: { rmAccount?: string | null; c: Card; onMove: (s: PipelineStatus) => void; onPriority: (p: Priority) => void; onDragStart: (e: React.DragEvent, c: Card) => void; onDragEnd: () => void; dragging: boolean }) {
   const router = useRouter();
   const w = when(c);
   const pct = c.slots ? Math.min(100, Math.round((c.filled / c.slots) * 100)) : 0;
@@ -151,6 +154,17 @@ function CardView({ c, onMove, onPriority, onDragStart, onDragEnd, dragging }: {
         <span className="pm-quote grey pm-rentman" title="Linked to a Rentman project">
           Rentman{c.rentman.number ? ` #${c.rentman.number}` : ''}{c.rentman.status ? ` · ${c.rentman.status}` : ''}
         </span>
+      )}
+      {c.rentman?.kind && RM_SAME.includes(c.status) && c.rentman.kind !== c.status && (
+        (() => {
+          const href = rmUrl(rmAccount, c.rentman!.id);
+          const label = `Out of step: Rentman says ${c.rentman!.status ?? c.rentman!.kind}`;
+          return href ? (
+            <a className="pm-quote orange" href={href} target="_blank" rel="noreferrer" title="Change the status in Rentman to match" onClick={(e) => e.stopPropagation()}>{label} ↗</a>
+          ) : (
+            <span className="pm-quote orange" title="Change the status in Rentman to match">{label}</span>
+          );
+        })()
       )}
       {c.rentman_invoices && (
         <span className={`pm-quote ${c.rentman_invoices.paid ? 'green' : 'grey'}`} title="Invoices on the Rentman project">
@@ -313,7 +327,11 @@ function Body({ me }: { me: Me }) {
     const at = index == null ? 0 : Math.min(index, target.length);
     const order = [...target.slice(0, at).map((x) => x.id), c.id, ...target.slice(at).map((x) => x.id)];
     const moved = { ...c, status: to, status_changed_at: c.status === to ? c.status_changed_at : new Date().toISOString() };
-    if (c.status !== to) setNote(`Moved ${c.name} to ${STATUS[to].label}.`);
+    if (c.status !== to) {
+      const rm = c.rentman;
+      const off = rm?.kind && RM_SAME.includes(to) && rm.kind !== to;
+      setNote(`Moved ${c.name} to ${STATUS[to].label}.${off ? ` Rentman still says ${rm!.status ?? rm!.kind}: change it in Rentman too (Rentman doesn’t let other apps change a project’s status).` : ''}`);
+    }
     if (to === 'canceled' && !showCanceled) setShowCanceled(true);
     patch(c.id, { status: c.status === to ? undefined : to, order }, (b) => {
       const rest = b.events.filter((x) => x.id !== c.id);
@@ -456,7 +474,7 @@ function Body({ me }: { me: Me }) {
                   {list.map((c, i) => (
                     <div key={c.id} className="pm-slot">
                       {ghostAt === i && <div className="pm-drop-slot" />}
-                      <CardView c={c} dragging={drag?.id === c.id} onMove={(to) => move(c, to)} onPriority={(p) => setPriority(c, p)} onDragStart={onDragStart} onDragEnd={() => { setDrag(null); setOver(null); }} />
+                      <CardView c={c} rmAccount={board?.rentmanAccount} dragging={drag?.id === c.id} onMove={(to) => move(c, to)} onPriority={(p) => setPriority(c, p)} onDragStart={onDragStart} onDragEnd={() => { setDrag(null); setOver(null); }} />
                     </div>
                   ))}
                   {ghostAt >= list.length && <div className="pm-drop-slot" />}

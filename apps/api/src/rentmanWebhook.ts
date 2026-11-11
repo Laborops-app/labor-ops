@@ -45,8 +45,9 @@ export async function runRentmanFor(tid: string, kinds: Set<Kind>) {
     if (kinds.has('rates') && o.rates_source) out.rates = await syncRates(c, tid, token);
     if (kinds.has('projects')) {
       const p = await loadPipelineSettings(c);
-      const built = (await c.query('SELECT 1 FROM events WHERE rentman_build LIMIT 1')).rowCount;
-      if (p.autoEvents || built) out.pull = await pullRentman(c, tid, token);
+      // Pull when projects become events, events build from Rentman, or any open event is linked (its status follows).
+      const linked = (await c.query("SELECT 1 FROM events WHERE (rentman_build OR rentman_project_id IS NOT NULL) AND pipeline_status NOT IN ('completed') AND end_date >= current_date - 1 LIMIT 1")).rowCount;
+      if (p.autoEvents || linked) out.pull = await pullRentman(c, tid, token);
       if (o.show_invoices) out.invoices = await syncAllInvoices(c, tid, token);
       clearExtrasCache();
     }

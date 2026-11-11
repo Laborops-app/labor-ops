@@ -6,6 +6,14 @@ import { STATUSES, autoAdvance, setStatus, timesheetGaps } from '../pipeline';
 
 const mgr = guard('admin', 'manager', 'hr');
 
+const kicked = new Map<string, number>();
+function kickRentman(tid: string) {
+  if (process.env.NODE_TEST_CONTEXT) return; // tests mock Rentman per test
+  if (Date.now() - (kicked.get(tid) ?? 0) < 3 * 60_000) return;
+  kicked.set(tid, Date.now());
+  import('../rentmanWebhook').then(({ runRentmanFor }) => runRentmanFor(tid, new Set(['projects']))).catch((e) => console.error('rentman board check', tid, e?.message ?? e));
+}
+
 /**
  * The event pipeline board: every event as a card in its column (Pending, Quote, Confirmed, In progress, Completed,
  * Canceled) with where the crew is at and what is left to wrap up.
@@ -45,7 +53,7 @@ export async function pipelineRoutes(app: FastifyInstance) {
                   (SELECT count(*)::int FROM chat_messages m JOIN chat_channels ch ON ch.id = m.channel_id WHERE ch.event_id = e.id AND ch.kind = 'event' AND m.deleted_at IS NULL) AS messages,
                   (SELECT json_build_object('id', qq.id, 'number', qq.number, 'status', qq.status)
                      FROM quotes qq WHERE qq.event_id = e.id ORDER BY (qq.status = 'accepted') DESC, qq.created_at DESC LIMIT 1) AS quote,
-                  (SELECT json_build_object('id', rp.id, 'number', rp.number, 'status', rp.status_name) FROM rentman_projects rp WHERE rp.id = e.rentman_project_id) AS rentman,
+                  (SELECT json_build_object('id', rp.id, 'number', rp.number, 'status', rp.status_name, 'kind', rp.status_kind) FROM rentman_projects rp WHERE rp.id = e.rentman_project_id) AS rentman,
                   (SELECT json_build_object('count', count(*), 'total', sum(ri.price), 'outstanding', sum(ri.outstanding), 'paid', bool_and(ri.is_paid))
                      FROM rentman_invoices ri WHERE ri.project_id = e.rentman_project_id
                        AND (SELECT show_invoices FROM rentman_settings LIMIT 1) HAVING count(*) > 0) AS rentman_invoices,
@@ -66,7 +74,12 @@ export async function pipelineRoutes(app: FastifyInstance) {
         )
       ).rows;
       const team = (await c.query("SELECT id, name, role FROM users WHERE role IN ('admin', 'manager', 'hr') AND active ORDER BY role, name")).rows;
-      return { events, team };
+      const rs = (await c.query("SELECT account_name, last_run_at, EXISTS (SELECT 1 FROM integration_settings WHERE provider = 'rentman') AS on FROM rentman_settings LIMIT 1")).rows[0];
+      const rentmanAccount = rs?.account_name ?? null;
+      // Opening the board checks Rentman for status changes (at most every few minutes), so cards move without waiting
+      // for the 30-minute run. Runs in the background; the board shows the result on its next load.
+      if (rs?.on && (!rs.last_run_at || Date.now() - +new Date(rs.last_run_at) > 3 * 60_000)) kickRentman(req.user.tid);
+      return { events, team, rentmanAccount };
     });
   });
 

@@ -4417,6 +4417,23 @@ test('Rentman projects into the pipeline: new projects become events, linked eve
     // told once
     assert.equal((await call(a, 'POST', '/api/rentman/sync')).json.pipeline.flagged, 0);
 
+    // Each Rentman status change moves the card, backward too: Spring Gala confirmed → option
+    subs = subs.map((s) => (s.project === '/projects/501' ? { ...s, status: '/statuses/2' } : s));
+    await call(a, 'POST', '/api/rentman/sync');
+    const ps = async (name: string) => (await evs()).find((e: any) => e.name === name).pipeline_status;
+    assert.equal(await ps('Spring Gala'), 'quote');
+    // A move made here sticks until Rentman's status changes again, and the card shows it's out of step
+    assert.equal((await call(a, 'PATCH', `/api/events/${st['Spring Gala'].id}/pipeline`, { status: 'confirmed' })).status, 200);
+    await call(a, 'POST', '/api/rentman/sync');
+    assert.equal(await ps('Spring Gala'), 'confirmed');
+    const card2 = (await call(a, 'GET', '/api/pipeline?range=all')).json.events.find((e: any) => e.name === 'Spring Gala');
+    assert.equal(card2.rentman.kind, 'quote');
+    // Back on in Rentman: a canceled (archived) event returns to the board
+    subs = subs.map((s) => (s.project === '/projects/505' ? { ...s, status: '/statuses/2' } : s));
+    await call(a, 'POST', '/api/rentman/sync');
+    assert.equal(await ps('Maybe Fest'), 'quote');
+    assert.equal((await withTenant(tid, (c) => c.query("SELECT archived_at FROM events WHERE name = 'Maybe Fest'"))).rows[0].archived_at, null);
+
     // A deleted event isn't made again
     assert.equal((await call(a, 'DELETE', `/api/events/${st['Spring Gala'].id}`)).status, 200);
     assert.equal((await call(a, 'POST', '/api/rentman/sync')).json.pipeline.created, 0);

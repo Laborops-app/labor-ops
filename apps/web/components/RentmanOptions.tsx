@@ -7,7 +7,7 @@ type Opts = {
   webhooks: boolean; crew_link: boolean; rates_source: boolean; quoted_bill_rates: boolean; push_hours: boolean; push_time_off: boolean;
   show_invoices: boolean; show_files: boolean; show_contacts: boolean; show_vehicles: boolean; show_equipment_leads: boolean;
   filesFolder: string | null; webhookUrl: string | null; hasWebhookToken: boolean; webhookLastAt: string | null;
-  ratesLastAt: string | null; ratesLastResult: { rates: number; roles: number; unmatched: string[] } | null;
+  ratesLastAt: string | null; ratesLastResult: { rates: number; roles: number; unmatched: string[] } | null; accountName: string | null;
 };
 type Crew = { id: number; name: string; email: string | null; phone: string | null; active: boolean; user_id: string | null; linked_by: string | null; user_name: string | null };
 type Push = { hours: { sent: number; waiting: number; failed: number; missingCrew: { id: string; name: string }[]; lastError: string | null }; timeOff: { sent: number; failed: number; lastError: string | null } };
@@ -34,7 +34,8 @@ export default function RentmanOptions() {
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState('');
-  const load = () => api<{ options: Opts }>('/api/rentman/options').then((r) => { setO(r.options); setFolder(r.options.filesFolder ?? ''); }).catch((e) => setErr(e.message));
+  const [acct, setAcct] = useState('');
+  const load = () => api<{ options: Opts }>('/api/rentman/options').then((r) => { setO(r.options); setFolder(r.options.filesFolder ?? ''); setAcct(r.options.accountName ?? ''); }).catch((e) => setErr(e.message));
   const loadCrew = () => api<NonNullable<typeof crew>>('/api/rentman/crew').then(setCrew).catch(() => {});
   const loadPush = () => api<Push>('/api/rentman/push-status').then(setPush).catch(() => {});
   useEffect(() => { load(); }, []);
@@ -67,6 +68,13 @@ export default function RentmanOptions() {
       <p className="muted small">Each part is off until you switch it on.</p>
       {err && <Banner onClose={() => setErr('')}>{err}</Banner>}
       {msg && <Banner kind="ok" onClose={() => setMsg('')}>{msg}</Banner>}
+
+      <h4>Your Rentman address</h4>
+      <div className="row rm-sub" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input value={acct} onChange={(e) => setAcct(e.target.value)} placeholder="yourcompany.rentmanapp.com" style={{ maxWidth: 320 }} aria-label="Rentman address" />
+        {acct !== (o.accountName ?? '') && <button type="button" className="btn small" onClick={() => save({ accountName: acct || null } as Partial<Opts>, 'Rentman address saved.')}>Save</button>}
+        <span className="muted small">Used for “open in Rentman” links (filled in automatically once webhooks are on).</span>
+      </div>
 
       <h4>Updates</h4>
       {t('webhooks', 'Instant updates from Rentman (webhooks)', 'Rentman tells LaborOps the moment a project, crew need, status, crew member or rate changes, instead of waiting for the 30-minute check (which keeps running as a backup).')}

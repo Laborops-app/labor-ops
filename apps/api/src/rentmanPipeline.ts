@@ -107,10 +107,10 @@ export async function applyToPipeline(c: PoolClient, tid: string, token?: string
       const status: PipelineStatus = (p.status_kind as PipelineStatus | null) ?? 'pending';
       const ev = (
         await c.query(
-          `INSERT INTO events (tenant_id, name, client, venue, address, start_date, end_date, notes, rentman_project_id, customer_id, pipeline_status, priority, board_position, rentman_seen)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'medium', (SELECT COALESCE(min(board_position), 1) - 1 FROM events WHERE pipeline_status = $11), $12) RETURNING id`,
+          `INSERT INTO events (tenant_id, name, client, venue, address, start_date, end_date, notes, rentman_project_id, customer_id, pipeline_status, priority, board_position, rentman_seen, rentman_status_seen)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'medium', (SELECT COALESCE(min(board_position), 1) - 1 FROM events WHERE pipeline_status = $11), $12, $13) RETURNING id`,
           [tid, p.name, cust?.name ?? p.customer ?? null, p.location ?? null, p.loc_address ?? null, p.sd, p.ed < p.sd ? p.sd : p.ed,
-           `From Rentman project ${p.number ?? p.id}${p.status_name ? ` (${p.status_name})` : ''}.`, p.id, cust?.id ?? null, status, `${p.sd}|${p.ed}`],
+           `From Rentman project ${p.number ?? p.id}${p.status_name ? ` (${p.status_name})` : ''}.`, p.id, cust?.id ?? null, status, `${p.sd}|${p.ed}`, p.status_name ?? null],
         )
       ).rows[0];
       await c.query('INSERT INTO event_status_log (tenant_id, event_id, from_status, to_status, reason) VALUES ($1,$2,NULL,$3,$4)', [tid, ev.id, status, `Pulled from Rentman${p.status_name ? `: ${p.status_name}` : ''}`]);
@@ -126,6 +126,7 @@ export async function applyToPipeline(c: PoolClient, tid: string, token?: string
   const linked = (
     await c.query(
       `SELECT e.id, e.name, e.pipeline_status, to_char(e.start_date, 'YYYY-MM-DD') AS start_date, to_char(e.end_date, 'YYYY-MM-DD') AS end_date, e.rentman_seen,
+              e.rentman_status_seen, e.archived_at, e.archive_reason,
               p.status_kind, p.status_name, p.number,
               to_char((COALESCE(p.usageperiod_start, p.planperiod_start) AT TIME ZONE $1)::date, 'YYYY-MM-DD') AS sd,
               to_char((COALESCE(p.usageperiod_end, p.planperiod_end, p.usageperiod_start, p.planperiod_start) AT TIME ZONE $1)::date, 'YYYY-MM-DD') AS ed,
@@ -133,29 +134,42 @@ export async function applyToPipeline(c: PoolClient, tid: string, token?: string
               EXISTS (SELECT 1 FROM event_phases ph WHERE ph.event_id = e.id) AS has_phases,
               EXISTS (SELECT 1 FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE s.event_id = e.id AND a.status = 'accepted' AND s.ends_at > now()) AS has_crew
          FROM events e JOIN rentman_projects p ON p.id = e.rentman_project_id
-        WHERE e.archived_at IS NULL AND e.pipeline_status IN ('pending', 'quote', 'confirmed', 'in_progress')`,
+        WHERE (e.archived_at IS NULL AND e.pipeline_status IN ('pending', 'quote', 'confirmed', 'in_progress'))
+           -- canceled here (or archived because canceled) but Rentman may bring it back
+           OR (e.pipeline_status = 'canceled' AND (e.archived_at IS NULL OR e.archive_reason = 'canceled') AND e.end_date >= current_date)`,
       [tz],
     )
   ).rows;
   for (const e of linked) {
     // What was last told or applied: "<start>|<end>" of Rentman's dates, then "#canceled" once a cancel was flagged.
     let [seenDates, seenFlag] = [(e.rentman_seen ?? '').split('#')[0], (e.rentman_seen ?? '').split('#')[1] ?? ''];
-    // Status: forward only; canceled only when no confirmed crew would be cut (else ask a coordinator).
-    if (e.status_kind === 'canceled' && e.pipeline_status !== 'in_progress') {
+    // Status: each change made in Rentman moves the card (either way) — a move made here sticks until Rentman's status
+    // changes again. Canceling only happens when no confirmed crew would be cut (else a coordinator is asked).
+    // Events already under way or done follow their own dates and timesheets.
+    const changed = !!e.status_kind && e.status_name !== e.rentman_status_seen;
+    const first = e.rentman_status_seen === null; // linked before this rule: only move forward, as before
+    if (e.pipeline_status === 'canceled' && !(changed && e.status_kind !== 'canceled')) {
+      // stays canceled
+    } else if (e.status_kind === 'canceled' && e.pipeline_status !== 'in_progress' && (changed || first)) {
       if (!e.has_crew) {
         if (await setStatus(c, tid, e.id, 'canceled', null, `Canceled in Rentman${e.status_name ? ` (${e.status_name})` : ''}`)) out.moved++;
-        continue;
-      }
-      if (seenFlag !== 'canceled') {
+      } else if (seenFlag !== 'canceled') {
         tell(`Rentman canceled ${e.name}`, `Rentman project ${e.number ?? ''} is ${e.status_name ?? 'canceled'}, but the event has confirmed crew. Cancel it in LaborOps if it is really off (short-notice cuts are paid under the event's work rules).`, e.id);
         seenFlag = 'canceled';
         out.flagged++;
       }
-    } else if (e.status_kind && e.status_kind !== 'canceled' && (RANK[e.status_kind] ?? 0) > (RANK[e.pipeline_status] ?? 0)) {
-      if (await setStatus(c, tid, e.id, e.status_kind as PipelineStatus, null, `Rentman: ${e.status_name ?? e.status_kind}`)) out.moved++;
+    } else if (e.status_kind && e.status_kind !== 'canceled' && e.pipeline_status !== 'in_progress' && e.status_kind !== e.pipeline_status) {
+      const forward = (RANK[e.status_kind] ?? 0) > (RANK[e.pipeline_status] ?? 0);
+      if (changed && !first || forward) {
+        if (e.pipeline_status === 'canceled' && e.archived_at) await c.query('UPDATE events SET archived_at = NULL, archived_by = NULL, archive_reason = NULL WHERE id = $1', [e.id]);
+        const why = e.pipeline_status === 'canceled' ? `Back on in Rentman: ${e.status_name ?? e.status_kind}` : `Rentman: ${e.status_name ?? e.status_kind}`;
+        if (await setStatus(c, tid, e.id, e.status_kind as PipelineStatus, null, why)) out.moved++;
+      }
     }
+    if (e.status_kind && e.status_name !== e.rentman_status_seen) await c.query('UPDATE events SET rentman_status_seen = $2 WHERE id = $1', [e.id, e.status_name]);
+    if (e.status_kind !== 'canceled' && seenFlag === 'canceled') seenFlag = '';
     // Dates: changed in Rentman. Move them when the event has nothing scheduled yet; otherwise tell a coordinator once.
-    if (e.sd && e.ed && (e.sd !== e.start_date || e.ed !== e.end_date)) {
+    if (e.pipeline_status !== 'canceled' && e.sd && e.ed && (e.sd !== e.start_date || e.ed !== e.end_date)) {
       const sig = `${e.sd}|${e.ed}`;
       if (!e.has_shifts && !e.has_phases) {
         await c.query('UPDATE events SET start_date = $2, end_date = $3 WHERE id = $1', [e.id, e.sd, e.ed < e.sd ? e.sd : e.ed]);

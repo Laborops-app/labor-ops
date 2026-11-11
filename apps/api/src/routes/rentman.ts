@@ -377,6 +377,7 @@ export async function rentmanRoutes(app: FastifyInstance) {
         ...Object.fromEntries(OPTION_KEYS.map((k) => [k, z.boolean().optional()])),
         filesFolder: z.string().trim().max(200).nullable().optional(),
         webhookToken: z.string().trim().min(8).max(500).nullable().optional(),
+        accountName: z.string().trim().max(200).nullable().optional(),
       })
       .parse(req.body) as any;
     try {
@@ -417,6 +418,9 @@ export async function rentmanRoutes(app: FastifyInstance) {
         const token = await webhookToken(c);
         if (!token || !verifyDigest(raw, req.headers['digest'] as string | undefined, token)) return false;
         await c.query('UPDATE rentman_settings SET webhook_last_at = now()');
+        // Rentman names the account on each call: remember it for "open in Rentman" links.
+        const acct = String((req.body as any)?.account ?? '').trim().toLowerCase();
+        if (/^[a-z0-9][a-z0-9-]{1,62}$/.test(acct)) await c.query('UPDATE rentman_settings SET account_name = $1 WHERE account_name IS DISTINCT FROM $1', [acct]);
         return true;
       });
       if (!ok) return reply.code(401).send({ error: 'Bad signature' });

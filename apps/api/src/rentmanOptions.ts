@@ -10,7 +10,7 @@ export const OPTION_KEYS = [
 export type OptionKey = (typeof OPTION_KEYS)[number];
 export type Options = Record<OptionKey, boolean> & {
   filesFolder: string | null; webhookKey: string | null; hasWebhookToken: boolean; webhookLastAt: string | null;
-  ratesLastAt: string | null; ratesLastResult: unknown;
+  ratesLastAt: string | null; ratesLastResult: unknown; accountName: string | null;
 };
 
 export async function loadOptions(c: PoolClient): Promise<Options> {
@@ -18,16 +18,21 @@ export async function loadOptions(c: PoolClient): Promise<Options> {
   const o = Object.fromEntries(OPTION_KEYS.map((k) => [k, !!r[k]])) as Record<OptionKey, boolean>;
   return {
     ...o, filesFolder: r.files_folder ?? null, webhookKey: r.webhook_key ?? null, hasWebhookToken: !!r.webhook_token_enc,
-    webhookLastAt: r.webhook_last_at ?? null, ratesLastAt: r.rates_last_at ?? null, ratesLastResult: r.rates_last_result ?? null,
+    webhookLastAt: r.webhook_last_at ?? null, ratesLastAt: r.rates_last_at ?? null, ratesLastResult: r.rates_last_result ?? null, accountName: r.account_name ?? null,
   };
 }
 
 /** Change some options. Turning webhooks on gives the company its own random webhook address. */
-export async function saveOptions(c: PoolClient, tid: string, by: string, patch: Partial<Record<OptionKey, boolean>> & { filesFolder?: string | null; webhookToken?: string | null }) {
+export async function saveOptions(c: PoolClient, tid: string, by: string, patch: Partial<Record<OptionKey, boolean>> & { filesFolder?: string | null; webhookToken?: string | null; accountName?: string | null }) {
   await c.query('INSERT INTO rentman_settings (tenant_id, updated_by) VALUES ($1,$2) ON CONFLICT (tenant_id) DO NOTHING', [tid, by]);
   for (const k of OPTION_KEYS) if (patch[k] !== undefined) await c.query(`UPDATE rentman_settings SET ${k} = $1, updated_by = $2, updated_at = now()`, [patch[k], by]);
   if (patch.filesFolder !== undefined) await c.query('UPDATE rentman_settings SET files_folder = $1', [patch.filesFolder?.trim() || null]);
   if (patch.webhookToken !== undefined) await c.query('UPDATE rentman_settings SET webhook_token_enc = $1', [patch.webhookToken ? encrypt(patch.webhookToken.trim()) : null]);
+  if (patch.accountName !== undefined) {
+    // "yourcompany", "yourcompany.rentmanapp.com" or a pasted Rentman address → "yourcompany"
+    const a = (patch.accountName ?? '').trim().toLowerCase().replace(/^https?:\/\//, '').split(/[./#]/)[0] || null;
+    await c.query('UPDATE rentman_settings SET account_name = $1', [a && /^[a-z0-9][a-z0-9-]{1,62}$/.test(a) ? a : null]);
+  }
   if (patch.webhooks) await c.query("UPDATE rentman_settings SET webhook_key = COALESCE(webhook_key, $1)", [crypto.randomBytes(24).toString('base64url')]);
 }
 
@@ -56,3 +61,7 @@ export function verifyDigest(raw: string, header: string | undefined, token: str
   const tries = [Buffer.from(given, 'hex'), Buffer.from(given, 'base64')].filter((b) => b.length === mac.length);
   return tries.some((b) => crypto.timingSafeEqual(b, mac));
 }
+
+/** The Rentman web address of a project, when the account is known. */
+export const rentmanProjectUrl = (account: string | null | undefined, projectId: number | null | undefined) =>
+  account && projectId ? `https://${account}.rentmanapp.com/#/projects/${projectId}/details` : null;
