@@ -142,7 +142,9 @@ function Body({ me }: { me: Me }) {
   const [busyAdd, setBusyAdd] = useState(false);
   const [payEdit, setPayEdit] = useState<{ id: string; value: string } | null>(null);
   // Editing a shift's role and times, or a phase's name and dates, in place.
-  const [timeEdit, setTimeEdit] = useState<{ id: string; role: string; start: string; end: string } | null>(null);
+  const [timeEdit, setTimeEdit] = useState<{ id: string; role: string; start: string; end: string; head: string } | null>(null);
+  // The day (phase) whose shifts are on screen: a phase id, 'none', 'all', or '' for the first day.
+  const [day, setDay] = useState('');
   const [phaseEdit, setPhaseEdit] = useState<{ id: string; label: string; start: string; end: string; move: boolean } | null>(null);
   const formDated = useRef(false);
   // Collapsed phases on this event, remembered in this browser.
@@ -368,9 +370,10 @@ function Body({ me }: { me: Me }) {
     setError('');
     setNote('');
     try {
-      await api(`/api/shifts/${timeEdit.id}`, { method: 'PATCH', body: { roleName: timeEdit.role.trim() || undefined, startsAt: st.toISOString(), endsAt: en.toISOString(), force: force || undefined } });
+      await api(`/api/shifts/${timeEdit.id}`, { method: 'PATCH', body: { roleName: timeEdit.role.trim() || undefined, startsAt: st.toISOString(), endsAt: en.toISOString(), headcount: Number(timeEdit.head) >= 1 ? Math.round(Number(timeEdit.head)) : undefined, force: force || undefined } });
       setTimeEdit(null);
-      setNote('Shift updated. Anyone on it has been told about the new time.');
+      setPayEdit(null);
+      setNote('Shift updated. Anyone on it has been told about any new time.');
       await load();
     } catch (err) {
       if (err instanceof ApiError && err.reason === 'clash' && !force && confirm(`${err.message}\n\nSave the new time anyway?`)) return saveTime(true);
@@ -609,6 +612,39 @@ function Body({ me }: { me: Me }) {
     );
   };
 
+  const ago = (iso: string) => {
+    const m = Math.max(1, Math.round((Date.now() - new Date(iso).getTime()) / 60_000));
+    return m < 60 ? `${m} min` : m < 2880 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} d`;
+  };
+  /** Seats as a bar: confirmed, waiting, not sent, open. One block per seat on a shift, proportional for big counts. */
+  const seatBar = (c: number, w: number, n: number, o: number, big = false) => {
+    const total = c + w + n + o;
+    const kinds: [string, number][] = [['ok', c], ['wait', w], ['plan', n], ['open', o]];
+    return (
+      <div className={`cs-bar${big ? ' big' : ''}`} role="img" aria-label={`${c} confirmed, ${w} waiting, ${n} not sent, ${o} open`}>
+        {!big && total <= 24
+          ? kinds.flatMap(([k, num]) => Array.from({ length: num }).map((_, i) => <span key={`${k}${i}`} className={k} />))
+          : kinds.filter(([, num]) => num > 0).map(([k, num]) => <span key={k} className={k} style={{ flexGrow: num }} />)}
+      </div>
+    );
+  };
+  const dayShort = (a: string, b: string) => {
+    const f1 = (x: string) => new Date(`${x.slice(0, 10)}T12:00:00`).toLocaleDateString([], { weekday: 'short', day: 'numeric' });
+    return a.slice(0, 10) === b.slice(0, 10) ? f1(a) : `${f1(a)} – ${f1(b)}`;
+  };
+  const staff = (() => {
+    // Only people who said yes count as staffed; offers waiting and quiet plans are shown apart.
+    const slots = d.shifts.reduce((n, s) => n + s.headcount, 0);
+    let conf = 0, wait = 0, plan = 0;
+    for (const s of d.shifts) {
+      const c = Math.min(s.headcount, s.assignments.filter((a) => a.status === 'accepted' && !a.planned).length);
+      const w = Math.min(s.headcount - c, s.assignments.filter((a) => (a.status === 'offered' || a.status === 'pending') && !a.planned).length);
+      const pl = Math.min(s.headcount - c - w, s.assignments.filter((a) => a.planned).length);
+      conf += c; wait += w; plan += pl;
+    }
+    return { slots, conf, wait, plan, open: slots - conf - wait - plan };
+  })();
+
   const renderShifts = (list: Shift[]) =>
     list.map((s) => {
           const active = s.assignments.filter((a) => a.status !== 'declined');
@@ -620,12 +656,161 @@ function Body({ me }: { me: Me }) {
           const stars = (m: Member) => starsShown(m, s.role_name).v;
           const best = (a: { m: Member }, b: { m: Member }) => Number(!!flagOf(a.m)) - Number(!!flagOf(b.m)) || stars(b.m) - stars(a.m) || a.m.name.localeCompare(b.m.name);
           const options = [...candidates].sort(best).map(({ m, e }) => pickOption(m, e, starsShown(m, s.role_name), undefined, d.event.name));
+          const rank = (a: Assignment) => (a.planned ? 2 : a.status === 'accepted' ? 0 : 1);
+          const seated = [...active].sort((a, b) => rank(a) - rank(b));
+          const declined = s.assignments.filter((a) => a.status === 'declined');
+          const nPlan = active.filter((a) => a.planned).length;
+          const nConf = active.filter((a) => !a.planned && a.status === 'accepted').length;
+          const nWait = active.length - nConf - nPlan;
+          const nOpen = Math.max(0, s.headcount - active.length);
+          const hrs = Math.round((new Date(s.ends_at).getTime() - new Date(s.starts_at).getTime()) / 360_000) / 10;
+          const editing = timeEdit?.id === s.id;
+          const grp = (d.groups ?? []).find((x) => x.id === s.group_id);
+          const allIn = nOpen === 0 && nConf >= s.headcount;
+          const count = allIn ? `${nConf}/${s.headcount} full` : [`${nConf}/${s.headcount}`, nWait && `${nWait} waiting`, nPlan && `${nPlan} not sent`, nOpen && `${nOpen} open`].filter(Boolean).join(' · ');
+          // Check in sits on the row from 2 hours before the start until the end; otherwise it is under the row's ⋯ menu.
+          const soon = new Date(s.starts_at).getTime() - Date.now() < 2 * 3600_000 && new Date(s.ends_at).getTime() > Date.now();
+          const startEdit = () => setTimeEdit({ id: s.id, role: s.role_name, start: localInput(new Date(s.starts_at)), end: localInput(new Date(s.ends_at)), head: String(s.headcount) });
+          const stChip = (a: Assignment) =>
+            a.planned ? <span className="cs-st plan" title="Building quietly: they'll get the offer when you publish">Not sent</span>
+            : a.status === 'accepted' ? <span className="cs-st ok">Confirmed</span>
+            : a.status === 'declined' ? <span className="cs-st no">Declined</span>
+            : <span className="cs-st wait">{a.status === 'pending' ? 'Asked to work' : 'Waiting'}</span>;
+          const crewRow = (a: Assignment, n: number | null) => {
+            const nudged = !!a.nudged_at && Date.now() - new Date(a.nudged_at).getTime() < 3600_000;
+            return (
+              <li key={a.id} className={`cs-row${a.status === 'declined' ? ' off' : ''}`}>
+                <span className="cs-n" aria-hidden="true">{n == null ? '–' : p2(n)}</span>
+                <div className="cs-who">
+                  <div>
+                    <b>{a.user_name}</b>
+                    {a.is_lead && a.status !== 'declined' && <span className="cs-lead" title="Leads their department on this event: checks the team in and out and rates them on the On site page">Lead</span>}
+                    {a.rate != null && a.status !== 'declined' && (
+                      <button type="button" className="chip" style={{ border: 0, cursor: 'pointer', marginLeft: 6 }} title="This person's own rate on this event" onClick={() => setSettings('pay')}>
+                        {money(a.rate)}{a.pay_type === 'day' ? '/day' : '/hr'}
+                      </button>
+                    )}
+                  </div>
+                  {a.planned ? (
+                    <span className="cs-sub">sent when you publish</span>
+                  ) : a.clocked_in_at ? (
+                    <span className="cs-sub">on site since {fmtTime(a.clocked_in_at)}</span>
+                  ) : a.status === 'offered' && a.created_at ? (
+                    <span className="cs-sub">
+                      sent {ago(a.created_at)} ago ·{' '}
+                      <button type="button" className="cs-link" disabled={nudged} title={nudged ? 'Reminded in the last hour' : 'Send a reminder to answer (push and text)'} onClick={() => run(() => api(`/api/assignments/${a.id}/nudge`, { body: {} }), `Reminded ${a.user_name}.`)}>
+                        {nudged ? 'reminded' : 'remind'}
+                      </button>
+                    </span>
+                  ) : null}
+                </div>
+                {stChip(a)}
+                <span className="cs-acts">
+                  {a.planned ? (
+                    <button type="button" className="cs-x" aria-label={`Take ${a.user_name} out of the plan`} title="Take out of the plan" onClick={() => run(() => api(`/api/planned-picks/${a.id}`, { method: 'DELETE' }), `${a.user_name} taken out of the plan.`)}>×</button>
+                  ) : (
+                    <>
+                      {(a.status === 'offered' || a.status === 'pending') && (
+                        <button type="button" className="btn small primary" onClick={() => run(() => api(`/api/assignments/${a.id}/confirm`, { body: {} }), `Confirmed ${a.user_name}.`)}>Confirm</button>
+                      )}
+                      {a.status === 'accepted' && !a.clocked_in_at && soon && (
+                        <button type="button" className="btn small" onClick={() => run(() => api(`/api/assignments/${a.id}/check-in`, { body: {} }))}>Check in</button>
+                      )}
+                      {a.clocked_in_at && (
+                        <button type="button" className="btn small" onClick={() => run(() => api(`/api/assignments/${a.id}/check-out`, { body: {} }))}>Check out</button>
+                      )}
+                      {editing && (
+                        <button type="button" className="cs-x" aria-label={`Remove ${a.user_name} from this shift`} title="Remove from this shift" onClick={() => run(() => api(`/api/assignments/${a.id}`, { method: 'DELETE' }), `${a.user_name} removed.`)}>×</button>
+                      )}
+                      <ActionMenu
+                        compact
+                        label={`More for ${a.user_name}`}
+                        items={[
+                          ...(a.status !== 'declined' ? [{ label: a.is_lead ? 'Remove lead' : 'Make lead', icon: 'rate', hint: a.is_lead ? 'Stop this person being the lead on this event' : 'Make this person the lead of their department on this event', onClick: () => { run(() => api(`/api/assignments/${a.id}/lead`, { method: 'PUT', body: { lead: !a.is_lead } }), a.is_lead ? `${a.user_name} is no longer a lead.` : `${a.user_name} is now the lead on this event.`); } }] : []),
+                          ...(a.status === 'accepted' && !a.clocked_in_at && !soon ? [{ label: 'Check in', icon: 'free', onClick: () => { run(() => api(`/api/assignments/${a.id}/check-in`, { body: {} })); } }] : []),
+                          ...(a.status === 'accepted' && !a.clocked_in_at && new Date(s.starts_at) < new Date() ? [{ label: 'Add time', icon: 'pay', hint: 'Enter time for someone who did not clock in', onClick: () => setAddTime(addTime === a.id ? null : a.id) }] : []),
+                          'divider' as const,
+                          { label: 'Remove from this shift', icon: 'trash', danger: true, onClick: () => { run(() => api(`/api/assignments/${a.id}`, { method: 'DELETE' }), `${a.user_name} removed.`); } },
+                        ]}
+                      />
+                    </>
+                  )}
+                </span>
+                {addTime === a.id && (
+                  <div className="cs-row-wide">
+                    <TimeEdit
+                      title={`Add time for ${a.user_name}`}
+                      clockIn={s.starts_at}
+                      clockOut={new Date(s.ends_at) < new Date() ? s.ends_at : null}
+                      onSave={async (t) => {
+                        const r = await api<{ entry: { auto_approved: boolean; status: string } }>(`/api/assignments/${a.id}/time`, { body: t });
+                        setAddTime(null);
+                        setNote(r.entry.auto_approved ? `Time added for ${a.user_name} and approved.` : `Time added for ${a.user_name}. See Timesheets to approve it.`);
+                        await load();
+                      }}
+                      onCancel={() => setAddTime(null)}
+                    />
+                  </div>
+                )}
+              </li>
+            );
+          };
           return (
-            <section className="card" key={s.id} id={`shift-${s.id}`}>
-              <div className="row space">
-                <div>
-                  {timeEdit?.id === s.id ? (
-                    <form className="time-edit" onSubmit={(e) => { e.preventDefault(); saveTime(); }}>
+            <section className={`cs-card${editing ? ' editing' : ''}`} key={s.id} id={`shift-${s.id}`}>
+              <div className="cs-left">
+                <div className="cs-time">{fmtTime(s.starts_at)}</div>
+                <div className="cs-end">→ {fmtTime(s.ends_at)} · {hrs}h</div>
+                <div className="cs-date">{new Date(s.starts_at).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}</div>
+                <h2 className="cs-role">{s.role_name}</h2>
+                <div className="cs-pay">
+                  {[s.hourly_rate != null ? `${money(s.hourly_rate)}${s.pay_type === 'day' ? ' day rate' : '/hr'}` : '', grp?.label ?? ''].filter(Boolean).join(' · ')}
+                </div>
+                {seatBar(nConf, nWait, nPlan, nOpen)}
+                <div className={`cs-count${allIn ? ' ok' : nOpen ? ' bad' : ''}`}>{count}</div>
+                {(s.estimated_cost != null || (s.hourly_rate != null && (!!s.ot_hours || !!s.dt_hours))) && (
+                  <div className="cs-cost">
+                    {s.estimated_cost != null && `est. ${money(s.estimated_cost)} for ${s.headcount - (s.unpriced_seats ?? 0)}${s.unpriced_seats ? ` of ${s.headcount}` : ''}`}
+                    {s.hourly_rate != null && !!s.ot_hours && ` · ${s.ot_hours} h overtime`}
+                    {s.hourly_rate != null && !!s.dt_hours && ` · ${s.dt_hours} h double time`}
+                  </div>
+                )}
+                {editing ? (
+                  <div className="cs-editing">Editing</div>
+                ) : (
+                  <div className="cs-tools">
+                    <button type="button" className="btn small act-btn" title="Change the role, date or time" onClick={startEdit}>
+                      <ActIcon n="quiet" /> Edit
+                    </button>
+                    <button type="button" className="btn small cs-ico" aria-label={`Duplicate ${s.role_name}`} title="Add the same position again (same times and pay, no crew)" onClick={() => run(() => api(`/api/shifts/${s.id}/duplicate`, { body: {} }), `Added another ${s.role_name}.`)}>
+                      <ActIcon n="copy" />
+                    </button>
+                    <button type="button" className="btn small cs-ico danger" aria-label={`Delete ${s.role_name}`} title="Delete this shift" onClick={() => confirm('Delete this shift?') && run(() => api(`/api/shifts/${s.id}`, { method: 'DELETE' }))}>
+                      <ActIcon n="trash" />
+                    </button>
+                  </div>
+                )}
+              </div>
+              <div className="cs-right">
+                {(s.is_open || !!s.required_certs?.length || s.lead_shift_id) && (
+                  <div className="shift-flags">
+                    {s.is_open && <span className="chip open">Open for claiming</span>}
+                    {s.required_certs?.map((c) => <span key={c} className="chip">{c}</span>)}
+                    {s.lead_shift_id && (() => {
+                      const l = d.shifts.find((x) => x.id === s.lead_shift_id);
+                      return l ? <span className="chip lead-chip" title="The lead on that shift checks in and rates this shift's crew">Led by {l.role_name} · {shortWhen(l.starts_at)}</span> : null;
+                    })()}
+                  </div>
+                )}
+                {s.role_rate !== undefined && s.hourly_rate == null && (
+                  <div className="small" style={{ margin: '.3rem 0', color: 'var(--staff-warn)' }}>
+                    No {s.pay_type === 'day' ? 'day rate' : 'pay rate'} set for {s.role_name}
+                    {s.unpriced_seats ? `, so ${s.unpriced_seats} seat${s.unpriced_seats === 1 ? ' is' : 's are'} not in the cost` : ''}.{' '}
+                    <Link href="/skills">Set it in Roles &amp; rates</Link> or edit this shift&apos;s pay rate.
+                  </div>
+                )}
+                {editing && timeEdit && (
+                  <div className="cs-edit">
+                    <form id={`edit-${s.id}`} className="cs-fields" onSubmit={(e) => { e.preventDefault(); saveTime(); }}>
                       <label>
                         Role
                         <RolePicker value={timeEdit.role} onChange={(v) => setTimeEdit({ ...timeEdit, role: v })} sections={skillSections} required ariaLabel="Role" />
@@ -648,266 +833,157 @@ function Body({ me }: { me: Me }) {
                         Ends
                         <input type="datetime-local" value={timeEdit.end} min={timeEdit.start} onChange={(e) => setTimeEdit({ ...timeEdit, end: e.target.value })} required />
                       </label>
-                      <div className="row" style={{ gap: 6 }}>
-                        <button className="btn small primary">Save</button>
-                        <button type="button" className="btn ghost small" onClick={() => setTimeEdit(null)}>Cancel</button>
-                      </div>
+                      <label>
+                        People needed
+                        <input type="number" min={Math.max(1, active.length)} max={500} value={timeEdit.head} onChange={(e) => setTimeEdit({ ...timeEdit, head: e.target.value })} required />
+                      </label>
                     </form>
-                  ) : (
-                  <>
-                  <h2>{s.role_name}</h2>
-                  <div className="muted small">
-                    <button type="button" className="btn ghost small time-edit-btn" title="Change the role, date or time" onClick={() => setTimeEdit({ id: s.id, role: s.role_name, start: localInput(new Date(s.starts_at)), end: localInput(new Date(s.ends_at)) })}>
-                      ✎ Edit time
-                    </button>{' '}
-                    {fmtDateTime(s.starts_at)} – {fmtTime(s.ends_at)}
-                    {s.hourly_rate != null && (
-                      <>
-                        {' · '}
-                        {money(s.hourly_rate)}{s.pay_type === 'day' ? ' day rate' : '/hr'}
-                      </>
-                    )}
-                    {s.estimated_cost != null && ` · est. cost ${money(s.estimated_cost)} for ${s.headcount - (s.unpriced_seats ?? 0)}${s.unpriced_seats ? ` of ${s.headcount}` : ''}`}
-                    {s.hourly_rate != null && !!s.ot_hours && ` · ${s.ot_hours} h overtime`}
-                    {s.hourly_rate != null && !!s.dt_hours && ` · ${s.dt_hours} h double time`}
-                  </div>
-                  </>
-                  )}
-                  {s.role_rate !== undefined && s.hourly_rate == null && (
-                    <div className="small" style={{ marginTop: '.3rem', color: 'var(--staff-warn)' }}>
-                      No {s.pay_type === 'day' ? 'day rate' : 'pay rate'} set for {s.role_name}
-                      {s.unpriced_seats ? `, so ${s.unpriced_seats} seat${s.unpriced_seats === 1 ? ' is' : 's are'} not in the cost` : ''}.{' '}
-                      <Link href="/skills">Set it in Roles &amp; rates</Link> or change this shift&apos;s pay rate.
-                    </div>
-                  )}
-                  {s.role_rate !== undefined && (
-                    <div className="small" style={{ marginTop: '.3rem' }}>
-                      {payEdit?.id === s.id ? (
-                        <span className="row" style={{ gap: '.4rem', flexWrap: 'wrap' }}>
-                          <span aria-hidden="true">$</span>
-                          <input type="number" min={0.01} step="0.01" autoFocus value={payEdit.value} onChange={(e) => setPayEdit({ id: s.id, value: e.target.value })} aria-label="Pay rate for this shift" style={{ width: '6.5rem' }} />
-                          <span className="muted">{s.pay_type === 'day' ? ' per day' : '/hr'} for this shift only{s.role_rate ? ` (role rate ${money(s.role_rate)})` : ''}</span>
-                          <button className="btn small primary" disabled={!(Number(payEdit.value) > 0)} onClick={() => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { payRate: Math.round(Number(payEdit.value) * 100) / 100 } }), 'Pay rate updated. Anyone on the shift has been told.').then(() => setPayEdit(null))}>Save</button>
-                          {s.pay_rate_override && <button className="btn small" onClick={() => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { payRate: null } }), 'Back to the role pay rate.').then(() => setPayEdit(null))}>Use role rate</button>}
-                          <button className="btn ghost small" onClick={() => setPayEdit(null)}>Cancel</button>
-                        </span>
-                      ) : (
-                        <>
-                          <span className="chip">{s.pay_type === 'day' ? 'Day rate' : 'Hourly'}</span>{' '}
-                          {s.pay_rate_override && <span className="chip">Custom pay rate</span>}{' '}
-                          <button className="btn ghost small" onClick={() => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { payType: s.pay_type === 'day' ? 'hourly' : 'day' } }), s.pay_type === 'day' ? 'Now paid hourly.' : 'Now paid a flat day rate.')}>{s.pay_type === 'day' ? 'Pay hourly' : 'Pay day rate'}</button>{' '}
-                          <button className="btn ghost small" onClick={() => setPayEdit({ id: s.id, value: String(s.hourly_rate ?? s.role_rate ?? '') })}>Change pay rate</button>
-                        </>
-                      )}
-                    </div>
-                  )}
-                  <div className="shift-flags">
-                    {s.pay_type !== 'day' && (
-                      <select
-                        className="min-call-select"
-                        value={s.min_hours ? String(Number(s.min_hours)) : ''}
-                        aria-label="Minimum call"
-                        title="Minimum hours paid, even if crew are released earlier"
-                        onChange={(e) => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { minHours: e.target.value ? Number(e.target.value) : null } }), e.target.value ? `${e.target.value} h minimum call set.` : 'Minimum call removed.')}
-                      >
-                        <option value="">No minimum call</option>
-                        <option value="4">4 h minimum call</option>
-                        <option value="5">5 h minimum call</option>
-                        {s.min_hours && ![4, 5].includes(Number(s.min_hours)) && <option value={String(Number(s.min_hours))}>{Number(s.min_hours)} h minimum call</option>}
-                      </select>
-                    )}
-                    {s.is_open && <span className="chip open">Open for claiming</span>}
-                    {s.required_certs?.map((c) => (
-                      <span key={c} className="chip">
-                        {c}
-                      </span>
-                    ))}
-                    {s.lead_shift_id && (() => {
-                      const l = d.shifts.find((x) => x.id === s.lead_shift_id);
-                      return l ? <span className="chip lead-chip" title="The lead on that shift checks in and rates this shift's crew">Led by {l.role_name} · {shortWhen(l.starts_at)}</span> : null;
-                    })()}
-                  </div>
-                  {teamRow(s)}
-                </div>
-                <div className="row">
-                  <span className={`pill ${full ? 'accepted' : 'offered'}`}>
-                    {active.length} / {s.headcount} filled
-                  </span>
-                  {d.phases.length > 0 && (
-                    <select
-                      className="move-phase"
-                      value={s.phase_id ?? ''}
-                      aria-label="Move shift to a phase"
-                      onChange={(e) => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { phaseId: e.target.value || null } }), 'Shift moved.')}
-                    >
-                      <option value="">No phase</option>
-                      {d.phases.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.label} · {fmtDate(p.starts_on.slice(0, 10))}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  {s.phase_id && groupsOf(s.phase_id).length > 0 && (
-                    <select
-                      className="move-phase"
-                      value={s.group_id ?? ''}
-                      aria-label="Move shift to a group"
-                      onChange={(e) => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { groupId: e.target.value || null } }), 'Shift moved.')}
-                    >
-                      <option value="">No group</option>
-                      {groupsOf(s.phase_id).map((x) => (
-                        <option key={x.id} value={x.id}>{x.label}</option>
-                      ))}
-                    </select>
-                  )}
-                  <button className="btn ghost small" onClick={() => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { isOpen: !s.is_open } }))}>
-                    {s.is_open ? 'Close to claims' : 'Open for claiming'}
-                  </button>
-                  <button className="btn ghost small" title="Add the same position again (same times and pay, no crew)" onClick={() => run(() => api(`/api/shifts/${s.id}/duplicate`, { body: {} }), `Added another ${s.role_name}.`)}>
-                    ⧉ Duplicate
-                  </button>
-                  <button className="btn ghost small danger" onClick={() => confirm('Delete this shift?') && run(() => api(`/api/shifts/${s.id}`, { method: 'DELETE' }))}>
-                    Delete
-                  </button>
-                </div>
-              </div>
-              {pending.length > 0 && (
-                <p className="small muted">
-                  {pending.length} pending claim{pending.length > 1 ? 's' : ''} — review in <Link href="/requests">Requests</Link>.
-                </p>
-              )}
-              {s.assignments.length > 0 && (
-                <ul className="plain">
-                  {s.assignments.map((a) => (
-                    <li key={a.id} className="row space" style={{ flexWrap: 'wrap' }}>
-                      <span>
-                        {a.user_name} <Pill status={a.status} />
-                        {a.planned && <span className="muted small" title="Building quietly: they'll get the offer when you publish"> not sent yet</span>}
-                        {a.is_lead && a.status !== 'declined' && <span className="chip lead-chip" title="Leads their department on this event: checks the team in and out and rates them on the On site page">★ Lead</span>}
-                        {a.rate != null && a.status !== 'declined' && (
-                          <button type="button" className="chip" style={{ border: 0, cursor: 'pointer', marginLeft: 4 }} title="This person's own rate on this event" onClick={() => setSettings('pay')}>
-                            {money(a.rate)}{a.pay_type === 'day' ? '/day' : '/hr'}
-                          </button>
-                        )}
-                      </span>
-                      {a.planned ? (
-                      <span className="row">
-                        <button className="btn ghost small" aria-label={`Take ${a.user_name} out of the plan`} onClick={() => run(() => api(`/api/planned-picks/${a.id}`, { method: 'DELETE' }), `${a.user_name} taken out of the plan.`)}>
-                          ✕ Remove
-                        </button>
-                      </span>
-                      ) : (
-                      <span className="row">
-                        {(a.status === 'offered' || a.status === 'pending') && (
-                          <button className="btn small primary" onClick={() => run(() => api(`/api/assignments/${a.id}/confirm`, { body: {} }), `Confirmed ${a.user_name}.`)}>
-                            Confirm
-                          </button>
-                        )}
-                        {a.status !== 'declined' && (
-                          <button
-                            className="btn ghost small"
-                            title={a.is_lead ? 'Stop this person being the lead on this event' : 'Make this person the lead of their department on this event'}
-                            onClick={() => run(() => api(`/api/assignments/${a.id}/lead`, { method: 'PUT', body: { lead: !a.is_lead } }), a.is_lead ? `${a.user_name} is no longer a lead.` : `${a.user_name} is now the lead on this event.`)}
+                    <div className="cs-fields">
+                      <label>
+                        Pay
+                        <select value={s.pay_type === 'day' ? 'day' : 'hourly'} onChange={(e) => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { payType: e.target.value } }), e.target.value === 'day' ? 'Now paid a flat day rate.' : 'Now paid hourly.')}>
+                          <option value="hourly">Hourly</option>
+                          <option value="day">Day rate</option>
+                        </select>
+                      </label>
+                      {s.pay_type !== 'day' && (
+                        <label>
+                          Minimum call
+                          <select
+                            value={s.min_hours ? String(Number(s.min_hours)) : ''}
+                            title="Minimum hours paid, even if crew are released earlier"
+                            onChange={(e) => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { minHours: e.target.value ? Number(e.target.value) : null } }), e.target.value ? `${e.target.value} h minimum call set.` : 'Minimum call removed.')}
                           >
-                            {a.is_lead ? 'Remove lead' : 'Make lead'}
-                          </button>
-                        )}
-                        {a.status === 'accepted' && !a.clocked_in_at && new Date(s.starts_at) < new Date() && (
-                          <button className="btn ghost small" title="Enter time for someone who did not clock in" onClick={() => setAddTime(addTime === a.id ? null : a.id)}>
-                            + Add time
-                          </button>
-                        )}
-                        {a.status === 'accepted' && !a.clocked_in_at && (
-                          <button className="btn small" onClick={() => run(() => api(`/api/assignments/${a.id}/check-in`, { body: {} }))}>
-                            Check in
-                          </button>
-                        )}
-                        {a.clocked_in_at && (
+                            <option value="">None</option>
+                            <option value="4">4 hours</option>
+                            <option value="5">5 hours</option>
+                            {s.min_hours && ![4, 5].includes(Number(s.min_hours)) && <option value={String(Number(s.min_hours))}>{Number(s.min_hours)} hours</option>}
+                          </select>
+                        </label>
+                      )}
+                      {d.phases.length > 0 && (
+                        <label>
+                          Day
+                          <select value={s.phase_id ?? ''} onChange={(e) => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { phaseId: e.target.value || null } }), 'Shift moved.')}>
+                            <option value="">No day</option>
+                            {d.phases.map((p) => <option key={p.id} value={p.id}>{p.label} · {fmtDate(p.starts_on.slice(0, 10))}</option>)}
+                          </select>
+                        </label>
+                      )}
+                      {s.phase_id && groupsOf(s.phase_id).length > 0 && (
+                        <label>
+                          Group
+                          <select value={s.group_id ?? ''} onChange={(e) => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { groupId: e.target.value || null } }), 'Shift moved.')}>
+                            <option value="">No group</option>
+                            {groupsOf(s.phase_id).map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
+                          </select>
+                        </label>
+                      )}
+                      <label className="check cs-check">
+                        <input type="checkbox" checked={s.is_open} onChange={() => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { isOpen: !s.is_open } }))} />
+                        Open for crew to claim
+                      </label>
+                    </div>
+                    {s.role_rate !== undefined && (
+                      <div className="small cs-rate">
+                        {payEdit?.id === s.id ? (
+                          <span className="row" style={{ gap: '.4rem', flexWrap: 'wrap' }}>
+                            <span aria-hidden="true">$</span>
+                            <input type="number" min={0.01} step="0.01" autoFocus value={payEdit.value} onChange={(e) => setPayEdit({ id: s.id, value: e.target.value })} aria-label="Pay rate for this shift" style={{ width: '6.5rem' }} />
+                            <span className="muted">{s.pay_type === 'day' ? ' per day' : '/hr'} for this shift only{s.role_rate ? ` (role rate ${money(s.role_rate)})` : ''}</span>
+                            <button type="button" className="btn small primary" disabled={!(Number(payEdit.value) > 0)} onClick={() => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { payRate: Math.round(Number(payEdit.value) * 100) / 100 } }), 'Pay rate updated. Anyone on the shift has been told.').then(() => setPayEdit(null))}>Save rate</button>
+                            {s.pay_rate_override && <button type="button" className="btn small" onClick={() => run(() => api(`/api/shifts/${s.id}`, { method: 'PATCH', body: { payRate: null } }), 'Back to the role pay rate.').then(() => setPayEdit(null))}>Use role rate</button>}
+                            <button type="button" className="btn ghost small" onClick={() => setPayEdit(null)}>Cancel</button>
+                          </span>
+                        ) : (
                           <>
-                            <span className="muted small">on site since {fmtTime(a.clocked_in_at)}</span>
-                            <button className="btn small" onClick={() => run(() => api(`/api/assignments/${a.id}/check-out`, { body: {} }))}>
-                              Check out
-                            </button>
+                            Pay rate: <b>{s.hourly_rate != null ? `${money(s.hourly_rate)}${s.pay_type === 'day' ? ' per day' : '/hr'}` : 'not set'}</b>
+                            {s.pay_rate_override && <span className="chip" style={{ marginLeft: 6 }}>Custom for this shift</span>}{' '}
+                            <button type="button" className="btn ghost small" onClick={() => setPayEdit({ id: s.id, value: String(s.hourly_rate ?? s.role_rate ?? '') })}>Change pay rate</button>
                           </>
                         )}
-                        <button className="btn ghost small" aria-label={`Remove ${a.user_name} from this shift`} title="Remove from this shift" onClick={() => run(() => api(`/api/assignments/${a.id}`, { method: 'DELETE' }), `${a.user_name} removed.`)}>
-                          ✕ Remove
-                        </button>
-                      </span>
-                      )}
-                      {addTime === a.id && (
-                        <div style={{ flexBasis: '100%' }}>
-                          <TimeEdit
-                            title={`Add time for ${a.user_name}`}
-                            clockIn={s.starts_at}
-                            clockOut={new Date(s.ends_at) < new Date() ? s.ends_at : null}
-                            onSave={async (t) => {
-                              const r = await api<{ entry: { auto_approved: boolean; status: string } }>(`/api/assignments/${a.id}/time`, { body: t });
-                              setAddTime(null);
-                              setNote(r.entry.auto_approved ? `Time added for ${a.user_name} and approved.` : `Time added for ${a.user_name}. See Timesheets to approve it.`);
-                              await load();
-                            }}
-                            onCancel={() => setAddTime(null)}
-                          />
-                        </div>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {pending.length + s.assignments.filter((a) => a.status === 'offered').length > 1 && (
-                <div className="row">
-                  <button
-                    className="btn small"
-                    onClick={() =>
-                      run(async () => {
-                        for (const a of s.assignments.filter((x) => x.status === 'offered' || x.status === 'pending')) await api(`/api/assignments/${a.id}/confirm`, { body: {} });
-                      }, 'Confirmed everyone on this shift.')
-                    }
-                  >
-                    Confirm everyone
-                  </button>
-                </div>
-              )}
-              <div className="crew-slots crew-pick-anchor">
-                {Array.from({ length: Math.min(Math.max(0, s.headcount - active.length), 6) }).map((_, n) => (
-                  <button key={n} type="button" className="slot-add" onClick={() => setAdding(adding === s.id ? null : s.id)} aria-label={`Add crew to ${s.role_name}`}>
-                    + Add crew
-                  </button>
-                ))}
-                {s.headcount - active.length > 6 && <span className="muted small">{s.headcount - active.length - 6} more open spots</span>}
-                {full && (
-                  <button type="button" className="slot-add" onClick={() => setAdding(adding === s.id ? null : s.id)} title="Adds one more spot to this shift and puts the person in it">
-                    + Add another person
-                  </button>
+                      </div>
+                    )}
+                    <p className="muted small" style={{ margin: '6px 0 0' }}>Role, times and people needed save with Save shift. The other choices save as soon as you change them.</p>
+                  </div>
                 )}
-                <label className="row small" style={{ gap: '.35rem', alignItems: 'center', marginLeft: 'auto' }}>
-                  <input type="checkbox" style={{ width: 'auto' }} checked={autoConfirm} onChange={(e) => setAutoConfirm(e.target.checked)} />
-                  Confirm automatically
-                </label>
-                {adding === s.id && (
-                  <CrewPick
-                    title={full ? `Add a spot on ${s.role_name}` : `Add crew to ${s.role_name} (${s.headcount - active.length} open)`}
-                    busy={busyAdd}
-                    extra={
-                      <label className="check crew-pick-lead">
-                        <input type="checkbox" checked={asLead} onChange={(e) => setAsLead(e.target.checked)} />
-                        <span>Add as lead <span className="muted small">(checks in and rates their department on this event)</span></span>
-                      </label>
-                    }
-                    onClose={() => setAdding(null)}
-                    options={options}
-                    onPick={(o) => {
-                      if (active.length + 1 >= s.headcount && !full) setAdding(null);
-                      addCrew(s, o.id, o.kind === 'soft' || o.kind === 'busy', full, asLead);
-                    }}
-                  />
+                {teamRow(s)}
+                {pending.length > 0 && (
+                  <p className="small muted" style={{ margin: '6px 0 0' }}>
+                    {pending.length} pending claim{pending.length > 1 ? 's' : ''}: review in <Link href="/requests">Requests</Link>.
+                  </p>
+                )}
+                <div className="crew-pick-anchor">
+                  <ul className="cs-rows">
+                    {seated.map((a, i) => crewRow(a, i + 1))}
+                    {Array.from({ length: Math.min(nOpen, 6) }).map((_, n) => (
+                      <li key={`open-${n}`} className="cs-row open">
+                        <span className="cs-n" aria-hidden="true">{p2(active.length + n + 1)}</span>
+                        <button type="button" className="cs-fill" onClick={() => setAdding(adding === s.id ? null : s.id)} aria-label={`Fill an open spot on ${s.role_name}`}>
+                          + Fill this spot
+                        </button>
+                      </li>
+                    ))}
+                    {full && (
+                      <li className="cs-row open">
+                        <span className="cs-n" aria-hidden="true">+</span>
+                        <button type="button" className="cs-fill more" onClick={() => setAdding(adding === s.id ? null : s.id)} title="Adds one more spot to this shift and puts the person in it">
+                          + Add another person
+                        </button>
+                      </li>
+                    )}
+                    {declined.map((a) => crewRow(a, null))}
+                  </ul>
+                  {nOpen > 6 && <p className="muted small" style={{ margin: '6px 0 0' }}>{nOpen - 6} more open spots</p>}
+                  {adding === s.id && (
+                    <CrewPick
+                      title={full ? `Add a spot on ${s.role_name}` : `Add crew to ${s.role_name} (${s.headcount - active.length} open)`}
+                      busy={busyAdd}
+                      extra={
+                        <label className="check crew-pick-lead">
+                          <input type="checkbox" checked={asLead} onChange={(e) => setAsLead(e.target.checked)} />
+                          <span>Add as lead <span className="muted small">(checks in and rates their department on this event)</span></span>
+                        </label>
+                      }
+                      onClose={() => setAdding(null)}
+                      options={options}
+                      onPick={(o) => {
+                        if (active.length + 1 >= s.headcount && !full) setAdding(null);
+                        addCrew(s, o.id, o.kind === 'soft' || o.kind === 'busy', full, asLead);
+                      }}
+                    />
+                  )}
+                </div>
+                <div className="cs-foot">
+                  {pending.length + s.assignments.filter((a) => a.status === 'offered').length > 1 && (
+                    <button
+                      type="button"
+                      className="btn small"
+                      onClick={() =>
+                        run(async () => {
+                          for (const a of s.assignments.filter((x) => x.status === 'offered' || x.status === 'pending')) await api(`/api/assignments/${a.id}/confirm`, { body: {} });
+                        }, 'Confirmed everyone on this shift.')
+                      }
+                    >
+                      Confirm everyone
+                    </button>
+                  )}
+                  {!full && crewGroups.length > 0 && (
+                    <FillFromGroup shiftId={s.id} groups={crewGroups} confirmed={autoConfirm} onError={setError} onDone={(m) => { setNote(m); load(); }} />
+                  )}
+                  <label className="row small cs-auto">
+                    <input type="checkbox" style={{ width: 'auto' }} checked={autoConfirm} onChange={(e) => setAutoConfirm(e.target.checked)} />
+                    Confirm automatically
+                  </label>
+                </div>
+                {editing && (
+                  <div className="cs-edit-foot">
+                    <button type="submit" form={`edit-${s.id}`} className="btn primary">Save shift</button>
+                    <button type="button" className="btn" onClick={() => { setTimeEdit(null); setPayEdit(null); }}>Cancel</button>
+                    <button type="button" className="btn ghost danger" style={{ marginLeft: 'auto' }} onClick={() => confirm('Delete this shift?') && run(() => api(`/api/shifts/${s.id}`, { method: 'DELETE' }))}>Delete shift</button>
+                  </div>
                 )}
               </div>
-              {!full && crewGroups.length > 0 && (
-                <FillFromGroup shiftId={s.id} groups={crewGroups} confirmed={autoConfirm} onError={setError} onDone={(m) => { setNote(m); load(); }} />
-              )}
             </section>
           );
     });
@@ -1020,9 +1096,9 @@ function Body({ me }: { me: Me }) {
       </>
     );
   };
-  const groupSection = (g: { key: string; phase: Phase | null; shifts: Shift[] }) => (
-    <div key={g.key} className="phase-group">
-      {(g.phase || d.phases.length > 0) && (
+  const groupSection = (g: { key: string; phase: Phase | null; shifts: Shift[] }, one = false) => (
+    <div key={g.key} className={one ? 'phase-group one' : 'phase-group'}>
+      {(g.phase || (d.phases.length > 0 && !one)) && (
         <div className="phase-head">
           {phaseEdit && g.phase && phaseEdit.id === g.phase.id ? (
             <form className="time-edit phase-edit" onSubmit={(e) => { e.preventDefault(); savePhase(); }}>
@@ -1051,7 +1127,7 @@ function Body({ me }: { me: Me }) {
             </form>
           ) : (
           <>
-          <button
+          {!one && <button
             type="button"
             className="phase-toggle"
             aria-expanded={!closed.has(g.key)}
@@ -1071,9 +1147,9 @@ function Body({ me }: { me: Me }) {
                 })()}
               </span>
             </span>
-          </button>
+          </button>}
           {g.phase && (
-            <div className="row" style={{ gap: 6 }}>
+            <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
               <button className="btn small primary" onClick={() => addToPhase(g.phase!)}>
                 + Add shift
               </button>
@@ -1090,7 +1166,7 @@ function Body({ me }: { me: Me }) {
                 Use template
               </button>
               <button className="btn ghost small" title="Change this phase's name or dates" onClick={() => setPhaseEdit({ id: g.phase!.id, label: g.phase!.label, start: g.phase!.starts_on.slice(0, 10), end: g.phase!.ends_on.slice(0, 10), move: true })}>
-                ✎ Edit dates
+                {one ? '✎ Edit day' : '✎ Edit dates'}
               </button>
             </div>
           )}
@@ -1120,7 +1196,7 @@ function Body({ me }: { me: Me }) {
           onDone={(m) => { setQuick(null); setNote(m); load(); }}
         />
       )}
-      {closed.has(g.key) ? null : phaseBody(g)}
+      {!one && closed.has(g.key) ? null : phaseBody(g)}
     </div>
   );
 
@@ -1132,10 +1208,17 @@ function Body({ me }: { me: Me }) {
     n.delete(s.phase_id && d.phases.some((p) => p.id === s.phase_id) ? s.phase_id : 'none');
     if (s.group_id) n.delete(gKey(s.group_id));
     setClosedSaved(n);
+    if (day !== 'all') setDay(s.phase_id && d.phases.some((p) => p.id === s.phase_id) ? s.phase_id : 'none');
     setAdding(shiftId);
     setTimeout(() => document.getElementById(`shift-${shiftId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
   };
 
+  const dayKey = day === 'all' || groups.some((g) => g.key === day) ? day : groups[0]?.key ?? 'all';
+  const addDay = () => {
+    const el = document.getElementById('ev-phases');
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setTimeout(() => (el?.querySelector('.grid-form input') as HTMLElement | null)?.focus({ preventScroll: true }), 350);
+  };
   const shiftModalTitle = (() => {
     const ph = d.phases.find((p) => p.id === f.phaseId);
     const gr = (d.groups ?? []).find((x) => x.id === f.groupId);
@@ -1314,55 +1397,12 @@ function Body({ me }: { me: Me }) {
           <PlusIcon />
         </button>
       </TopbarAction>
-      <p className="small" style={{ margin: '0 0 16px' }}>
+      <p className="small" style={{ margin: '0 0 12px' }}>
         <Link href="/events">← All events</Link>
       </p>
-      {custInfo && (
-        <dl className="strip">
-          <div className="who">
-            <span className={avClass(custInfo.name)} aria-hidden="true">{initialsOf(custInfo.name)}</span>
-            <div>
-              <dt>Customer</dt>
-              <dd><Link href={`/customers/${custInfo.id}`} style={{ color: 'inherit', textDecoration: 'none' }}>{custInfo.name}</Link></dd>
-            </div>
-          </div>
-          {custInfo.contact && <div><dt>Contact</dt><dd>{custInfo.contact}</dd></div>}
-          {custInfo.email && <div><dt>Email</dt><dd><a href={`mailto:${custInfo.email}`} style={{ color: 'inherit', textDecoration: 'none' }}>{custInfo.email}</a></dd></div>}
-          {custInfo.phone && <div><dt>Phone</dt><dd><a href={`tel:${custInfo.phone}`} style={{ color: 'inherit', textDecoration: 'none' }}>{custInfo.phone}</a></dd></div>}
-        </dl>
-      )}
-      <div className="title-row">
-        <div style={{ minWidth: 0 }}>
-          <h1>{ev.name}</h1>
-          <div className="sub">
-            {[ev.client, ev.venue].filter(Boolean).join(' · ')}
-            {(ev.client || ev.venue) && ' · '}
-            {fmtDate(ev.start_date.slice(0, 10))}
-            {ev.end_date.slice(0, 10) !== ev.start_date.slice(0, 10) && <> – {fmtDate(ev.end_date.slice(0, 10))}</>}
-          </div>
-          <div className="row small" style={{ gap: '.35rem', marginTop: '.35rem', flexWrap: 'wrap' }}>
-            {(() => {
-              const slots = d.shifts.reduce((n, s) => n + s.headcount, 0);
-              if (!slots) return <span className="pill">No shifts yet</span>;
-              // Only people who said yes count as staffed; offers waiting and quiet plans are shown apart.
-              let conf = 0, wait = 0, plan = 0;
-              for (const s of d.shifts) {
-                const c = Math.min(s.headcount, s.assignments.filter((a) => a.status === 'accepted').length);
-                const w = Math.min(s.headcount - c, s.assignments.filter((a) => a.status === 'offered' || a.status === 'pending').length);
-                const p = Math.min(s.headcount - c - w, s.assignments.filter((a) => a.planned).length);
-                conf += c; wait += w; plan += p;
-              }
-              const open = slots - conf - wait - plan;
-              const cls = conf >= slots ? 'staff-good' : conf + wait + plan > 0 ? 'staff-warn' : 'staff-bad';
-              return (
-                <>
-                  <span className={`pill ${cls}`} title="Seats where the person said yes">{conf >= slots ? 'Fully confirmed' : conf + wait + plan > 0 ? 'Partly staffed' : 'No crew yet'} · {conf}/{slots} confirmed</span>
-                  {wait > 0 && <span className="pill offered" title="Offered, waiting for an answer">{wait} waiting</span>}
-                  {plan > 0 && <span className="pill draft-pill" title="Picked while building quietly: not sent yet">{plan} not sent</span>}
-                  {open > 0 && <span className="pill staff-bad" title="Seats with nobody on them">{open} open</span>}
-                </>
-              );
-            })()}
+      <div className="evh">
+        <div className="evh-main">
+          <div className="evh-chips">
             {ev.pipeline_status && (
               <select
                 className="pm-stage"
@@ -1385,43 +1425,73 @@ function Body({ me }: { me: Me }) {
                 {(['low', 'medium', 'high'] as Priority[]).map((p) => <option key={p} value={p}>{PRIORITY[p].label} priority</option>)}
               </select>
             )}
-            <Link href="/pipeline" className="chip" style={{ textDecoration: 'none' }}>View pipeline</Link>
-            <button type="button" className="chip" style={{ border: 0, cursor: 'pointer' }} onClick={() => setSettings('clock')}>
-              {ev.clock_mode === 'coordinator' ? 'Coordinator clocks crew in' : 'Crew clock themselves in'}
-              {ev.geofence_m ? ` · within ${ev.geofence_m} m` : ''}
-            </button>
-            {d.overtime && (
-              <button type="button" className="chip" style={{ border: 0, cursor: 'pointer' }} onClick={() => setSettings('ot')}>
-                {d.overtime.otAfter ? `OT after ${d.overtime.otAfter} h` : 'Company overtime'}
-                {d.overtime.effectiveState ? ` · ${d.overtime.effectiveState}` : ''}
+            {rm?.linked && rm.project && (
+              <button type="button" className="evh-chip" onClick={() => setSettings('rentman')} title="Open the linked Rentman project">
+                Rentman {rm.project.number ? `#${rm.project.number}` : rm.project.name}
               </button>
             )}
+            {ev.staffing_draft && (
+              <span className="evh-chip quiet" title="Picks are kept as a plan. Nobody is told until you press Publish crew.">
+                Building quietly{plannedCount ? ` · ${plannedCount} not sent` : ''}
+              </span>
+            )}
+            <Link href="/pipeline" className="evh-chip">View pipeline</Link>
           </div>
-                </div>
-          <div className="acts ev-acts">
+          <h1>{ev.name}</h1>
+          <div className="sub">
+            {fmtDate(ev.start_date.slice(0, 10))}
+            {ev.end_date.slice(0, 10) !== ev.start_date.slice(0, 10) && <> to {fmtDate(ev.end_date.slice(0, 10))}</>}
+            {[ev.venue, ev.client].filter(Boolean).map((x) => ` · ${x}`).join('')}
+          </div>
+        </div>
+        <div className="evh-staff" aria-label="Staffing">
+          {staff.slots ? (
+            <>
+              <div className="evh-num">
+                <b>{staff.conf}</b>
+                <span> / {staff.slots} confirmed</span>
+                <em>{Math.round((staff.conf / staff.slots) * 100)}%</em>
+              </div>
+              {seatBar(staff.conf, staff.wait, staff.plan, staff.open, true)}
+              <div className="evh-legend">
+                <span className="ok"><b>{staff.conf}</b> confirmed</span>
+                {staff.wait > 0 && <span className="wait" title="Offered, waiting for an answer"><b>{staff.wait}</b> waiting</span>}
+                {staff.plan > 0 && <span className="plan" title="Picked while building quietly: not sent yet"><b>{staff.plan}</b> not sent</span>}
+                {staff.open > 0 && <span className="bad" title="Seats with nobody on them"><b>{staff.open}</b> open</span>}
+              </div>
+            </>
+          ) : (
+            <span className="muted">No shifts yet. Add the first one to start staffing.</span>
+          )}
+        </div>
+      </div>
+      <div className="ev-bar">
             {/* Main actions: building and sending the crew, then talking to them and billing. Everything else is under More. */}
             {ev.staffing_draft ? (
-              <button className="btn small primary act-btn" title="Send every planned pick at once" onClick={publish}>
+              <button className="btn primary act-btn" title="Send every planned pick at once" onClick={publish}>
                 <ActIcon n="publish" /> Publish crew{plannedCount ? ` · ${plannedCount}` : ''}
               </button>
             ) : (
-              <button className="btn small act-btn" title="Pick crew without telling anyone, then send every offer at once with Publish" onClick={() => run(() => api(`/api/events/${id}/build-quietly`, { method: 'PUT', body: { on: true } }), 'Building quietly: picks are kept as a plan until you press Publish.')}>
+              <button className="btn act-btn" title="Pick crew without telling anyone, then send every offer at once with Publish" onClick={() => run(() => api(`/api/events/${id}/build-quietly`, { method: 'PUT', body: { on: true } }), 'Building quietly: picks are kept as a plan until you press Publish.')}>
                 <ActIcon n="quiet" /> Build quietly
               </button>
             )}
-            <button className="btn small act-btn" onClick={() => { setAfCheck(''); setSettings('autofill'); }} aria-haspopup="dialog" title="Propose the best available crew for every open seat">
+            <button className="btn act-btn" onClick={() => openShiftModal()} aria-haspopup="dialog" title="Set the role, times, pay, minimum call and crew">
+              <PlusIcon /> Add shift
+            </button>
+            <button className="btn act-btn" onClick={() => { setAfCheck(''); setSettings('autofill'); }} aria-haspopup="dialog" title="Propose the best available crew for every open seat">
               <ActIcon n="autofill" /> Auto-fill
             </button>
             {rm?.linked && rm.project && (me.role === 'admin' || me.role === 'manager') && (
-              <button className="btn small act-btn" disabled={rmBuilding} title="Make this event's days and shifts from the Rentman project's crew and transport, and keep them in step" onClick={buildFromRentmanNow}>
-                <ActIcon n="rentman" /> {rmBuilding ? 'Building the crew…' : 'Build the crew from Rentman'}
+              <button className="btn act-btn" disabled={rmBuilding} title="Make this event's days and shifts from the Rentman project's crew and transport, and keep them in step" onClick={buildFromRentmanNow}>
+                <ActIcon n="rentman" /> {rmBuilding ? 'Building the crew…' : 'Build from Rentman'}
               </button>
             )}
-            <button className="btn small act-btn" onClick={() => setSettings('update')} aria-haspopup="dialog" title="Send an update to the crew scheduled on this event">
+            <button className="btn act-btn" onClick={() => setSettings('update')} aria-haspopup="dialog" title="Send an update to the crew scheduled on this event">
               <ActIcon n="update" /> Send update
             </button>
             {(me.role === 'admin' || me.canAdjustRates) && (
-              <button className="btn small act-btn" onClick={() => setSettings('invoice')} aria-haspopup="dialog" title="Bill the customer for this event">
+              <button className="btn act-btn" onClick={() => setSettings('invoice')} aria-haspopup="dialog" title="Bill the customer for this event">
                 <ActIcon n="invoice" /> Invoice
               </button>
             )}
@@ -1431,6 +1501,7 @@ function Body({ me }: { me: Me }) {
                 { label: 'Who’s free?', icon: 'free', hint: 'Ask crew which days they’re free before booking', onClick: () => setSettings('avail') },
                 { label: 'Rate crew', icon: 'rate', badge: rateInfo?.due ? `${rateInfo.due} to rate` : rateInfo?.total ? `${rateInfo.rated}/${rateInfo.total}` : null, onClick: () => setSettings('rate') },
                 ...((me.role === 'admin' || me.canAdjustRates) ? [{ label: 'Crew pay', icon: 'pay', hint: 'Personal rates for this event', onClick: () => setSettings('pay') }] : []),
+                ...(ev.staffing_draft && !plannedCount ? [{ label: 'Stop building quietly', icon: 'publish', hint: 'Picks go out straight away again', onClick: () => { run(() => api(`/api/events/${id}/build-quietly`, { method: 'PUT', body: { on: false } }), 'Picks now go out straight away.'); } }] : []),
                 'divider',
                 ...(rm && (rm.connected || rm.linked) ? [{ label: rm.linked && rm.project ? `Rentman · ${rm.project.number ? `#${rm.project.number}` : rm.project.name}` : 'Link a Rentman project', icon: 'link', onClick: () => setSettings('rentman') }] : []),
                 { label: 'Create a quote', icon: 'quote', onClick: () => api<{ quote: { id: string } }>('/api/quotes', { body: { eventId: id } }).then((r) => router.push(`/quotes/${r.quote.id}`)).catch((e) => setError(e.message)) },
@@ -1447,7 +1518,6 @@ function Body({ me }: { me: Me }) {
               ]}
             />
             <CopyEvent eventId={id} name={ev.name} customerId={ev.customer_id ?? null} onError={setError} openSignal={copySignal} />
-          </div>
       </div>
       {!!rateInfo?.due && settings !== 'rate' && (
         <div className="rt-prompt" role="status">
@@ -1463,29 +1533,6 @@ function Body({ me }: { me: Me }) {
         </Banner>
       )}
 
-      {ev.staffing_draft && (
-        <div className="draft-bar" role="status">
-          <span className="draft-ico" aria-hidden="true">✎</span>
-          <span>
-            <b>Building quietly.</b>{' '}
-            <span className="muted">
-              {(() => { const n = d.shifts.reduce((k, s) => k + s.assignments.filter((a) => a.planned).length, 0); return n ? `${n} pick${n === 1 ? '' : 's'} not sent yet.` : 'Pick crew: nobody is told yet.'; })()} Press Publish to send every offer at once.
-            </span>
-          </span>
-          <span className="row" style={{ gap: 6, marginLeft: 'auto' }}>
-            {!d.shifts.some((s) => s.assignments.some((a) => a.planned)) && (
-              <button type="button" className="btn ghost small" onClick={() => run(() => api(`/api/events/${id}/build-quietly`, { method: 'PUT', body: { on: false } }), 'Picks now go out straight away.')}>Stop building quietly</button>
-            )}
-            <button
-              type="button"
-              className="btn primary small"
-              onClick={publish}
-            >
-              Publish
-            </button>
-          </span>
-        </div>
-      )}
       {fullAsk && ev.staffing_draft && (
         <Modal title="Every position is filled" onClose={() => setFullAsk(false)}>
           <p>
@@ -1498,6 +1545,60 @@ function Body({ me }: { me: Me }) {
           </div>
         </Modal>
       )}
+      {d.shifts.some((s) => s.assignments.length > 0) && (
+        <EventCrewSearch
+          shifts={d.shifts}
+          phases={d.phases}
+          onJump={(shiftId, key) => {
+            const gid = d.shifts.find((x) => x.id === shiftId)?.group_id;
+            const sk = gid ? gKey(gid) : '';
+            if (day !== 'all') setDay(key);
+            if (closed.has(key) || closed.has(sk)) { const n = new Set(closed); n.delete(key); n.delete(sk); setClosedSaved(n); }
+            setTimeout(() => {
+              const el = document.getElementById(`shift-${shiftId}`);
+              if (!el) return;
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+            }, 60);
+          }}
+        />
+      )}
+      {d.phases.length > 0 && (
+        <div className="cs-days" role="tablist" aria-label="Days of this event">
+          {groups.map((g) => {
+            const need = g.shifts.reduce((n, x) => n + x.headcount, 0);
+            const have = g.shifts.reduce((n, x) => n + Math.min(x.headcount, x.assignments.filter((a) => a.status !== 'declined').length), 0);
+            return (
+              <button key={g.key} type="button" role="tab" aria-selected={dayKey === g.key} className={`cs-day${dayKey === g.key ? ' on' : ''}`} onClick={() => setDay(g.key)}>
+                <b>{g.phase ? g.phase.label : 'No day'}</b>
+                <span>{g.phase ? `${dayShort(g.phase.starts_on, g.phase.ends_on)} · ` : ''}{p2(have)}/{p2(need)}</span>
+              </button>
+            );
+          })}
+          {groups.length > 1 && (
+            <button type="button" role="tab" aria-selected={dayKey === 'all'} className={`cs-day${dayKey === 'all' ? ' on' : ''}`} onClick={() => setDay('all')}>
+              <b>All days</b>
+              <span>{d.shifts.length} shift{d.shifts.length === 1 ? '' : 's'}</span>
+            </button>
+          )}
+          <button type="button" className="cs-day add" onClick={addDay} title="Add a day or phase: load in, show days, strike">+ Add day</button>
+        </div>
+      )}
+      {d.phases.length > 0 && dayKey !== 'all' ? (
+        groupSection(groups.find((g) => g.key === dayKey) ?? groups[0]!, true)
+      ) : (
+        <>
+          {groups.length > 1 && (
+            <div className="row phase-all">
+              <button type="button" className="btn ghost small" onClick={() => setClosedSaved(new Set())} disabled={closed.size === 0}>Expand all</button>
+              <button type="button" className="btn ghost small" onClick={() => setClosedSaved(new Set(groups.map((g) => g.key)))}>Collapse all</button>
+            </div>
+          )}
+          {groups.map((g) => groupSection(g))}
+        </>
+      )}
+      </div>
+      <aside className="split-aside ev-aside">
       <NeedsAttention
         eventId={id}
         shifts={d.shifts}
@@ -1516,39 +1617,40 @@ function Body({ me }: { me: Me }) {
         }}
       />
       <EventDetails ev={ev} hasPhases={d.phases.length > 0} shiftCount={d.shifts.length} onSaved={load} onError={setError} />
-      {d.shifts.some((s) => s.assignments.length > 0) && (
-        <EventCrewSearch
-          shifts={d.shifts}
-          phases={d.phases}
-          onJump={(shiftId, key) => {
-            const gid = d.shifts.find((x) => x.id === shiftId)?.group_id;
-            const sk = gid ? gKey(gid) : '';
-            if (closed.has(key) || closed.has(sk)) { const n = new Set(closed); n.delete(key); n.delete(sk); setClosedSaved(n); }
-            setTimeout(() => {
-              const el = document.getElementById(`shift-${shiftId}`);
-              if (!el) return;
-              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
-            }, 60);
-          }}
-        />
-      )}
-      {groups.length > 1 && (
-        <div className="row phase-all">
-          <button type="button" className="btn ghost small" onClick={() => setClosedSaved(new Set())} disabled={closed.size === 0}>Expand all</button>
-          <button type="button" className="btn ghost small" onClick={() => setClosedSaved(new Set(groups.map((g) => g.key)))}>Collapse all</button>
-        </div>
-      )}
-      {groups.map((g) => groupSection(g))}
+      <div id="ev-phases">
+        <Phases eventId={id} phases={d.phases} onChanged={load} onError={setError} />
       </div>
-      <aside className="split-aside">
-      <section className="card aside-form">
-        <h2>Add a shift</h2>
-        <p className="muted small" style={{ marginTop: 0 }}>Opens a window to set the role, times, pay, minimum call and crew.</p>
-        <button type="button" className="btn primary block" onClick={() => openShiftModal()}>+ Add shift</button>
-      </section>
-      <Phases eventId={id} phases={d.phases} onChanged={load} onError={setError} />
       <LaborBudget eventId={id} budget={(ev as any).labor_budget} onError={setError} />
+      <section className="card ev-rules">
+        <h2>Rules for this event</h2>
+        <div className="ev-rule">
+          <div>
+            <b>Clock-in</b>
+            <span className="muted small">{ev.clock_mode === 'coordinator' ? 'Coordinator clocks crew in' : 'Crew clock themselves in'}{ev.geofence_m ? ` · within ${ev.geofence_m} m` : ''}</span>
+          </div>
+          <button type="button" className="btn ghost small" onClick={() => setSettings('clock')}>Change</button>
+        </div>
+        {d.overtime && (
+          <div className="ev-rule">
+            <div>
+              <b>Overtime</b>
+              <span className="muted small">{d.overtime.otAfter ? `After ${d.overtime.otAfter} h a day` : 'Company overtime'}{d.overtime.effectiveState ? ` · ${d.overtime.effectiveState}` : ''}</span>
+            </div>
+            <button type="button" className="btn ghost small" onClick={() => setSettings('ot')}>Change</button>
+          </div>
+        )}
+        {custInfo && (
+          <div className="ev-rule">
+            <div>
+              <b>Customer contact</b>
+              <span className="muted small">
+                {[custInfo.contact ?? custInfo.name, custInfo.phone, custInfo.email].filter(Boolean).join(' · ')}
+              </span>
+            </div>
+            <Link href={`/customers/${custInfo.id}`} className="btn ghost small">Open</Link>
+          </div>
+        )}
+      </section>
       </aside>
 
 

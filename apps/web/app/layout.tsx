@@ -1,6 +1,9 @@
 import type { Metadata, Viewport } from 'next';
 import '@fontsource-variable/inter';
 import '@fontsource-variable/manrope';
+import '@fontsource/barlow-condensed/700.css';
+import '@fontsource/barlow-condensed/800.css';
+import '@fontsource-variable/jetbrains-mono';
 import './globals.css';
 import PwaRegister from '@/components/PwaRegister';
 

@@ -33,7 +33,7 @@ export function ActIcon({ n, size = 16 }: { n: keyof typeof P | string; size?: n
 export type MenuItem = { label: string; icon: string; onClick: () => void; danger?: boolean; badge?: string | number | null; hint?: string } | 'divider';
 
 /** "⋯ More" button with a dropdown of icon + label actions. Closes on outside click, Escape or after an action. */
-export default function ActionMenu({ items, label = 'More', badge }: { items: MenuItem[]; label?: string; badge?: boolean }) {
+export default function ActionMenu({ items, label = 'More', badge, compact }: { items: MenuItem[]; label?: string; badge?: boolean; compact?: boolean }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -47,8 +47,8 @@ export default function ActionMenu({ items, label = 'More', badge }: { items: Me
   const list = items.filter((x, i, a) => !(x === 'divider' && (i === 0 || a[i - 1] === 'divider' || i === a.length - 1)));
   return (
     <div className="act-menu" ref={box}>
-      <button type="button" className="btn small act-btn" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <ActIcon n="more" /> {label}{badge && <i className="act-dot" aria-label="needs attention" />}
+      <button type="button" className={compact ? 'act-dots' : 'btn act-btn'} aria-label={compact ? label : undefined} title={compact ? 'More' : undefined} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <ActIcon n="more" size={compact ? 18 : 16} /> {compact ? null : label}{badge && <i className="act-dot" aria-label="needs attention" />}
       </button>
       {open && (
         <div className="act-pop" role="menu">
