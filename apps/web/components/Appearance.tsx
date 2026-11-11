@@ -1,19 +1,20 @@
 'use client';
 import { useEffect, useState } from 'react';
 
-type Look = 'classic' | 'modern';
+type Look = 'classic' | 'modern' | 'violet';
 type Theme = 'light' | 'dark' | 'device';
 
 const read = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
 const write = (k: string, v: string | null) => { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch { /* storage blocked: applies for this visit only */ } };
 const deviceTheme = () => (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
 
-/** Profile › Appearance: the look of the app (Classic or Modern) and light, dark or match-the-device. Saved on this device. */
+/** Profile › Appearance: the look of the app (Classic, Modern or Violet) and light, dark or match-the-device. Saved on this device. */
 export default function Appearance() {
   const [look, setLook] = useState<Look>('classic');
   const [theme, setTheme] = useState<Theme>('device');
   useEffect(() => {
-    setLook(read('lo-look') === 'modern' ? 'modern' : 'classic');
+    const l = read('lo-look');
+    setLook(l === 'modern' || l === 'violet' ? l : 'classic');
     const t = read('lo-theme');
     setTheme(t === 'light' || t === 'dark' ? t : 'device');
   }, []);
@@ -26,6 +27,7 @@ export default function Appearance() {
   const looks: { k: Look; name: string; text: string; side: string; page: string; card: string; accent: string }[] = [
     { k: 'classic', name: 'Classic', text: 'The original LaborOps look: soft glass menu and rounded panels.', side: '#fde9dc', page: '#f6fafd', card: '#ffffff', accent: '#e58025' },
     { k: 'modern', name: 'Modern', text: 'Navy menu, crisp white cards with soft shadows and bolder numbers.', side: '#0b2540', page: '#f2f4f8', card: '#ffffff', accent: '#514ef3' },
+    { k: 'violet', name: 'Violet', text: 'Purple accents, a menu that blends into the page, and a deep plum dark theme.', side: '#ebe9f5', page: '#f4f5fa', card: '#ffffff', accent: '#9155fd' },
   ];
   return (
     <section className="card">
