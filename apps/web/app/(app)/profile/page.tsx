@@ -10,6 +10,7 @@ import Shell, { initials } from '@/components/Shell';
 import { Banner } from '@/components/ui';
 import { api, ApiError, roleLabel, type Me } from '@/lib/api';
 import SkillPicker, { useSkillNames } from '@/components/SkillPicker';
+import Appearance from '@/components/Appearance';
 
 type User = {
   id: string;
@@ -185,6 +186,8 @@ function Body({ me }: { me: Me }) {
           {ok}
         </Banner>
       )}
+
+      <Appearance />
 
       <form className="card" onSubmit={saveProfile}>
         <h2>About you</h2>
