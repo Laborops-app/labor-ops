@@ -5,6 +5,7 @@ import { loadSettings, saveIntegration, type Resolved } from './settings';
 import { runSweeps } from './sweeps';
 import { useSmsAllowance } from '../billing';
 import { runAttendance } from '../attendance';
+import { runRentmanPipeline } from '../rentmanPipeline';
 
 const MAX_ATTEMPTS = 4;
 const BACKOFF = [60, 300, 900]; // seconds before retry 2, 3, 4
@@ -98,5 +99,7 @@ export function startWorkers() {
   const t3 = setTimeout(sweep, 30_000);
   // Late / no-show alerts and forgotten clock-outs need to be quick, so they run every 2 minutes.
   const t4 = setInterval(() => runAttendance().catch((e) => console.error('attendance error', e)), 2 * 60 * 1000);
-  t1.unref(); t2.unref(); t3.unref(); t4.unref();
+  // Rentman projects into the pipeline, for companies that turned it on.
+  const t5 = setInterval(() => runRentmanPipeline().catch((e) => console.error('rentman pipeline error', e)), 30 * 60 * 1000);
+  t1.unref(); t2.unref(); t3.unref(); t4.unref(); t5.unref();
 }

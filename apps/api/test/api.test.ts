@@ -4212,7 +4212,9 @@ test('fast staffing: build quietly then publish, honest counts, nudges, Are you 
   assert.ok(notes.some((n: { title: string }) => /Reminder: please answer/.test(n.title)));
 
   // Are you free? Ask two people about the second day; one says yes
-  const dayTwo = start(72).slice(0, 10);
+  // The shift's day in the company's time zone (not UTC), as auto-fill sees it.
+  const tid2 = await tenantOf(a);
+  const dayTwo = (await withTenant(tid2, (c) => c.query("SELECT to_char(($1::timestamptz AT TIME ZONE timezone)::date, 'YYYY-MM-DD') AS d FROM tenants LIMIT 1", [start(72)]))).rows[0].d;
   const day2 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: start(72), endsAt: start(76), headcount: 2 })).json.shift.id;
   const ask = await call(a, 'POST', `/api/events/${ev}/avail-checks`, { userIds: [c1.id, c3.id], dates: [dayTwo] });
   assert.equal(ask.status, 201, ask.text);
@@ -4321,6 +4323,99 @@ test('Rentman quotes: pull a quote onto an event and hold the invoice against it
 
     // Status is set by hand for a Rentman quote
     assert.equal((await call(a, 'POST', `/api/quotes/${q.quote.id}/status`, { status: 'declined' })).json.quote.status, 'declined');
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+test('Rentman projects into the pipeline: new projects become events, linked events follow Rentman safely', async () => {
+  const { statusKind } = await import('../src/rentmanPipeline');
+  assert.deepEqual(['Concept', 'Option', 'Confirmed', 'Canceled', 'Prepped', 'Returned', 'Inquiry', 'Something else'].map(statusKind), ['pending', 'quote', 'confirmed', 'canceled', 'confirmed', 'confirmed', 'pending', null]);
+
+  const a = await register('rmp');
+  const tid = await tenantOf(a);
+  const real = globalThis.fetch;
+  const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: { 'content-type': 'application/json' } });
+  const proj = (id: number, name: string, start: string, end: string) => ({ id, number: 9000 + id, displayname: name, name, customer: '/contacts/801', location: '/contacts/802', usageperiod_start: start, usageperiod_end: end });
+  let projects = [
+    proj(501, 'Spring Gala', '2031-06-10T16:00:00Z', '2031-06-11T23:00:00Z'),
+    proj(502, 'Old show', '2020-01-10T16:00:00Z', '2020-01-10T23:00:00Z'),
+    proj(503, 'Called off', '2031-07-01T16:00:00Z', '2031-07-01T23:00:00Z'),
+    proj(504, 'Confirmed Expo', '2031-08-01T16:00:00Z', '2031-08-02T23:00:00Z'),
+    proj(505, 'Maybe Fest', '2031-09-01T16:00:00Z', '2031-09-01T23:00:00Z'),
+  ];
+  let subs = [
+    { id: 1, project: '/projects/501', status: '/statuses/2', order: 1 },
+    { id: 2, project: '/projects/502', status: '/statuses/3', order: 1 },
+    { id: 3, project: '/projects/503', status: '/statuses/4', order: 1 },
+    { id: 4, project: '/projects/504', status: '/statuses/3', order: 1 },
+    { id: 5, project: '/projects/505', status: '/statuses/4', order: 1 },
+    { id: 6, project: '/projects/505', status: '/statuses/1', order: 2 },
+  ];
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = String(input);
+    if (!url.startsWith('https://api.rentman.net')) return real(input, init);
+    if (url.includes('/contactpersons')) return json({ data: [] });
+    if (url.includes('/contacts')) return json({ data: [
+      { id: 801, displayname: 'Acme Events', email_1: 'ops@acme.example' },
+      { id: 802, displayname: 'Grand Hall', visit_street: 'Main St', visit_number: '12', visit_city: 'Denver' },
+    ] });
+    if (url.includes('/subprojects')) return json({ data: subs });
+    if (url.includes('/statuses')) return json({ data: [{ id: 1, name: 'Concept' }, { id: 2, name: 'Option' }, { id: 3, name: 'Confirmed' }, { id: 4, name: 'Canceled' }] });
+    if (url.includes('/projects')) return json({ data: projects });
+    return json({ error: 'unexpected' }, 404);
+  }) as typeof fetch;
+  try {
+    assert.equal((await call(a, 'PUT', '/api/rentman/settings', { token: 'good-token-123456' })).status, 200);
+    // Off by default: syncing only caches projects
+    let r = await call(a, 'POST', '/api/rentman/sync');
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json.pipeline.created, 0);
+    const evs = async () => (await withTenant(tid, (c) => c.query('SELECT id, name, pipeline_status, client, venue, address, customer_id, rentman_project_id, start_date::text AS s, end_date::text AS e FROM events ORDER BY name'))).rows;
+    assert.equal((await evs()).length, 0);
+
+    // On, from 2031: the gala (option → Quote), the expo (Confirmed) and the fest (one subproject canceled, one concept → New)
+    const set = await call(a, 'PUT', '/api/rentman/pipeline', { autoEvents: true, fromDate: '2031-01-01', skipCanceled: true });
+    assert.equal(set.json.pipeline.autoEvents, true);
+    r = await call(a, 'POST', '/api/rentman/sync');
+    assert.equal(r.json.pipeline.created, 3, r.text);
+    let list = await evs();
+    assert.deepEqual(list.map((e: any) => [e.name, e.pipeline_status]), [['Confirmed Expo', 'confirmed'], ['Maybe Fest', 'pending'], ['Spring Gala', 'quote']]);
+    const gala = list.find((e: any) => e.name === 'Spring Gala');
+    assert.equal(gala.client, 'Acme Events');
+    assert.ok(gala.customer_id);
+    assert.equal(gala.venue, 'Grand Hall');
+    assert.match(gala.address, /Main St 12/);
+    assert.deepEqual([gala.s, gala.e], ['2031-06-10', '2031-06-11']);
+    const board = (await call(a, 'GET', '/api/pipeline?range=all')).json;
+    const card = (board.events ?? board.columns?.flatMap((c: any) => c.events) ?? []).find((e: any) => e.id === gala.id);
+    if (card) assert.equal(card.rentman.status, 'Option');
+    // Running again makes nothing new
+    assert.equal((await call(a, 'POST', '/api/rentman/sync')).json.pipeline.created, 0);
+
+    // The expo gets confirmed crew; Rentman then: gala confirmed and moved a day, expo canceled, fest canceled.
+    const expo = list.find((e: any) => e.name === 'Confirmed Expo');
+    const m = await mkCrew(a, 'rmp1');
+    const sh = (await call(a, 'POST', `/api/events/${expo.id}/shifts`, { roleName: 'Stagehand', startsAt: '2031-08-01T16:00:00Z', endsAt: '2031-08-01T23:00:00Z', headcount: 1 })).json.shift.id;
+    assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: m.id, confirmed: true, override: true })).status, 201);
+    subs = subs.map((s) => (s.project === '/projects/501' ? { ...s, status: '/statuses/3' } : s.project === '/projects/504' ? { ...s, status: '/statuses/4' } : s.project === '/projects/505' ? { ...s, status: '/statuses/4' } : s));
+    projects = projects.map((p) => (p.id === 501 ? { ...p, usageperiod_start: '2031-06-11T16:00:00Z', usageperiod_end: '2031-06-12T23:00:00Z' } : p));
+    r = await call(a, 'POST', '/api/rentman/sync');
+    assert.deepEqual([r.json.pipeline.moved, r.json.pipeline.datesUpdated, r.json.pipeline.flagged], [2, 1, 1], r.text);
+    list = await evs();
+    const st = Object.fromEntries(list.map((e: any) => [e.name, e]));
+    assert.equal(st['Spring Gala'].pipeline_status, 'confirmed');
+    assert.deepEqual([st['Spring Gala'].s, st['Spring Gala'].e], ['2031-06-11', '2031-06-12']);
+    assert.equal(st['Maybe Fest'].pipeline_status, 'canceled');
+    assert.equal(st['Confirmed Expo'].pipeline_status, 'confirmed'); // has confirmed crew: a coordinator decides
+    const notes = (await call(a, 'GET', '/api/notifications')).json.items;
+    assert.ok(notes.some((n: any) => /Rentman canceled Confirmed Expo/.test(n.title)));
+    // told once
+    assert.equal((await call(a, 'POST', '/api/rentman/sync')).json.pipeline.flagged, 0);
+
+    // A deleted event isn't made again
+    assert.equal((await call(a, 'DELETE', `/api/events/${st['Spring Gala'].id}`)).status, 200);
+    assert.equal((await call(a, 'POST', '/api/rentman/sync')).json.pipeline.created, 0);
   } finally {
     globalThis.fetch = real;
   }

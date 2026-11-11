@@ -8,7 +8,54 @@ import type { Me } from '@/lib/api';
 import { Banner } from '@/components/ui';
 import { api } from '@/lib/api';
 
-type St = { connected: boolean; projects: number; lastSync: string | null };
+type RunResult = { created: number; moved: number; datesUpdated: number; flagged: number; skipped: number; errors?: string };
+type St = {
+  connected: boolean; projects: number; lastSync: string | null;
+  pipeline?: { autoEvents: boolean; fromDate: string | null; skipCanceled: boolean; lastRunAt: string | null; lastResult: RunResult | null };
+};
+const runText = (r: RunResult) =>
+  r.errors ? `Failed: ${r.errors}` : [`${r.created} new event${r.created === 1 ? '' : 's'}`, `${r.moved} moved`, r.datesUpdated ? `${r.datesUpdated} re-dated` : '', r.flagged ? `${r.flagged} sent to a coordinator to check` : ''].filter(Boolean).join(', ');
+
+/** Rentman projects into the pipeline: on/off, from which date, skip canceled projects. */
+function RentmanPipeline({ s, busy, act }: { s: St; busy: string; act: (key: string, msg: string, fn: () => Promise<unknown>) => Promise<boolean> }) {
+  const p = s.pipeline ?? { autoEvents: false, fromDate: null, skipCanceled: true, lastRunAt: null, lastResult: null };
+  const [from, setFrom] = useState(p.fromDate ?? '');
+  const [skip, setSkip] = useState(p.skipCanceled);
+  const save = (autoEvents: boolean) =>
+    act('pipe', autoEvents ? 'Rentman projects now come into the pipeline. Syncing…' : 'Rentman projects no longer come into the pipeline on their own.', async () => {
+      await api('/api/rentman/pipeline', { method: 'PUT', body: { autoEvents, fromDate: from || null, skipCanceled: skip } });
+      if (autoEvents) await api('/api/rentman/sync', { body: {} });
+    });
+  return (
+    <>
+      <h3>Pipeline</h3>
+      <label className="check">
+        <input type="checkbox" checked={p.autoEvents} disabled={!!busy} onChange={(e) => save(e.target.checked)} />
+        <span>Add new Rentman projects to the pipeline as events</span>
+      </label>
+      <p className="muted small">
+        Checked every 30 minutes and on each sync. Each project becomes an event with its customer, venue and dates, in the column its Rentman status
+        matches (concept or inquiry → New, option → Quote, confirmed → Confirmed). Linked events move forward when Rentman’s status does. A project canceled in
+        Rentman cancels its event only if nobody is booked; otherwise you’re told. New dates are copied while an event has no days or shifts; otherwise you’re told.
+      </p>
+      <div className="row" style={{ flexWrap: 'wrap', gap: 12, alignItems: 'end' }}>
+        <label style={{ maxWidth: 220 }}>
+          Projects ending on or after
+          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={skip} onChange={(e) => setSkip(e.target.checked)} /> Skip projects already canceled
+        </label>
+        {(from !== (p.fromDate ?? '') || skip !== p.skipCanceled) && (
+          <button type="button" className="btn small" disabled={!!busy} onClick={() => save(p.autoEvents)}>Save</button>
+        )}
+      </div>
+      {p.lastRunAt && p.lastResult && (
+        <p className="small">Last run {new Date(p.lastRunAt).toLocaleString()}: {runText(p.lastResult)}.</p>
+      )}
+    </>
+  );
+}
 
 type Ac = {
   url: string;
@@ -203,13 +250,17 @@ function Body({ me }: { me: Me }) {
             </p>
             <p className="muted small">Syncing also brings Rentman's customers into Customers (contact people and addresses are added, nothing you already entered is overwritten). Customers you create here can be sent the other way; one with the same name in Rentman is linked, not duplicated.</p>
             <div className="row">
-            <button className="btn" disabled={!!busy} onClick={() => act('sync', 'Projects and customers synced.', () => api('/api/rentman/sync', { body: {} }))}>
+            <button className="btn" disabled={!!busy} onClick={() => act('sync', 'Projects and customers synced.', async () => {
+              const r = await api<{ pipeline?: RunResult }>('/api/rentman/sync', { body: {} });
+              if (r.pipeline && s.pipeline?.autoEvents) setTimeout(() => setOk(`Projects and customers synced. Pipeline: ${runText(r.pipeline!)}.`), 0);
+            })}>
               {busy === 'sync' ? 'Syncing…' : 'Sync projects & customers now'}
             </button>
             <button className="btn" disabled={!!busy} onClick={() => act('push', 'Customers sent to Rentman.', () => api('/api/rentman/push-customers', { body: {} }))}>
               {busy === 'push' ? 'Sending…' : 'Send new customers to Rentman'}
             </button>
             </div>
+            <RentmanPipeline s={s} busy={busy} act={act} />
           </>
         )}
       </Panel>

@@ -45,6 +45,7 @@ export async function pipelineRoutes(app: FastifyInstance) {
                   (SELECT count(*)::int FROM chat_messages m JOIN chat_channels ch ON ch.id = m.channel_id WHERE ch.event_id = e.id AND ch.kind = 'event' AND m.deleted_at IS NULL) AS messages,
                   (SELECT json_build_object('id', qq.id, 'number', qq.number, 'status', qq.status)
                      FROM quotes qq WHERE qq.event_id = e.id ORDER BY (qq.status = 'accepted') DESC, qq.created_at DESC LIMIT 1) AS quote,
+                  (SELECT json_build_object('id', rp.id, 'number', rp.number, 'status', rp.status_name) FROM rentman_projects rp WHERE rp.id = e.rentman_project_id) AS rentman,
                   COALESCE((SELECT json_agg(x) FROM (
                      SELECT DISTINCT ON (u.id) u.id, u.name, a.status FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN users u ON u.id = a.user_id
                       WHERE s.event_id = e.id AND a.status <> 'declined' ORDER BY u.id, (a.status = 'accepted') DESC) x), '[]'::json) AS crew

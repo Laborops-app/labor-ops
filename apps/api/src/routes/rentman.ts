@@ -2,8 +2,9 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
 import { guard } from '../auth';
-import { checkEventRequest, checkOpenRequests, clearToken, getToken, projectQuotes, pullCustomers, pushCustomer, pushEventRequest, RentmanError, saveToken, syncEquipment, syncProjects, testToken } from '../rentman';
+import { checkEventRequest, checkOpenRequests, clearToken, getToken, projectQuotes, pushCustomer, pushEventRequest, RentmanError, saveToken, syncEquipment, testToken } from '../rentman';
 import { importRentmanQuote } from '../quoteCompare';
+import { loadPipelineSettings, pullRentman, savePipelineSettings } from '../rentmanPipeline';
 
 const uuid = z.string().uuid();
 const adm = guard('admin');
@@ -18,9 +19,23 @@ export async function rentmanRoutes(app: FastifyInstance) {
   app.get('/api/rentman/settings', { preHandler: mgr }, async (req) =>
     withTenant(req.user.tid, async (c) => {
       const s = (await c.query('SELECT count(*)::int AS n, max(synced_at) AS last FROM rentman_projects')).rows[0];
-      return { connected: !!(await getToken(c)), projects: s.n, lastSync: s.last };
+      return { connected: !!(await getToken(c)), projects: s.n, lastSync: s.last, pipeline: await loadPipelineSettings(c) };
     }),
   );
+
+  // New Rentman projects become events in the pipeline (every 30 minutes and on each sync), from a date on.
+  app.put('/api/rentman/pipeline', { preHandler: adm }, async (req) => {
+    const b = z
+      .object({ autoEvents: z.boolean(), fromDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(), skipCanceled: z.boolean().default(true) })
+      .parse(req.body);
+    return withTenant(req.user.tid, async (c) => {
+      // Turning it on starts from today unless a date is given, so years of old projects don't flood the pipeline.
+      const fromDate = b.fromDate ?? (b.autoEvents ? (await c.query("SELECT to_char((now() AT TIME ZONE timezone)::date, 'YYYY-MM-DD') AS d FROM tenants LIMIT 1")).rows[0].d : null);
+      await savePipelineSettings(c, req.user.tid, req.user.sub, { autoEvents: b.autoEvents, fromDate, skipCanceled: b.skipCanceled });
+      await audit(c, req.user.tid, req.user.sub, 'rentman.pipeline', 'integration', null, { ...b, fromDate });
+      return { pipeline: await loadPipelineSettings(c) };
+    });
+  });
 
   app.put('/api/rentman/settings', { preHandler: adm }, async (req, reply) => {
     const { token } = z.object({ token: z.string().trim().min(10).max(4000) }).parse(req.body);
@@ -50,13 +65,11 @@ export async function rentmanRoutes(app: FastifyInstance) {
       const n = await withTenant(req.user.tid, async (c) => {
         const token = await getToken(c);
         if (!token) throw new RentmanError('Connect Rentman first (Integrations page).', 409);
-        const n = await syncProjects(c, req.user.tid, token);
-        const customers = await pullCustomers(c, req.user.tid, token);
-        const linked = await checkOpenRequests(c, req.user.tid, token);
-        await audit(c, req.user.tid, req.user.sub, 'rentman.sync', 'integration', null, { projects: n, customers, linked });
-        return { n, customers, linked };
+        const r = await pullRentman(c, req.user.tid, token);
+        await audit(c, req.user.tid, req.user.sub, 'rentman.sync', 'integration', null, { projects: r.projects, customers: r.customers, linked: r.linked, pipeline: r.pipeline });
+        return r;
       });
-      return { synced: n.n, customers: n.customers, requestsLinked: n.linked };
+      return { synced: n.projects, customers: n.customers, requestsLinked: n.linked, pipeline: n.pipeline };
     } catch (e) {
       return fail(reply, e);
     }

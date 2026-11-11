@@ -30,7 +30,7 @@ export async function saveToken(c: PoolClient, tid: string, userId: string, toke
 export const clearToken = (c: PoolClient) => c.query("DELETE FROM integration_settings WHERE provider = 'rentman'");
 
 // ---------- API client ----------
-async function get(token: string, path: string, params: Record<string, string | number> = {}): Promise<any> {
+export async function get(token: string, path: string, params: Record<string, string | number> = {}): Promise<any> {
   const url = path.startsWith('http') ? path : `${BASE}${path}?${new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]))}`;
   let res: Response;
   try {
@@ -46,7 +46,7 @@ async function get(token: string, path: string, params: Record<string, string | 
 }
 
 /** Every row of a collection, following Rentman's cursor links (or offsets when there is no cursor). */
-async function getAll(token: string, path: string, params: Record<string, string | number> = {}, max = 40): Promise<any[]> {
+export async function getAll(token: string, path: string, params: Record<string, string | number> = {}, max = 40): Promise<any[]> {
   const limit = 1000;
   const out: any[] = [];
   let next: string | null = null;
@@ -63,7 +63,7 @@ async function getAll(token: string, path: string, params: Record<string, string
 
 export const testToken = async (token: string) => { await get(token, '/projects', { limit: 1 }); };
 
-const refId = (v: unknown): number | null => {
+export const refId = (v: unknown): number | null => {
   const m = /(\d+)\/?$/.exec(String(v ?? ''));
   return m ? Number(m[1]) : null;
 };
