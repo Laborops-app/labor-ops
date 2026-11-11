@@ -1,3 +1,4 @@
+import { releaseCrew } from '../pipeline';
 import { pool, withTenant } from '../db';
 import { notify } from './index';
 import { loadSettings } from './settings';
@@ -16,6 +17,13 @@ export async function runSweeps(): Promise<{ reminders: number; certs: number }>
     if (cfg?.smsProvider === 'zernio')
       for (const digits of await zernioOptedOut(cfg)) await pool.query('SELECT notify_sms_stop($1)', [digits]);
     await withTenant(t.id, async (c) => {
+      // Canceled events still holding crew on future shifts (canceled before crew were released automatically): let them go.
+      const held = (await c.query(
+        `SELECT DISTINCT e.id FROM events e JOIN shifts s ON s.event_id = e.id JOIN shift_assignments a ON a.shift_id = s.id
+          WHERE e.pipeline_status = 'canceled' AND a.status <> 'declined' AND s.ends_at > now()
+            AND NOT EXISTS (SELECT 1 FROM time_entries te WHERE te.assignment_id = a.id)`,
+      )).rows;
+      for (const e of held) await releaseCrew(c, t.id, e.id, null);
       // Archived events are kept two years.
       await purgeArchive(c, t.id);
       const shifts = await c.query(

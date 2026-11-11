@@ -11,6 +11,7 @@ import { api, fmtDate } from '@/lib/api';
 import RentmanPicker from '@/components/RentmanPicker';
 import CustomerPicker, { customerBody, RentmanSend, useCustomerList, useRentmanSend, type CustomerChoice } from '@/components/CustomerPicker';
 import LocationPick from '@/components/LocationPick';
+import EventCalendar from '@/components/EventCalendar';
 
 type Ev = {
   id: string; name: string; client: string | null; venue: string | null; start_date: string; end_date: string; shift_count: number; slots: number; accepted: number; filled?: number; to_rate?: number;
@@ -71,6 +72,21 @@ function Body() {
   const [list, setList] = useState<Ev[] | null>(null);
   const [error, setError] = useState('');
   const [view, setView] = useState<View>('upcoming');
+  // List or calendar (?view=calendar), remembered per browser.
+  const [layout, setLayout] = useState<'list' | 'calendar'>('list');
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search).get('view');
+    let saved: string | null = null;
+    try { saved = localStorage.getItem('events-layout'); } catch { /* private mode */ }
+    if (p === 'calendar' || (!p && saved === 'calendar')) setLayout('calendar');
+  }, []);
+  const pickLayout = (l: 'list' | 'calendar') => {
+    setLayout(l);
+    try { localStorage.setItem('events-layout', l); } catch { /* private mode */ }
+    const u = new URL(window.location.href);
+    if (l === 'calendar') u.searchParams.set('view', 'calendar'); else u.searchParams.delete('view');
+    window.history.replaceState(null, '', u.toString());
+  };
   const [q, setQ] = useState('');
   const [shown, setShown] = useState(PAGE);
   const [adding, setAdding] = useState(false);
@@ -157,14 +173,18 @@ function Body() {
 
       <div className="list-head">
         <div className="row" style={{ gap: 16 }}>
-          <div className="total">Total: {list ? rows.length : '…'} event{rows.length === 1 ? '' : 's'}</div>
-          <div className="phase-tabs" role="tablist" aria-label="Which events" style={{ margin: 0 }}>
+          <div className="seg view-toggle" role="tablist" aria-label="Layout">
+            <button role="tab" aria-selected={layout === 'list'} className={layout === 'list' ? 'active' : ''} onClick={() => pickLayout('list')}>List</button>
+            <button role="tab" aria-selected={layout === 'calendar'} className={layout === 'calendar' ? 'active' : ''} onClick={() => pickLayout('calendar')}>Calendar</button>
+          </div>
+          {layout === 'list' && <div className="total">Total: {list ? rows.length : '…'} event{rows.length === 1 ? '' : 's'}</div>}
+          {layout === 'list' && <div className="phase-tabs" role="tablist" aria-label="Which events" style={{ margin: 0 }}>
             {(['upcoming', 'past', 'all'] as View[]).map((v) => (
               <button key={v} type="button" role="tab" aria-selected={view === v} className={view === v ? 'tab on' : 'tab'} onClick={() => { setView(v); setShown(PAGE); }}>
                 {v[0].toUpperCase() + v.slice(1)} ({counts[v]})
               </button>
             ))}
-          </div>
+          </div>}
         </div>
         <div className="controls">
           <span className="pill-input">
@@ -174,7 +194,9 @@ function Body() {
         </div>
       </div>
 
-      {!list ? (
+      {layout === 'calendar' ? (
+        <EventCalendar query={q} />
+      ) : !list ? (
         <div className="muted">Loading…</div>
       ) : rows.length === 0 ? (
         <Empty>{list.length ? 'No events here.' : 'No events yet. Add one, then add shifts to it.'}</Empty>

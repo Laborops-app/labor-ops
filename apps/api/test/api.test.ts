@@ -4746,3 +4746,27 @@ test('event report: money, hours, staffing and crew for one event', async () => 
   // Crew can't see it
   assert.equal((await call(m1.session, 'GET', `/api/reports/events/${ev}`)).status, 403);
 });
+
+test('event calendar: each event day with its staffing; canceling an event releases its crew', async () => {
+  const a = await register('evcal');
+  const tid = await tenantOf(a);
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Cal Show', startDate: '2031-11-03', endDate: '2031-11-04' })).json.event.id;
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: '2031-11-03T16:00:00Z', endsAt: '2031-11-03T23:00:00Z', headcount: 2 })).json.shift.id;
+  const m = await mkCrew(a, 'evcal1');
+  const m2 = await mkCrew(a, 'evcal2');
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: m.id, confirmed: true, override: true })).status, 201);
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: m2.id, override: true })).status, 201);
+  const cal = (await call(a, 'GET', '/api/events/calendar?from=2031-11-01&to=2031-11-30')).json;
+  assert.ok(cal.events.some((e: any) => e.id === ev && e.end === '2031-11-04'));
+  const day = cal.days.find((d: any) => d.event_id === ev);
+  assert.deepEqual([day.day, day.slots, day.confirmed, day.waiting], ['2031-11-03', 2, 1, 1]);
+  assert.equal((await call(a, 'GET', '/api/events/calendar?from=2031-01-01&to=2031-12-31')).status, 400);
+
+  // Cancel: bookings and offers on shifts not yet worked are let go, and each person is told
+  assert.equal((await call(a, 'PATCH', `/api/events/${ev}/pipeline`, { status: 'canceled' })).status, 200);
+  const left = (await withTenant(tid, (c) => c.query('SELECT count(*)::int AS n FROM shift_assignments WHERE shift_id = $1', [sh]))).rows[0].n;
+  assert.equal(left, 0);
+  const notes = (await call(m.session, 'GET', '/api/notifications')).json.items;
+  assert.ok(notes.some((n: any) => /Canceled: Cal Show/.test(n.title)));
+  assert.equal((await call(a, 'GET', '/api/events/calendar?from=2031-11-01&to=2031-11-30')).json.events.some((e: any) => e.id === ev), false);
+});

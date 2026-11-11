@@ -21,6 +21,7 @@ export async function setStatus(c: PoolClient, tid: string, eventId: string, to:
   if (to === 'canceled') {
     const crew = (await c.query("SELECT a.user_id, a.status, a.shift_id FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE s.event_id = $1 AND a.status = 'accepted' AND s.starts_at > now() - interval '1 minute'", [eventId])).rows;
     for (const a of crew) await recordCancellation(c, tid, by, { userId: a.user_id, status: a.status, shiftId: a.shift_id });
+    await releaseCrew(c, tid, eventId, by);
   }
   await maybeArchive(c, eventId, by);
   return true;
@@ -109,4 +110,35 @@ export async function timesheetGaps(c: PoolClient, eventId: string) {
   if (r.open) parts.push(`${n(r.open, 'person is', 'people are')} still clocked in`);
   if (r.missing) parts.push(`${n(r.missing, 'worked shift has', 'worked shifts have')} no time submitted (add the time, or mark a no-show)`);
   return { ...r, ok: !parts.length, message: parts.length ? `Not ready to complete: ${parts.join('; ')}.` : '' };
+}
+
+/**
+ * A canceled event lets its crew go: every shift that hasn't started and has no clocked time loses its bookings and
+ * offers (and quiet picks), so it leaves people's schedules, calendars and availability. Each person is told once.
+ * Time already worked stays for payroll.
+ */
+export async function releaseCrew(c: PoolClient, tid: string, eventId: string, by: string | null) {
+  const ev = (await c.query('SELECT name FROM events WHERE id = $1', [eventId])).rows[0];
+  if (!ev) return 0;
+  const gone = (
+    await c.query(
+      `DELETE FROM shift_assignments a USING shifts s
+        WHERE s.id = a.shift_id AND s.event_id = $1 AND a.status <> 'declined' AND s.ends_at > now()
+          AND NOT EXISTS (SELECT 1 FROM time_entries t WHERE t.assignment_id = a.id)
+        RETURNING a.id, a.user_id, a.status`,
+      [eventId],
+    )
+  ).rows;
+  await c.query('DELETE FROM planned_picks WHERE event_id = $1', [eventId]);
+  const told = new Set<string>();
+  for (const a of gone) {
+    if (told.has(a.user_id)) continue;
+    told.add(a.user_id);
+    await notify(c, tid, {
+      userId: a.user_id, category: 'shift_change', title: `Canceled: ${ev.name}`,
+      body: `${ev.name} was canceled. You're no longer scheduled for it.`, link: '/my-shifts', sms: `${ev.name} was canceled. You're no longer scheduled for it.`,
+    });
+  }
+  if (gone.length) await c.query("INSERT INTO audit_logs (tenant_id, actor_id, action, entity, entity_id, detail) VALUES ($1,$2,'event.release_crew','event',$3,$4)", [tid, by, eventId, JSON.stringify({ released: gone.length, people: told.size })]);
+  return gone.length;
 }

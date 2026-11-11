@@ -198,6 +198,39 @@ export async function assignCrew(c: PoolClient, tid: string, actorId: string, sh
 }
 
 export async function eventRoutes(app: FastifyInstance) {
+  // Event calendar: each event on each of its days, with that day's staffing (seats from the shifts starting that day,
+  // in the company's time zone). Days of an event with no shifts still show the event, with no seats.
+  app.get('/api/events/calendar', { preHandler: viewers }, async (req, reply) => {
+    const q = z.object({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).safeParse(req.query);
+    if (!q.success || q.data.from > q.data.to) return reply.code(400).send({ error: 'Pick a date range' });
+    if (Date.parse(q.data.to) - Date.parse(q.data.from) > 62 * 86400_000) return reply.code(400).send({ error: 'Pick at most two months' });
+    return withTenant(req.user.tid, async (c) => {
+      const events = (
+        await c.query(
+          `SELECT e.id, e.name, e.client, e.venue, e.start_date::text AS start, e.end_date::text AS end, e.pipeline_status AS status, e.staffing_draft AS draft
+             FROM events e WHERE e.archived_at IS NULL AND e.start_date <= $2::date AND e.end_date >= $1::date
+              AND e.pipeline_status <> 'canceled' ORDER BY e.start_date, lower(e.name)`,
+          [q.data.from, q.data.to],
+        )
+      ).rows;
+      const days = (
+        await c.query(
+          `SELECT s.event_id, to_char((s.starts_at AT TIME ZONE t.timezone)::date, 'YYYY-MM-DD') AS day,
+                  min(s.starts_at) AS first, max(s.ends_at) AS last, count(*)::int AS shifts, sum(s.headcount)::int AS slots,
+                  sum(LEAST(s.headcount, (SELECT count(*) FROM shift_assignments a WHERE a.shift_id = s.id AND a.status = 'accepted')))::int AS confirmed,
+                  sum((SELECT count(*) FROM shift_assignments a WHERE a.shift_id = s.id AND a.status IN ('offered', 'pending')))::int AS waiting,
+                  sum((SELECT count(*) FROM planned_picks p WHERE p.shift_id = s.id))::int AS planned
+             FROM shifts s JOIN events e ON e.id = s.event_id CROSS JOIN tenants t
+            WHERE t.id = e.tenant_id AND e.archived_at IS NULL AND e.pipeline_status <> 'canceled'
+              AND (s.starts_at AT TIME ZONE t.timezone)::date BETWEEN $1::date AND $2::date
+            GROUP BY s.event_id, 2`,
+          [q.data.from, q.data.to],
+        )
+      ).rows;
+      return { events, days };
+    });
+  });
+
   app.get('/api/events', { preHandler: viewers }, async (req) =>
     withTenant(req.user.tid, async (c) => ({
       events: (
