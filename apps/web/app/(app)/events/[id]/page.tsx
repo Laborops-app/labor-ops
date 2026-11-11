@@ -119,6 +119,7 @@ function Body({ me }: { me: Me }) {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
+  const [rmBuilding, setRmBuilding] = useState(false);
   const [adding, setAdding] = useState<string | null>(null); // shift id whose crew picker is open ('new' = the add-shift form)
   // "Add as lead" in the open crew picker: on for lead roles ("Audio Lead"), off otherwise.
   const [asLead, setAsLead] = useState(false);
@@ -1360,6 +1361,36 @@ function Body({ me }: { me: Me }) {
             {!ev.staffing_draft && (
               <button className="btn small" title="Pick crew without telling anyone, then send every offer at once with Publish" onClick={() => run(() => api(`/api/events/${id}/build-quietly`, { method: 'PUT', body: { on: true } }), 'Building quietly: picks are kept as a plan until you press Publish.')}>
                 ✎ Build quietly
+              </button>
+            )}
+            {rm?.linked && rm.project && (me.role === 'admin' || me.role === 'manager') && (
+              <button
+                className="btn small primary"
+                disabled={rmBuilding}
+                title="Make this event's days and shifts from the Rentman project's crew and transport functions, and keep them in step"
+                onClick={async () => {
+                  setRmBuilding(true);
+                  setError('');
+                  setNote('');
+                  try {
+                    const r = await api<{ result: { added: number; updated: number; removed: number; unchanged: number; conflicts: number } | null; unmatched: string[]; unscheduled: number }>(`/api/events/${id}/rentman/build`, { body: {} });
+                    const x = r.result;
+                    const done = x ? [x.added && `${x.added} added`, x.updated && `${x.updated} updated`, x.removed && `${x.removed} removed`].filter(Boolean).join(', ') : '';
+                    const more = [
+                      x?.conflicts ? `${x.conflicts} change${x.conflicts === 1 ? '' : 's'} need you to decide (open Rentman)` : '',
+                      r.unmatched?.length ? `Rentman names with no LaborOps role yet: ${r.unmatched.join(', ')} (map them under Integrations › Rentman)` : '',
+                      r.unscheduled ? `${r.unscheduled} Rentman function${r.unscheduled === 1 ? ' has' : 's have'} no times yet and ${r.unscheduled === 1 ? 'was' : 'were'} skipped` : '',
+                    ].filter(Boolean).join('. ');
+                    setNote(`${done ? `Crew built from Rentman: ${done}.` : 'The crew is already up to date with Rentman.'}${more ? ` ${more}.` : ''}`);
+                    await load();
+                  } catch (err) {
+                    setError((err as Error).message);
+                  } finally {
+                    setRmBuilding(false);
+                  }
+                }}
+              >
+                {rmBuilding ? 'Building the crew…' : 'Build the crew from Rentman'}
               </button>
             )}
             {rm && (rm.connected || rm.linked) && (

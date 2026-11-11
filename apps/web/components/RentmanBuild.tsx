@@ -65,7 +65,7 @@ export default function RentmanBuild({ eventId, onChanged, onError }: { eventId:
         <span className="row" style={{ gap: 6 }}>
           {(!b.built || pending > 0) && (
             <button type="button" className="btn primary small" disabled={!!busy || (b.built && !pending)} onClick={build}>
-              {busy === 'build' ? 'Building…' : b.built ? `Apply ${pending} change${pending === 1 ? '' : 's'} now` : `Build ${b.adds.length} shift${b.adds.length === 1 ? '' : 's'} from Rentman`}
+              {busy === 'build' ? 'Building…' : b.built ? `Apply ${pending} change${pending === 1 ? '' : 's'} now` : `Build the crew from Rentman (${b.adds.length} shift${b.adds.length === 1 ? '' : 's'})`}
             </button>
           )}
           {b.built && (
