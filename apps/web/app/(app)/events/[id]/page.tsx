@@ -619,7 +619,7 @@ function Body({ me }: { me: Me }) {
   /** Seats as a bar: confirmed, waiting, not sent, open. One block per seat on a shift, proportional for big counts. */
   const seatBar = (c: number, w: number, n: number, o: number, big = false) => {
     const total = c + w + n + o;
-    const kinds: [string, number][] = [['ok', c], ['wait', w], ['plan', n], ['open', o]];
+    const kinds: [string, number][] = [['seat-ok', c], ['seat-wait', w], ['seat-plan', n], ['seat-open', o]];
     return (
       <div className={`cs-bar${big ? ' big' : ''}`} role="img" aria-label={`${c} confirmed, ${w} waiting, ${n} not sent, ${o} open`}>
         {!big && total <= 24
@@ -1454,10 +1454,10 @@ function Body({ me }: { me: Me }) {
               </div>
               {seatBar(staff.conf, staff.wait, staff.plan, staff.open, true)}
               <div className="evh-legend">
-                <span className="ok"><b>{staff.conf}</b> confirmed</span>
-                {staff.wait > 0 && <span className="wait" title="Offered, waiting for an answer"><b>{staff.wait}</b> waiting</span>}
-                {staff.plan > 0 && <span className="plan" title="Picked while building quietly: not sent yet"><b>{staff.plan}</b> not sent</span>}
-                {staff.open > 0 && <span className="bad" title="Seats with nobody on them"><b>{staff.open}</b> open</span>}
+                <span className="lg-ok"><b>{staff.conf}</b> confirmed</span>
+                {staff.wait > 0 && <span className="lg-wait" title="Offered, waiting for an answer"><b>{staff.wait}</b> waiting</span>}
+                {staff.plan > 0 && <span className="lg-plan" title="Picked while building quietly: not sent yet"><b>{staff.plan}</b> not sent</span>}
+                {staff.open > 0 && <span className="lg-bad" title="Seats with nobody on them"><b>{staff.open}</b> open</span>}
               </div>
             </>
           ) : (
