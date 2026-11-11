@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import { getAll, refId, RentmanError } from './rentman';
 import { roleKeyOf } from './pay';
 import { audit } from './db';
+import { loadOptions } from './rentmanOptions';
 
 /**
  * Days, groups and shifts built from a Rentman project's crew and transport functions.
@@ -13,7 +14,7 @@ import { audit } from './db';
  *   name (listed so it can be mapped once).
  * - Later changes in Rentman are applied to shifts nobody has changed or staffed; the rest are listed for a coordinator.
  */
-export type Want = { key: string; role: string; start: string; end: string; headcount: number; date: string; group: string | null; groupSort: number; hash: string };
+export type Want = { key: string; role: string; start: string; end: string; headcount: number; date: string; group: string | null; groupSort: number; hash: string; billRate: number | null };
 export type Conflict = { key: string; kind: 'changed' | 'removed'; shiftId: string; role: string; current: { role: string; start: string; end: string; headcount: number }; rentman: Want | null; why: string };
 
 const iso = (v: unknown) => new Date(String(v)).toISOString();
@@ -82,10 +83,14 @@ export async function wantedShifts(c: PoolClient, tid: string, token: string, pr
               [s, e, tz],
             )
           ).rows;
+    // The hourly price quoted in Rentman: its time-based price over all the people-hours (crew only; transport is priced by distance).
+    const peopleHours = days.reduce((n: number, d: any) => n + ((+new Date(d.e) - +new Date(d.s)) / 3600_000) * headcount, 0);
+    const variable = Number(f.price_variable) || Math.max(0, (Number(f.price_total) || 0) - (Number(f.price_fixed) || 0));
+    const billRate = !transport && variable > 0 && peopleHours > 0 ? Math.round((variable / peopleHours) * 100) / 100 : null;
     days.forEach((d: any, i: number) =>
       out.push({
         key: days.length > 1 ? `${f.id}:${i}` : String(f.id), role, start: iso(d.s), end: iso(d.e), headcount, date: d.d,
-        group: g?.name ?? null, groupSort: g?.sort ?? 0, hash: hashOf(role, d.s, d.e, headcount),
+        group: g?.name ?? null, groupSort: g?.sort ?? 0, hash: hashOf(role, d.s, d.e, headcount), billRate,
       }),
     );
   }
@@ -174,6 +179,9 @@ export async function applyBuild(c: PoolClient, tid: string, by: string | null, 
       [u.shiftId, u.want.role, u.want.start, u.want.end, u.want.headcount, ph, g, u.want.hash]);
   }
   for (const r of plan.removes) await c.query('DELETE FROM shifts WHERE id = $1', [r.shiftId]);
+  // Billing at the rate quoted in Rentman (an option): every Rentman-built shift takes its function's quoted rate.
+  if ((await loadOptions(c)).quoted_bill_rates)
+    for (const w of want) await c.query('UPDATE shifts SET bill_rate_override = $3 WHERE event_id = $1 AND rentman_key = $2 AND bill_rate_override IS DISTINCT FROM $3', [eventId, w.key, w.billRate]);
   // The event's dates stretch to cover its days.
   await c.query(
     `UPDATE events SET rentman_build = true,

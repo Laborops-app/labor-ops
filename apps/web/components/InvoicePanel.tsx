@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError, money, fmtDate } from '@/lib/api';
 import { Banner, Empty } from '@/components/ui';
+import { RentmanInvoices, useRentmanExtras } from '@/components/RentmanExtras';
 import QuoteCompare, { type Comparison, type QuoteChoice } from '@/components/QuoteCompare';
 
 type Line = { role: string; date: string; kind: 'regular' | 'overtime' | 'double' | 'day'; qty: number; unit: 'hour' | 'day'; rate: number; amount: number; description: string; qboItemId: string | null };
@@ -20,6 +21,7 @@ const KIND: Record<Line['kind'], string> = { regular: 'Regular', overtime: 'Over
 
 /** Bill an event: lines at bill rates from approved time (or the schedule), sent to QuickBooks Online or downloaded for QuickBooks Desktop. */
 export default function InvoicePanel({ eventId, isAdmin }: { eventId: string; isAdmin: boolean }) {
+  const [rmx, setRmx] = useRentmanExtras(eventId);
   const [source, setSource] = useState<'time' | 'schedule'>('time');
   const [b, setB] = useState<Billing | null>(null);
   const [doc, setDoc] = useState('');
@@ -63,6 +65,7 @@ export default function InvoicePanel({ eventId, isAdmin }: { eventId: string; is
 
   return (
     <div>
+      <RentmanInvoices eventId={eventId} x={rmx} onSynced={setRmx} />
       <div className="phase-tabs" role="tablist" aria-label="Bill from" style={{ margin: '12px 0' }}>
         {([['time', 'Approved time'], ['schedule', 'Scheduled shifts']] as const).map(([k, label]) => (
           <button key={k} type="button" role="tab" aria-selected={source === k} className={source === k ? 'tab on' : 'tab'} onClick={() => setSource(k)}>

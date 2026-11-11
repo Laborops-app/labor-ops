@@ -6,6 +6,14 @@ import { checkEventRequest, checkOpenRequests, clearToken, getToken, projectQuot
 import { importRentmanQuote } from '../quoteCompare';
 import { loadPipelineSettings, pullRentman, savePipelineSettings } from '../rentmanPipeline';
 import { buildFromRentman, keepConflict } from '../rentmanBuild';
+import { loadOptions, OPTION_KEYS, saveOptions, verifyDigest, webhookToken } from '../rentmanOptions';
+import { queueRentman } from '../rentmanWebhook';
+import { syncCrew, syncRates, unlockRates } from '../rentmanSync';
+import { pool } from '../db';
+import { authenticate } from '../auth';
+import { pushHours, pushStatus, pushTimeOff } from '../rentmanPush';
+import { eventExtras, fileUrl, syncInvoices } from '../rentmanExtras';
+import { config } from '../config';
 
 const uuid = z.string().uuid();
 const adm = guard('admin');
@@ -356,4 +364,193 @@ export async function rentmanRoutes(app: FastifyInstance) {
       return { ok: true };
     });
   });
+
+  // ---------- optional features (Integrations › Rentman) ----------
+  const optionsView = async (c: any) => {
+    const o = await loadOptions(c);
+    return { ...o, webhookUrl: o.webhookKey ? `${config.appUrl}/api/rentman/webhook/${o.webhookKey}` : null, webhookKey: undefined };
+  };
+  app.get('/api/rentman/options', { preHandler: mgr }, async (req) => withTenant(req.user.tid, async (c) => ({ options: await optionsView(c) })));
+  app.put('/api/rentman/options', { preHandler: adm }, async (req, reply) => {
+    const b = z
+      .object({
+        ...Object.fromEntries(OPTION_KEYS.map((k) => [k, z.boolean().optional()])),
+        filesFolder: z.string().trim().max(200).nullable().optional(),
+        webhookToken: z.string().trim().min(8).max(500).nullable().optional(),
+      })
+      .parse(req.body) as any;
+    try {
+      return await withTenant(req.user.tid, async (c) => {
+        const before = await loadOptions(c);
+        await saveOptions(c, req.user.tid, req.user.sub, b);
+        await audit(c, req.user.tid, req.user.sub, 'rentman.options', 'integration', null, { ...b, webhookToken: b.webhookToken ? '(set)' : b.webhookToken });
+        const token = await getToken(c);
+        // Switching a sync on runs it once straight away.
+        const ran: Record<string, unknown> = {};
+        if (token && b.crew_link && !before.crew_link) ran.crew = await syncCrew(c, req.user.tid, token);
+        if (token && b.rates_source && !before.rates_source) ran.rates = await syncRates(c, req.user.tid, token);
+        if (b.rates_source === false && before.rates_source) await unlockRates(c);
+        return { options: await optionsView(c), ran };
+      });
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+
+  // Rentman calls this when anything changes (set up in Rentman › Configuration › Integrations › Webhooks).
+  // The address carries a random per-company key; every call must carry Rentman's signature.
+  app.register(async (inst) => {
+    inst.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+      (req as any).rawBody = body;
+      try {
+        done(null, JSON.parse(String(body) || '{}'));
+      } catch (e) {
+        done(e as Error, undefined);
+      }
+    });
+    inst.post('/api/rentman/webhook/:key', { config: { rateLimit: { max: 600, timeWindow: '1 minute' } } }, async (req, reply) => {
+      const { key } = z.object({ key: z.string().min(24).max(64) }).parse(req.params);
+      const tid = (await pool.query('SELECT rentman_webhook_tenant($1) AS t', [key])).rows[0]?.t as string | null;
+      if (!tid) return reply.code(404).send({ error: 'Unknown webhook' });
+      const raw = String((req as any).rawBody ?? '');
+      const ok = await withTenant(tid, async (c) => {
+        const token = await webhookToken(c);
+        if (!token || !verifyDigest(raw, req.headers['digest'] as string | undefined, token)) return false;
+        await c.query('UPDATE rentman_settings SET webhook_last_at = now()');
+        return true;
+      });
+      if (!ok) return reply.code(401).send({ error: 'Bad signature' });
+      const body = (req.body ?? {}) as { itemType?: string; eventType?: string };
+      queueRentman(tid, [String(body.itemType ?? 'project')]);
+      return { ok: true };
+    });
+  });
+
+  // ---------- crew linking ----------
+  app.get('/api/rentman/crew', { preHandler: mgr }, async (req) =>
+    withTenant(req.user.tid, async (c) => ({
+      crew: (
+        await c.query(
+          `SELECT r.id, r.name, r.email, r.phone, r.active, r.user_id, r.linked_by, u.name AS user_name
+             FROM rentman_crew r LEFT JOIN users u ON u.id = r.user_id ORDER BY r.user_id IS NOT NULL, r.active DESC, lower(r.name)`,
+        )
+      ).rows,
+      // LaborOps crew not linked to anyone in Rentman (their approved hours can't go to Rentman yet).
+      notInRentman: (
+        await c.query(
+          `SELECT u.id, u.name, u.email FROM users u
+            WHERE u.active AND u.role = 'crew' AND NOT EXISTS (SELECT 1 FROM rentman_crew r WHERE r.user_id = u.id) ORDER BY lower(u.name)`,
+        )
+      ).rows,
+      people: (await c.query("SELECT id, name FROM users WHERE active AND role IN ('crew', 'manager', 'admin', 'hr') ORDER BY lower(name)")).rows,
+    })),
+  );
+  app.post('/api/rentman/crew/sync', { preHandler: mgr }, async (req, reply) => {
+    try {
+      return await withTenant(req.user.tid, async (c) => {
+        const token = await getToken(c);
+        if (!token) throw new RentmanError('Connect Rentman first (Integrations page).', 409);
+        return syncCrew(c, req.user.tid, token);
+      });
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+  app.put('/api/rentman/crew/:id/link', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: z.coerce.number().int().positive() }).parse(req.params);
+    const { userId } = z.object({ userId: uuid.nullable() }).parse(req.body);
+    const r = await withTenant(req.user.tid, async (c) => {
+      if (userId) await c.query('UPDATE rentman_crew SET user_id = NULL, linked_by = NULL WHERE user_id = $1 AND id <> $2', [userId, id]);
+      const u = await c.query("UPDATE rentman_crew SET user_id = $2, linked_by = CASE WHEN $2::uuid IS NULL THEN NULL ELSE 'manual' END WHERE id = $1", [id, userId]);
+      if (u.rowCount) await audit(c, req.user.tid, req.user.sub, 'rentman.crew_link', 'integration', null, { rentmanCrew: id, userId });
+      return u.rowCount;
+    });
+    return r ? { ok: true } : reply.code(404).send({ error: 'Not found' });
+  });
+
+  // ---------- rates ----------
+  app.post('/api/rentman/rates/sync', { preHandler: adm }, async (req, reply) => {
+    try {
+      return await withTenant(req.user.tid, async (c) => {
+        const token = await getToken(c);
+        if (!token) throw new RentmanError('Connect Rentman first (Integrations page).', 409);
+        if (!(await loadOptions(c)).rates_source) throw new RentmanError('Turn on “Rentman sets pay and bill rates” first.', 409);
+        return syncRates(c, req.user.tid, token);
+      });
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+
+  // ---------- back to Rentman: hours and time off ----------
+
+  app.get('/api/rentman/push-status', { preHandler: mgr }, async (req) => withTenant(req.user.tid, (c) => pushStatus(c)));
+
+  app.post('/api/rentman/push/run', { preHandler: adm }, async (req, reply) => {
+    try {
+      return await withTenant(req.user.tid, async (c) => {
+        const token = await getToken(c);
+        if (!token) throw new RentmanError('Connect Rentman first.', 409);
+        const o = await loadOptions(c);
+        return {
+          hours: o.push_hours ? await pushHours(c, req.user.tid, token) : null,
+          timeOff: o.push_time_off ? await pushTimeOff(c, req.user.tid, token) : null,
+          status: await pushStatus(c),
+        };
+      });
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+
+  // ---------- extras on an event (invoices, files, contacts, vehicles, equipment for leads) ----------
+
+  app.get('/api/events/:id/rentman/extras', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    try {
+      const out = await withTenant(req.user.tid, async (c) => {
+        const token = await getToken(c);
+        if (!token) return null;
+        return eventExtras(c, req.user.tid, token, id, { sub: req.user.sub, role: req.user.role });
+      });
+      if (out && 'forbidden' in out) return reply.code(403).send({ error: 'Not on this event' });
+      return out ?? { project: null };
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+
+  app.post('/api/events/:id/rentman/invoices/sync', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    try {
+      return await withTenant(req.user.tid, async (c) => {
+        const ev = (await c.query('SELECT rentman_project_id FROM events WHERE id = $1', [id])).rows[0];
+        if (!ev?.rentman_project_id) throw new RentmanError('This event is not linked to a Rentman project.', 409);
+        const token = await getToken(c);
+        if (!token) throw new RentmanError('Connect Rentman first.', 409);
+        return { invoices: await syncInvoices(c, req.user.tid, token, Number(ev.rentman_project_id)) };
+      });
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+
+  // A project file: checked against the same rules as the list, then handed off to Rentman's own (expiring) link.
+  app.get('/api/events/:id/rentman/files/:fileId', { preHandler: authenticate }, async (req, reply) => {
+    const { id, fileId } = z.object({ id: uuid, fileId: z.coerce.number().int().positive() }).parse(req.params);
+    try {
+      const out = await withTenant(req.user.tid, async (c) => {
+        const token = await getToken(c);
+        if (!token) return null;
+        const x: any = await eventExtras(c, req.user.tid, token, id, { sub: req.user.sub, role: req.user.role });
+        if (!x || x.forbidden || !x.files?.some((f: any) => f.id === fileId)) return null;
+        return fileUrl(token, x.project, fileId);
+      });
+      if (!out) return reply.code(404).send({ error: 'File not found' });
+      return { url: out.url, name: out.name };
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+
 }

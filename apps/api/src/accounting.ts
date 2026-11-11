@@ -137,15 +137,16 @@ export async function eventBilling(c: PoolClient, eventId: string, source: BillS
     const label = kind === 'regular' ? 'hours' : kind === 'overtime' ? 'overtime hours' : kind === 'double' ? 'double-time hours' : 'day rate';
     acc.set(key, { role: baseRole(role), date, kind, qty: r2(qty), unit, rate, amount: r2(qty * rate), description: `${baseRole(role)} ${label} · ${fmtDay(date)} · ${ev.name}`, qboItemId: sk?.qbo_item_id ?? settings.qbo.defaultItemId ?? null });
   };
-  const rates = (role: string) => {
+  // A shift's own billing rate (the rate quoted in Rentman) wins over the role's hourly bill rate.
+  const rates = (role: string, override?: unknown) => {
     const sk = skills.get(roleKeyOf(role));
-    return { hourly: Number(sk?.bill_rate ?? 0), day: Number(sk?.day_bill_rate ?? 0) };
+    return { hourly: override != null && Number(override) > 0 ? Number(override) : Number(sk?.bill_rate ?? 0), day: Number(sk?.day_bill_rate ?? 0) };
   };
 
   if (source === 'time') {
     const rows = (
       await c.query(
-        `SELECT t.user_id, t.assignment_id, t.clock_in, t.clock_out, t.status, s.role_name, s.pay_type
+        `SELECT t.user_id, t.assignment_id, t.clock_in, t.clock_out, t.status, s.role_name, s.pay_type, s.bill_rate_override
            FROM time_entries t JOIN shift_assignments a ON a.id = t.assignment_id JOIN shifts s ON s.id = a.shift_id
           WHERE s.event_id = $1 ORDER BY t.user_id, t.clock_in`,
         [eventId],
@@ -159,7 +160,7 @@ export async function eventBilling(c: PoolClient, eventId: string, source: BillS
     const daysBilled = new Set<string>(); // assignment|date for day-rate shifts
     for (const r of approved) {
       const date = localDate(ev.timezone, r.clock_in);
-      const rt = rates(r.role_name);
+      const rt = rates(r.role_name, r.bill_rate_override);
       if (r.pay_type === 'day') {
         const k = `${r.assignment_id}|${date}`;
         if (daysBilled.has(k)) continue;
@@ -180,11 +181,11 @@ export async function eventBilling(c: PoolClient, eventId: string, source: BillS
       add(r.role_name, date, 'double', h.dt, 'hour', r2(rt.hourly * st.dtMult));
     }
   } else {
-    const shifts = (await c.query('SELECT role_name, starts_at, ends_at, headcount, pay_type FROM shifts WHERE event_id = $1 ORDER BY starts_at', [eventId])).rows;
+    const shifts = (await c.query('SELECT role_name, starts_at, ends_at, headcount, pay_type, bill_rate_override FROM shifts WHERE event_id = $1 ORDER BY starts_at', [eventId])).rows;
     if (!shifts.length) warnings.push('This event has no shifts.');
     for (const s of shifts) {
       const date = localDate(ev.timezone, s.starts_at);
-      const rt = rates(s.role_name);
+      const rt = rates(s.role_name, s.bill_rate_override);
       if (s.pay_type === 'day') {
         if (!(rt.day > 0)) missingRate.add(`${baseRole(s.role_name)} (day bill rate)`);
         add(s.role_name, date, 'day', s.headcount, 'day', rt.day);

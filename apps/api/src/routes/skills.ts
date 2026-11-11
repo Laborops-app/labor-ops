@@ -18,13 +18,15 @@ export async function skillRoutes(app: FastifyInstance) {
       const seePay = await canAdjustRates(c, req.user);
       const rows = (
         await c.query(
-          `SELECT s.id, s.name, s.pay_rate, s.day_rate, s.bill_rate, s.day_bill_rate, s.active, s.group_id, s.is_lead FROM skills s ${isAdmin ? '' : 'WHERE s.active'} ORDER BY lower(s.name)`,
+          `SELECT s.id, s.name, s.pay_rate, s.day_rate, s.bill_rate, s.day_bill_rate, s.active, s.group_id, s.is_lead,
+                  (s.rates_from_rentman AND COALESCE((SELECT rates_source FROM rentman_settings LIMIT 1), false)) AS from_rentman
+             FROM skills s ${isAdmin ? '' : 'WHERE s.active'} ORDER BY lower(s.name)`,
         )
       ).rows;
       const groups = (await c.query('SELECT id, name FROM skill_groups ORDER BY sort, lower(name)')).rows;
       return {
         groups,
-        skills: rows.map((r) => ({ id: r.id, name: r.name, active: r.active, groupId: r.group_id, isLead: r.is_lead, ...(seePay ? { payRate: Number(r.pay_rate), dayRate: Number(r.day_rate) } : {}), ...(req.user.role !== 'crew' ? { billRate: Number(r.bill_rate), dayBillRate: Number(r.day_bill_rate) } : {}) })),
+        skills: rows.map((r) => ({ id: r.id, name: r.name, active: r.active, groupId: r.group_id, isLead: r.is_lead, ratesFromRentman: !!r.from_rentman, ...(seePay ? { payRate: Number(r.pay_rate), dayRate: Number(r.day_rate) } : {}), ...(req.user.role !== 'crew' ? { billRate: Number(r.bill_rate), dayBillRate: Number(r.day_bill_rate) } : {}) })),
       };
     });
   });
@@ -126,8 +128,10 @@ export async function skillRoutes(app: FastifyInstance) {
       if (req.user.role !== 'admin') {
         if (!(await canAdjustRates(c, req.user)) || b.name !== undefined || b.active !== undefined || b.groupId !== undefined || b.isLead !== undefined) return 'forbidden' as const;
       }
-      const old = (await c.query('SELECT name FROM skills WHERE id = $1', [id])).rows[0];
+      const old = (await c.query('SELECT name, rates_from_rentman AND COALESCE((SELECT rates_source FROM rentman_settings LIMIT 1), false) AS locked FROM skills WHERE id = $1', [id])).rows[0];
       if (!old) return null;
+      // Rentman is the source of this role's rates (Integrations › Rentman): they change there, not here.
+      if (old.locked && [b.payRate, b.dayRate, b.billRate, b.dayBillRate].some((v) => v !== undefined)) return 'locked' as const;
       const r = await c.query(
         'UPDATE skills SET name = COALESCE($2, name), pay_rate = COALESCE($3, pay_rate), active = COALESCE($4, active), group_id = CASE WHEN $5::boolean THEN $6::uuid ELSE group_id END, bill_rate = COALESCE($7, bill_rate), day_rate = COALESCE($8, day_rate), day_bill_rate = COALESCE($9, day_bill_rate), is_lead = COALESCE($10, is_lead) WHERE id = $1 RETURNING id, name, pay_rate, day_rate, bill_rate, day_bill_rate, active, group_id, is_lead',
         [id, b.name ?? null, b.payRate ?? null, b.active ?? null, b.groupId !== undefined, b.groupId ?? null, b.billRate ?? null, b.dayRate ?? null, b.dayBillRate ?? null, b.isLead ?? null],
@@ -138,6 +142,7 @@ export async function skillRoutes(app: FastifyInstance) {
       return r.rows[0];
     });
     if (row === 'forbidden') return reply.code(403).send({ error: 'You are not allowed to change rates. Ask an admin.' });
+    if (row === 'locked') return reply.code(409).send({ error: 'This role’s rates come from Rentman. Change them in Rentman (Configuration › Crew rates); they sync here.', reason: 'rentman' });
     if (!row) return reply.code(404).send({ error: 'Not found' });
     return { skill: { id: row.id, name: row.name, active: row.active, groupId: row.group_id, isLead: row.is_lead, payRate: Number(row.pay_rate), dayRate: Number(row.day_rate), billRate: Number(row.bill_rate), dayBillRate: Number(row.day_bill_rate) } };
   });

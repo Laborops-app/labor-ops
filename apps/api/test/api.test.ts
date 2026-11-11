@@ -4518,3 +4518,153 @@ test('Rentman crew and transport: days, groups and shifts built from a project a
     globalThis.fetch = real;
   }
 });
+
+test('Rentman options: webhooks, crew links, rates from Rentman, hours and time off back, event extras', async () => {
+  const crypto = await import('node:crypto');
+  const { flushRentman } = await import('../src/rentmanWebhook');
+  const { clearExtrasCache } = await import('../src/rentmanExtras');
+  const a = await register('rmo');
+  const tid = await tenantOf(a);
+  await call(a, 'POST', '/api/skills', { name: 'Stagehand', payRate: 20, billRate: 40 });
+  const m = await mkCrew(a, 'rmo1');
+  const m2 = await mkCrew(a, 'rmo2');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Arena Show', startDate: '2031-06-01', endDate: '2031-06-01' })).json.event.id;
+  await withTenant(tid, (c) => c.query('UPDATE events SET rentman_project_id = 700 WHERE id = $1', [ev]));
+
+  const real = globalThis.fetch;
+  const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: { 'content-type': 'application/json' } });
+  const sent: { method: string; url: string; body: any }[] = [];
+  let regId = 900;
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = String(input);
+    if (!url.startsWith('https://api.rentman.net')) return real(input, init);
+    const method = init?.method ?? 'GET';
+    if (method !== 'GET') {
+      sent.push({ method, url, body: init?.body ? JSON.parse(init.body) : null });
+      if (method === 'DELETE') return new Response(null, { status: 204 });
+      return json({ data: { id: ++regId } });
+    }
+    if (url.includes('/crew?') || url.endsWith('/crew')) return json({ data: [
+      { id: 5, firstname: 'Crew', lastname: 'rmo1', email: `RMO1-${run}@test.example`, active: true },
+      { id: 6, firstname: 'Pat', lastname: 'Nobody', email: 'pat@elsewhere.example', active: true },
+    ] });
+    if (url.includes('/ratefactors')) return json({ data: [{ id: 1, rate_id: 31, from: 0, to: null, variable: 30, fixed: 0 }, { id: 2, rate_id: 32, from: 0, to: null, variable: 55, fixed: 0 }] });
+    if (url.includes('/rates')) return json({ data: [{ id: 31, name: 'Stagehand cost', type: 'cost' }, { id: 32, name: 'Stagehand price', type: 'price' }, { id: 33, name: 'Spotlight op', type: 'price' }] });
+    if (url.includes('/invoices')) return json({ data: [{ id: 81, number: 'F-81', subject: 'Arena', date: '2031-06-02', price: 1200, price_invat: 1452, total_paid: 0, outstanding_balance: 1452, is_paid: false, finalized: true, project: '/projects/700' }] });
+    if (url.includes('/projects/700/files')) return json({ data: [
+      { id: 41, readable_name: 'Stage plot.pdf', size: 1000, folder: '/file_folders/2', classified: false },
+      { id: 42, readable_name: 'Contract.pdf', size: 1000, folder: '/file_folders/2', classified: true },
+    ] });
+    if (url.includes('/projects/700/file_folders')) return json({ data: [{ id: 2, name: 'Crew' }] });
+    if (url.includes('/files/41')) return json({ data: { id: 41, readable_name: 'Stage plot.pdf', item: '/projects/700', classified: false, url: 'https://files.example/plot.pdf' } });
+    if (url.includes('/projects/700/projectvehicles')) return json({ data: [{ id: 1, vehicle: '/vehicles/3', function: '/projectfunctions/14', planningperiod_start: '2031-06-01T10:00:00Z' }] });
+    if (url.includes('/vehicles/3')) return json({ data: { id: 3, name: 'Box truck', licenseplate: 'ABC-123', seats: 3 } });
+    if (url.match(/\/projects\/700(\?|$)/)) return json({ data: { id: 700, cust_contact: '/contactpersons/9', loc_contact: null } });
+    if (url.includes('/contactpersons/9')) return json({ data: { id: 9, firstname: 'Sam', lastname: 'Site', function: 'Production manager', mobilephone: '555-0100' } });
+    if (url.includes('/projects')) return json({ data: [] });
+    return json({ data: [] });
+  }) as typeof fetch;
+  try {
+    assert.equal((await call(a, 'PUT', '/api/rentman/settings', { token: 'good-token-123456' })).status, 200);
+    let o = (await call(a, 'GET', '/api/rentman/options')).json.options;
+    assert.equal(o.crew_link, false);
+    assert.equal(o.webhookUrl, null);
+
+    // Webhooks: a private address, refused without the right signature
+    o = (await call(a, 'PUT', '/api/rentman/options', { webhooks: true, webhookToken: 'whsec-test-token' })).json.options;
+    const key = o.webhookUrl.split('/').pop();
+    assert.ok(key.length >= 24);
+    const payload = JSON.stringify({ account: 'x', eventType: 'update', itemType: 'Crew', items: [{ id: 5 }] });
+    const sig = 'sha512=' + crypto.createHmac('sha512', 'whsec-test-token').update(payload).digest('hex');
+    const hook = (k: string, digest: string) => app.inject({ method: 'POST', url: `/api/rentman/webhook/${k}`, payload, headers: { 'content-type': 'application/json', digest } });
+    assert.equal((await hook('x'.repeat(30), sig)).statusCode, 404);
+    assert.equal((await hook(key, 'sha512=00')).statusCode, 401);
+    assert.equal((await hook(key, sig)).statusCode, 200);
+
+    // Crew: turning it on links by email; the webhook's queued crew work runs too
+    const on = (await call(a, 'PUT', '/api/rentman/options', { crew_link: true })).json;
+    assert.equal(on.ran.crew.linked, 1);
+    await flushRentman(tid);
+    let crew = (await call(a, 'GET', '/api/rentman/crew')).json;
+    assert.equal(crew.crew.find((r: any) => r.id === 5).user_id, m.id);
+    assert.ok(crew.notInRentman.some((u: any) => u.id === m2.id));
+    // Link by hand
+    assert.equal((await call(a, 'PUT', '/api/rentman/crew/6/link', { userId: m2.id })).status, 200);
+    crew = (await call(a, 'GET', '/api/rentman/crew')).json;
+    assert.equal(crew.crew.find((r: any) => r.id === 6).linked_by, 'manual');
+
+    // Rates from Rentman: copied and locked; unmatched names wait in the mapping list
+    const r1 = (await call(a, 'PUT', '/api/rentman/options', { rates_source: true })).json;
+    assert.equal(r1.ran.rates.roles, 1);
+    assert.deepEqual(r1.ran.rates.unmatched, ['Spotlight op']);
+    let sk = (await call(a, 'GET', '/api/skills')).json;
+    const stage = (sk.skills ?? sk).find((s: any) => s.name === 'Stagehand');
+    assert.equal(Number(stage.pay_rate ?? stage.payRate), 30);
+    assert.equal(Number(stage.bill_rate ?? stage.billRate), 55);
+    assert.equal(stage.ratesFromRentman, true);
+    const lock = await call(a, 'PATCH', `/api/skills/${stage.id}`, { payRate: 22 });
+    assert.equal(lock.status, 409);
+    assert.equal(lock.json.reason, 'rentman');
+    await call(a, 'PUT', '/api/rentman/options', { rates_source: false });
+    assert.equal((await call(a, 'PATCH', `/api/skills/${stage.id}`, { payRate: 22 })).status, 200);
+
+    // Hours: an approved entry for linked crew goes to Rentman; unapproving takes it back out
+    const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: '2031-06-01T15:00:00Z', endsAt: '2031-06-01T23:00:00Z', headcount: 2 })).json.shift.id;
+    await withTenant(tid, (c) => c.query("UPDATE shifts SET rentman_key = '14' WHERE id = $1", [sh]));
+    for (const u of [m, m2]) assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: u.id, confirmed: true, override: true })).status, 201);
+    const entry = await withTenant(tid, async (c) => {
+      const asg = (await c.query('SELECT id FROM shift_assignments WHERE shift_id = $1 AND user_id = $2', [sh, m.id])).rows[0].id;
+      await c.query("UPDATE shift_assignments SET status = 'accepted' WHERE shift_id = $1", [sh]);
+      return (await c.query("INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in, clock_out, status) VALUES ($1,$2,$3,'2031-06-01T15:00:00Z','2031-06-01T23:00:00Z','approved') RETURNING id", [tid, asg, m.id])).rows[0].id;
+    });
+    await call(a, 'PUT', '/api/rentman/options', { push_hours: true, push_time_off: true });
+    let p = (await call(a, 'POST', '/api/rentman/push/run')).json;
+    assert.equal(p.hours.sent, 1);
+    const reg = sent.find((s) => s.method === 'POST' && s.url.endsWith('/timeregistration'))!;
+    assert.equal(reg.body.crewmember, '/crew/5');
+    assert.match(reg.body.remark, /Arena Show · Stagehand/);
+    assert.equal((await call(a, 'POST', '/api/rentman/push/run')).json.hours.sent, 0); // nothing new
+    await withTenant(tid, (c) => c.query("UPDATE time_entries SET status = 'submitted' WHERE id = $1", [entry]));
+    p = (await call(a, 'POST', '/api/rentman/push/run')).json;
+    assert.equal(p.hours.removed, 1);
+    assert.ok(sent.some((s) => s.method === 'DELETE' && /\/timeregistration\/\d+$/.test(s.url)));
+
+    // Time off for linked crew → "not available" in Rentman; removing it removes it there
+    const off = (await call(m.session, 'POST', '/api/my/time-off', { startsOn: '2031-07-01', endsOn: '2031-07-02', note: 'Wedding' }));
+    assert.ok([200, 201].includes(off.status), off.text);
+    p = (await call(a, 'POST', '/api/rentman/push/run')).json;
+    assert.equal(p.timeOff.sent, 1);
+    const av = sent.find((s) => s.url.endsWith('/crew/5/crewavailability'))!;
+    assert.equal(av.body.status, 'N');
+    assert.match(av.body.remark, /Wedding/);
+    await withTenant(tid, (c) => c.query('DELETE FROM time_off WHERE user_id = $1', [m.id]));
+    assert.equal((await call(a, 'POST', '/api/rentman/push/run')).json.timeOff.removed, 1);
+    assert.equal((await call(a, 'GET', '/api/rentman/push-status')).json.hours.failed, 0);
+
+    // Extras: off until switched on; then staff see invoices, files (not classified, in the chosen folder), contacts, vehicles
+    let x = (await call(a, 'GET', `/api/events/${ev}/rentman/extras`)).json;
+    assert.equal(x.files, undefined);
+    await call(a, 'PUT', '/api/rentman/options', { show_invoices: true, show_files: true, filesFolder: 'Crew', show_contacts: true, show_vehicles: true, show_equipment_leads: true });
+    assert.equal((await call(a, 'POST', `/api/events/${ev}/rentman/invoices/sync`)).json.invoices, 1);
+    clearExtrasCache();
+    x = (await call(a, 'GET', `/api/events/${ev}/rentman/extras`)).json;
+    assert.equal(x.invoices[0].number, 'F-81');
+    assert.deepEqual(x.files.map((f: any) => f.name), ['Stage plot.pdf']);
+    assert.equal(x.contacts[0].name, 'Sam Site');
+    assert.equal(x.vehicles[0].vehicles[0].plate, 'ABC-123');
+    const pipe = (await call(a, 'GET', '/api/pipeline?range=all')).json.events.find((e: any) => e.id === ev);
+    assert.equal(Number(pipe.rentman_invoices.count), 1);
+    // Crew on the event: files and their vehicle, but no invoices or contacts (not a lead)
+    const cx = (await call(m.session, 'GET', `/api/events/${ev}/rentman/extras`)).json;
+    assert.equal(cx.invoices, undefined);
+    assert.equal(cx.contacts, undefined);
+    assert.equal(cx.files.length, 1);
+    assert.equal((await call(m.session, 'GET', `/api/events/${ev}/rentman/files/41`)).json.url, 'https://files.example/plot.pdf');
+    assert.equal((await call(m.session, 'GET', `/api/events/${ev}/rentman/files/42`)).status, 404);
+    // Someone not on the event sees nothing
+    const out = await mkCrew(a, 'rmo3');
+    assert.equal((await call(out.session, 'GET', `/api/events/${ev}/rentman/extras`)).status, 403);
+  } finally {
+    globalThis.fetch = real;
+  }
+});

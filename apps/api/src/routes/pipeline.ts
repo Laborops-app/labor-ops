@@ -46,6 +46,9 @@ export async function pipelineRoutes(app: FastifyInstance) {
                   (SELECT json_build_object('id', qq.id, 'number', qq.number, 'status', qq.status)
                      FROM quotes qq WHERE qq.event_id = e.id ORDER BY (qq.status = 'accepted') DESC, qq.created_at DESC LIMIT 1) AS quote,
                   (SELECT json_build_object('id', rp.id, 'number', rp.number, 'status', rp.status_name) FROM rentman_projects rp WHERE rp.id = e.rentman_project_id) AS rentman,
+                  (SELECT json_build_object('count', count(*), 'total', sum(ri.price), 'outstanding', sum(ri.outstanding), 'paid', bool_and(ri.is_paid))
+                     FROM rentman_invoices ri WHERE ri.project_id = e.rentman_project_id
+                       AND (SELECT show_invoices FROM rentman_settings LIMIT 1) HAVING count(*) > 0) AS rentman_invoices,
                   COALESCE((SELECT json_agg(x) FROM (
                      SELECT DISTINCT ON (u.id) u.id, u.name, a.status FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN users u ON u.id = a.user_id
                       WHERE s.event_id = e.id AND a.status <> 'declined' ORDER BY u.id, (a.status = 'accepted') DESC) x), '[]'::json) AS crew

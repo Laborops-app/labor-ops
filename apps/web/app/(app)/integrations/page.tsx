@@ -7,6 +7,7 @@ import AccountingPanels from '@/components/AccountingPanels';
 import type { Me } from '@/lib/api';
 import { Banner } from '@/components/ui';
 import { api } from '@/lib/api';
+import RentmanOptions from '@/components/RentmanOptions';
 
 type RunResult = { created: number; moved: number; datesUpdated: number; flagged: number; skipped: number; built?: number; shiftChanges?: number; errors?: string };
 type St = {
@@ -305,6 +306,7 @@ function Body({ me }: { me: Me }) {
             </button>
             </div>
             <RentmanPipeline s={s} busy={busy} act={act} />
+            <RentmanOptions />
           </>
         )}
       </Panel>

@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import RentmanBuild from '@/components/RentmanBuild';
+import RentmanExtras, { useRentmanExtras } from '@/components/RentmanExtras';
 import RentmanPicker, { RmProject } from '@/components/RentmanPicker';
 import { api, fmtDate, getPosition } from '@/lib/api';
 import CustomerSelect from '@/components/CustomerSelect';
@@ -342,6 +343,7 @@ type RmItem = NonNullable<RmView['equipment']>[number];
 /** The Rentman project linked to an event: project info and the equipment rental list. */
 export function RentmanCard({ eventId, isAdmin, onError, onView, onShifts }: { eventId: string; isAdmin: boolean; onError: (m: string) => void; onView?: (v: RmView) => void; onShifts?: (msg: string) => void }) {
   const [v, setV] = useState<RmView | null>(null);
+  const [rmx] = useRentmanExtras(eventId);
   const [pick, setPick] = useState<RmProject | null>(null);
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set()); // equipment groups start collapsed
   const [busy, setBusy] = useState(false);
@@ -429,6 +431,7 @@ export function RentmanCard({ eventId, isAdmin, onError, onView, onShifts }: { e
             {p.usageperiod_start && <div><span className="muted small">Usage period</span><b>{when(p.usageperiod_start, p.usageperiod_end)}</b></div>}
           </div>
           <RentmanBuild eventId={eventId} onError={onError} onChanged={(m) => onShifts?.(m)} />
+          <RentmanExtras eventId={eventId} x={rmx} />
           <div className="row space">
             <h3>Equipment rentals ({v.equipment?.length ?? 0})</h3>
             {!!v.equipment?.length && (
