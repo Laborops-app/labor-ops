@@ -2,9 +2,9 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { withTenant, audit } from '../db';
 import { guard } from '../auth';
-import { checkEventRequest, checkOpenRequests, clearToken, getToken, projectQuotes, pushCustomer, pushEventRequest, RentmanError, saveToken, syncEquipment, testToken } from '../rentman';
+import { syncProjects, checkEventRequest, checkOpenRequests, clearToken, getToken, projectQuotes, pushCustomer, pushEventRequest, RentmanError, saveToken, syncEquipment, testToken } from '../rentman';
 import { importRentmanQuote } from '../quoteCompare';
-import { loadPipelineSettings, pullRentman, savePipelineSettings } from '../rentmanPipeline';
+import { addProjectNow, findRentman, loadPipelineSettings, pullRentman, savePipelineSettings } from '../rentmanPipeline';
 import { buildFromRentman, keepConflict } from '../rentmanBuild';
 import { loadOptions, OPTION_KEYS, saveOptions, verifyDigest, webhookToken } from '../rentmanOptions';
 import { queueRentman } from '../rentmanWebhook';
@@ -555,6 +555,30 @@ export async function rentmanRoutes(app: FastifyInstance) {
     } catch (e) {
       return fail(reply, e);
     }
+  });
+
+
+  // ---------- "why isn't my project on the pipeline?" ----------
+  app.get('/api/rentman/find', { preHandler: mgr }, async (req, reply) => {
+    const { q } = z.object({ q: z.string().trim().min(1).max(120) }).parse(req.query);
+    try {
+      return await withTenant(req.user.tid, async (c) => {
+        const token = await getToken(c);
+        if (!token) throw new RentmanError('Connect Rentman first.', 409);
+        // Fresh project list first (at most every two minutes), so a project made a moment ago is found.
+        const last = (await c.query('SELECT max(synced_at) AS t FROM rentman_projects')).rows[0]?.t;
+        if (!last || Date.now() - +new Date(last) > 2 * 60_000) await syncProjects(c, req.user.tid, token);
+        return findRentman(c, token, q);
+      });
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+  app.post('/api/rentman/projects/:id/add', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: z.coerce.number().int().positive() }).parse(req.params);
+    const r = await withTenant(req.user.tid, (c) => addProjectNow(c, req.user.tid, id));
+    if ('error' in r) return reply.code(409).send({ error: r.error });
+    return r;
   });
 
 }

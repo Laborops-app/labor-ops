@@ -2127,3 +2127,6 @@ details.card.profile-fold > summary::before { content: none; }
 .cal-grid.week .evcal-card b { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .imp-cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
 .imp-cols label { display: grid; gap: 4px; }
+
+.rm-find { margin: 16px 0; padding-top: 12px; border-top: 1px solid var(--border); }
+.rm-find h4 { margin: 0 0 8px; }

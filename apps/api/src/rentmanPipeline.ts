@@ -59,7 +59,7 @@ export async function syncStatuses(c: PoolClient, token: string) {
 }
 
 export type PipelineSettings = { autoEvents: boolean; fromDate: string | null; skipCanceled: boolean; buildShifts: boolean; lastRunAt: string | null; lastResult: RunResult | null };
-export type RunResult = { created: number; moved: number; datesUpdated: number; flagged: number; skipped: number; built?: number; shiftChanges?: number; errors?: string };
+export type RunResult = { created: number; moved: number; datesUpdated: number; flagged: number; skipped: number; built?: number; shiftChanges?: number; requests?: number; errors?: string };
 
 export async function loadPipelineSettings(c: PoolClient): Promise<PipelineSettings> {
   const r = (await c.query("SELECT auto_events, to_char(from_date, 'YYYY-MM-DD') AS from_date, skip_canceled, build_shifts, last_run_at, last_result FROM rentman_settings LIMIT 1")).rows[0];
@@ -103,24 +103,13 @@ export async function applyToPipeline(c: PoolClient, tid: string, token?: string
     ).rows;
     for (const p of fresh) {
       if (!p.sd) { out.skipped++; continue; }
-      const cust = p.customer_id ? await customerForRentman(c, tid, Number(p.customer_id)) : null;
-      const status: PipelineStatus = (p.status_kind as PipelineStatus | null) ?? 'pending';
-      const ev = (
-        await c.query(
-          `INSERT INTO events (tenant_id, name, client, venue, address, start_date, end_date, notes, rentman_project_id, customer_id, pipeline_status, priority, board_position, rentman_seen, rentman_status_seen)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'medium', (SELECT COALESCE(min(board_position), 1) - 1 FROM events WHERE pipeline_status = $11), $12, $13) RETURNING id`,
-          [tid, p.name, cust?.name ?? p.customer ?? null, p.location ?? null, p.loc_address ?? null, p.sd, p.ed < p.sd ? p.sd : p.ed,
-           `From Rentman project ${p.number ?? p.id}${p.status_name ? ` (${p.status_name})` : ''}.`, p.id, cust?.id ?? null, status, `${p.sd}|${p.ed}`, p.status_name ?? null],
-        )
-      ).rows[0];
-      await c.query('INSERT INTO event_status_log (tenant_id, event_id, from_status, to_status, reason) VALUES ($1,$2,NULL,$3,$4)', [tid, ev.id, status, `Pulled from Rentman${p.status_name ? `: ${p.status_name}` : ''}`]);
-      await c.query('INSERT INTO rentman_imports (tenant_id, project_id, event_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [tid, p.id, ev.id]);
-      // Its days and shifts from Rentman's crew and transport, kept in step from then on.
-      if (s.buildShifts) await c.query('UPDATE events SET rentman_build = true WHERE id = $1', [ev.id]);
-      await audit(c, tid, null, 'event.rentman_import', 'event', ev.id, { project: p.id, status });
+      await createFromProject(c, tid, p, s.buildShifts);
       out.created++;
     }
   }
+
+  // ---- open project requests (not accepted yet) → Pending events ----
+  if (s.autoEvents && token) out.requests = await importRequests(c, tid, token, s.fromDate, tz);
 
   // ---- linked events follow Rentman ----
   const linked = (
@@ -248,4 +237,127 @@ export async function runRentmanPipeline() {
       }
     }).catch((e) => console.error('rentman pipeline', t.id, e?.message ?? e));
   }
+}
+
+/** The SQL row a project needs to become an event (its dates in the company's time zone). */
+const PROJECT_ROW = `SELECT p.*, to_char((COALESCE(p.usageperiod_start, p.planperiod_start) AT TIME ZONE $1)::date, 'YYYY-MM-DD') AS sd,
+        to_char((COALESCE(p.usageperiod_end, p.planperiod_end, p.usageperiod_start, p.planperiod_start) AT TIME ZONE $1)::date, 'YYYY-MM-DD') AS ed,
+        lc.address AS loc_address
+   FROM rentman_projects p LEFT JOIN rentman_contacts lc ON lc.id = p.location_id`;
+
+/** One Rentman project → a pipeline event at its Rentman stage (customer, venue, dates), built from its crew if set. */
+export async function createFromProject(c: PoolClient, tid: string, p: any, buildShifts: boolean) {
+  const cust = p.customer_id ? await customerForRentman(c, tid, Number(p.customer_id)) : null;
+  const status: PipelineStatus = (p.status_kind as PipelineStatus | null) ?? 'pending';
+  const ev = (
+    await c.query(
+      `INSERT INTO events (tenant_id, name, client, venue, address, start_date, end_date, notes, rentman_project_id, customer_id, pipeline_status, priority, board_position, rentman_seen, rentman_status_seen)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'medium', (SELECT COALESCE(min(board_position), 1) - 1 FROM events WHERE pipeline_status = $11), $12, $13) RETURNING id`,
+      [tid, p.name, cust?.name ?? p.customer ?? null, p.location ?? null, p.loc_address ?? null, p.sd, p.ed < p.sd ? p.sd : p.ed,
+       `From Rentman project ${p.number ?? p.id}${p.status_name ? ` (${p.status_name})` : ''}.`, p.id, cust?.id ?? null, status, `${p.sd}|${p.ed}`, p.status_name ?? null],
+    )
+  ).rows[0];
+  await c.query('INSERT INTO event_status_log (tenant_id, event_id, from_status, to_status, reason) VALUES ($1,$2,NULL,$3,$4)', [tid, ev.id, status, `Pulled from Rentman${p.status_name ? `: ${p.status_name}` : ''}`]);
+  await c.query('INSERT INTO rentman_imports (tenant_id, project_id, event_id) VALUES ($1,$2,$3) ON CONFLICT (tenant_id, project_id) DO UPDATE SET event_id = $3', [tid, p.id, ev.id]);
+  if (buildShifts) await c.query('UPDATE events SET rentman_build = true WHERE id = $1', [ev.id]);
+  await audit(c, tid, null, 'event.rentman_import', 'event', ev.id, { project: p.id, status });
+  return ev.id as string;
+}
+
+const reqDay = (v: unknown, tz: string) => (v ? new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(String(v))) : null);
+const addr = (...v: unknown[]) => v.map((x) => String(x ?? '').trim()).filter(Boolean).join(', ') || null;
+
+/**
+ * Open Rentman project requests become Pending events (once each). When Rentman accepts a request, the event links to
+ * the project it turned into (the regular request check), so the project doesn't become a second event.
+ */
+export async function importRequests(c: PoolClient, tid: string, token: string, fromDate: string | null, tz: string) {
+  const reqs = await getAll(token, '/projectrequests').catch(() => [] as any[]);
+  let made = 0;
+  const from = fromDate ?? new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  for (const r of reqs) {
+    if (String(r.status ?? 'open') !== 'open' || refId(r.linked_project) !== null) continue;
+    const sd = reqDay(r.usageperiod_start ?? r.planperiod_start, tz);
+    const ed = reqDay(r.usageperiod_end ?? r.planperiod_end ?? r.usageperiod_start ?? r.planperiod_start, tz);
+    if (!sd || !ed || ed < from) continue;
+    const id = Number(r.id);
+    if ((await c.query('SELECT 1 FROM events WHERE rentman_request_id = $1 UNION ALL SELECT 1 FROM rentman_request_imports WHERE request_id = $1', [id])).rowCount) continue;
+    const ev = (
+      await c.query(
+        `INSERT INTO events (tenant_id, name, client, venue, address, start_date, end_date, notes, rentman_request_id, rentman_request_status, pipeline_status, priority, board_position)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'open','pending','medium', (SELECT COALESCE(min(board_position), 1) - 1 FROM events WHERE pipeline_status = 'pending')) RETURNING id`,
+        [tid, String(r.name || r.displayname || `Rentman request ${id}`).slice(0, 200), r.contact_name || null, r.location_name || null,
+         addr(r.location_mailing_street, r.location_mailing_number, r.location_mailing_city), sd, ed < sd ? sd : ed,
+         `From Rentman project request ${id} (not accepted yet).${r.remark ? `\n${String(r.remark).slice(0, 500)}` : ''}`, id],
+      )
+    ).rows[0];
+    await c.query('INSERT INTO event_status_log (tenant_id, event_id, from_status, to_status, reason) VALUES ($1,$2,NULL,$3,$4)', [tid, ev.id, 'pending', 'Pulled from a Rentman project request']);
+    await c.query('INSERT INTO rentman_request_imports (tenant_id, request_id, event_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [tid, id, ev.id]);
+    await audit(c, tid, null, 'event.rentman_request_import', 'event', ev.id, { request: id });
+    made++;
+  }
+  return made;
+}
+
+/**
+ * "Why isn't my Rentman project on the pipeline?" — projects and open requests matching a number or name, each with
+ * what LaborOps did with it and why.
+ */
+export async function findRentman(c: PoolClient, token: string, q: string) {
+  const s = await loadPipelineSettings(c);
+  const tz = (await c.query('SELECT timezone FROM tenants LIMIT 1')).rows[0]?.timezone ?? 'UTC';
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const from = s.fromDate ?? today;
+  const num = /^\d+$/.test(q.trim()) ? Number(q.trim()) : -1;
+  const rows = (
+    await c.query(
+      `${PROJECT_ROW} WHERE p.number = $2 OR p.id = $2 OR p.name ILIKE '%' || $3 || '%' OR p.reference ILIKE '%' || $3 || '%' ORDER BY COALESCE(p.usageperiod_start, p.planperiod_start) DESC NULLS LAST LIMIT 15`,
+      [tz, num, q.trim()],
+    )
+  ).rows;
+  const projects = [];
+  for (const p of rows) {
+    const ev = (await c.query('SELECT id, name, pipeline_status, archived_at FROM events WHERE rentman_project_id = $1 LIMIT 1', [p.id])).rows[0];
+    const imported = (await c.query('SELECT 1 FROM rentman_imports WHERE project_id = $1', [p.id])).rowCount;
+    let reason: string, canAdd = false;
+    if (ev) reason = `Already on the event “${ev.name}”${ev.archived_at ? ' (archived)' : ''}, in ${String(ev.pipeline_status).replace('_', ' ')}.`;
+    else if (!p.sd) reason = 'It has no planning or usage dates in Rentman, so there are no days to put it on. Add dates in Rentman, then sync.';
+    else if (imported) { reason = 'It was added before and that event was deleted here, so it isn’t added again automatically.'; canAdd = true; }
+    else if (!s.autoEvents) { reason = '“Add new Rentman projects to the pipeline as events” is off (Integrations › Rentman › Pipeline).'; canAdd = true; }
+    else if (p.ed < from) { reason = `It ends ${p.ed}, before the pipeline’s “projects ending on or after” date (${from}).`; canAdd = true; }
+    else if (s.skipCanceled && p.status_kind === 'canceled') { reason = `It’s canceled in Rentman (${p.status_name}) and canceled projects are skipped.`; canAdd = true; }
+    else { reason = 'It will be added on the next sync.'; canAdd = true; }
+    projects.push({ id: p.id, number: p.number, name: p.name, status: p.status_name, start: p.sd, end: p.ed, event: ev ? { id: ev.id, name: ev.name } : null, reason, canAdd });
+  }
+  // Open project requests (Rentman keeps these apart from projects until they're accepted).
+  const reqs = (await getAll(token, '/projectrequests').catch(() => [] as any[]))
+    .filter((r: any) => num === Number(r.id) || String(r.name ?? r.displayname ?? '').toLowerCase().includes(q.trim().toLowerCase()))
+    .slice(0, 10);
+  const requests = [];
+  for (const r of reqs) {
+    const ev = (await c.query('SELECT id, name FROM events WHERE rentman_request_id = $1 LIMIT 1', [Number(r.id)])).rows[0];
+    const st = String(r.status ?? 'open');
+    const linked = refId(r.linked_project);
+    const sd = reqDay(r.usageperiod_start ?? r.planperiod_start, tz);
+    let reason: string;
+    if (ev) reason = `On the event “${ev.name}”.`;
+    else if (linked) reason = `Accepted in Rentman as project ${linked}; look it up by that project instead.`;
+    else if (st !== 'open') reason = `It’s ${st} in Rentman.`;
+    else if (!sd) reason = 'It has no dates in Rentman.';
+    else if (!s.autoEvents) reason = '“Add new Rentman projects to the pipeline as events” is off; open requests come in as Pending events when it’s on.';
+    else reason = 'It will be added as a Pending event on the next sync.';
+    requests.push({ id: Number(r.id), name: r.name ?? r.displayname ?? `Request ${r.id}`, status: st, start: sd, event: ev ? { id: ev.id, name: ev.name } : null, reason });
+  }
+  return { projects, requests, pipelineOn: s.autoEvents, fromDate: from };
+}
+
+/** Add one Rentman project to the pipeline now, whatever the pipeline settings (not if it's already on an event). */
+export async function addProjectNow(c: PoolClient, tid: string, projectId: number) {
+  const tz = (await c.query('SELECT timezone FROM tenants LIMIT 1')).rows[0]?.timezone ?? 'UTC';
+  const p = (await c.query(`${PROJECT_ROW} WHERE p.id = $2`, [tz, projectId])).rows[0];
+  if (!p) return { error: 'That project isn’t in LaborOps yet. Sync Rentman first.' };
+  if ((await c.query('SELECT 1 FROM events WHERE rentman_project_id = $1', [projectId])).rowCount) return { error: 'It’s already on an event.' };
+  if (!p.sd) return { error: 'It has no dates in Rentman.' };
+  const s = await loadPipelineSettings(c);
+  return { eventId: await createFromProject(c, tid, p, s.buildShifts) };
 }

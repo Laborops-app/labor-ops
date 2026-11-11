@@ -4851,3 +4851,50 @@ test('crew export for Rentman: one sheet, Rentman column names, first role as fo
   assert.equal(missing.length, 2);
   assert.equal(missing[0].includes('Folder'), false);
 });
+
+test('Rentman: find a project and see why it is not on the pipeline; open requests become Pending events', async () => {
+  const a = await register('rmfind');
+  const tid = await tenantOf(a);
+  const real = globalThis.fetch;
+  const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: { 'content-type': 'application/json' } });
+  const projects = [
+    { id: 901, number: 1234, name: 'Pending Gala', displayname: 'Pending Gala', usageperiod_start: '2031-12-05T16:00:00Z', usageperiod_end: '2031-12-05T23:00:00Z' },
+    { id: 902, number: 1235, name: 'Pending No Dates', displayname: 'Pending No Dates' },
+  ];
+  let requests: any[] = [{ id: 61, name: 'Pending Request Fest', status: 'open', usageperiod_start: '2031-12-10T16:00:00Z', usageperiod_end: '2031-12-11T23:00:00Z', contact_name: 'Acme', location_name: 'Hall B', linked_project: null }];
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = String(input);
+    if (!url.startsWith('https://api.rentman.net')) return real(input, init);
+    if (url.includes('/projectrequests')) return json({ data: requests });
+    if (url.includes('/subprojects')) return json({ data: [{ id: 1, project: '/projects/901', status: '/statuses/1', order: 1 }] });
+    if (url.includes('/statuses')) return json({ data: [{ id: 1, name: 'Pending' }] });
+    if (url.includes('/projectfunction')) return json({ data: [] });
+    if (url.match(/\/projects(\?|$)/)) return json({ data: projects });
+    return json({ data: [] });
+  }) as typeof fetch;
+  try {
+    assert.equal((await call(a, 'PUT', '/api/rentman/settings', { token: 'good-token-123456' })).status, 200);
+    let f = (await call(a, 'GET', '/api/rentman/find?q=pending')).json;
+    const gala = f.projects.find((p: any) => p.number === 1234);
+    assert.match(gala.reason, /is off/);
+    assert.equal(gala.canAdd, true);
+    assert.match(f.projects.find((p: any) => p.number === 1235).reason, /no planning or usage dates/);
+    assert.match(f.requests[0].reason, /is off/);
+    // Add the project now
+    const add = await call(a, 'POST', '/api/rentman/projects/901/add');
+    assert.equal(add.status, 200, add.text);
+    assert.match((await call(a, 'GET', '/api/rentman/find?q=1234')).json.projects[0].reason, /Already on the event/);
+    assert.equal((await call(a, 'POST', '/api/rentman/projects/901/add')).status, 409);
+    // Pipeline on: the open request comes in as a Pending event, once
+    assert.equal((await call(a, 'PUT', '/api/rentman/pipeline', { autoEvents: true, fromDate: '2031-01-01' })).status, 200);
+    await call(a, 'POST', '/api/rentman/sync');
+    const evs = async () => (await withTenant(tid, (c) => c.query("SELECT name, pipeline_status, rentman_request_id, venue FROM events WHERE name LIKE 'Pending%' ORDER BY name"))).rows;
+    let list = await evs();
+    const req = list.find((e: any) => e.name === 'Pending Request Fest');
+    assert.deepEqual([req.pipeline_status, req.rentman_request_id, req.venue], ['pending', 61, 'Hall B']);
+    await call(a, 'POST', '/api/rentman/sync');
+    assert.equal((await evs()).filter((e: any) => e.name === 'Pending Request Fest').length, 1);
+  } finally {
+    globalThis.fetch = real;
+  }
+});

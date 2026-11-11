@@ -17,6 +17,65 @@ type St = {
 const runText = (r: RunResult) =>
   r.errors ? `Failed: ${r.errors}` : [`${r.created} new event${r.created === 1 ? '' : 's'}`, `${r.moved} moved`, r.datesUpdated ? `${r.datesUpdated} re-dated` : '', r.shiftChanges ? `${r.shiftChanges} shift change${r.shiftChanges === 1 ? '' : 's'} from Rentman` : '', r.flagged ? `${r.flagged} sent to a coordinator to check` : ''].filter(Boolean).join(', ');
 
+type Found = {
+  projects: { id: number; number: number | null; name: string; status: string | null; start: string | null; end: string | null; event: { id: string; name: string } | null; reason: string; canAdd: boolean }[];
+  requests: { id: number; name: string; status: string; start: string | null; event: { id: string; name: string } | null; reason: string }[];
+};
+/** "Why isn't my Rentman project on the pipeline?": search by project number or name and see what LaborOps did with it. */
+function FindRentman() {
+  const [q, setQ] = useState('');
+  const [r, setR] = useState<Found | null>(null);
+  const [busy, setBusy] = useState('');
+  const [err, setErr] = useState('');
+  const [msg, setMsg] = useState('');
+  const find = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!q.trim()) return;
+    setBusy('find'); setErr(''); setMsg('');
+    try { setR(await api<Found>(`/api/rentman/find?q=${encodeURIComponent(q.trim())}`)); } catch (x) { setErr((x as Error).message); } finally { setBusy(''); }
+  };
+  return (
+    <div className="rm-find">
+      <h4>Missing a project?</h4>
+      <form className="row" style={{ gap: 8, flexWrap: 'wrap' }} onSubmit={find}>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Rentman project number or name" style={{ maxWidth: 300 }} aria-label="Rentman project number or name" />
+        <button className="btn small" disabled={!!busy || !q.trim()}>{busy === 'find' ? 'Checking Rentman…' : 'Find'}</button>
+      </form>
+      {err && <p className="error small">{err}</p>}
+      {msg && <p className="small" style={{ color: 'var(--good)' }}>{msg}</p>}
+      {r && (
+        r.projects.length + r.requests.length === 0 ? <p className="muted small">Nothing in Rentman matches “{q}”. Check the number, or that the API token’s Rentman user can see that project.</p> : (
+          <ul className="plain small">
+            {r.projects.map((p) => (
+              <li key={`p${p.id}`}>
+                <b>{p.number ? `#${p.number} ` : ''}{p.name}</b> <span className="muted">· project{p.status ? ` · ${p.status}` : ''}{p.start ? ` · ${p.start}${p.end && p.end !== p.start ? ` to ${p.end}` : ''}` : ''}</span>
+                <div>{p.reason}</div>
+                <div className="row" style={{ gap: 8, marginTop: 4 }}>
+                  {p.event && <a className="btn ghost small" href={`/events/${p.event.id}`}>Open event</a>}
+                  {!p.event && p.canAdd && (
+                    <button type="button" className="btn small primary" disabled={!!busy} onClick={async () => {
+                      setBusy(`add${p.id}`); setErr('');
+                      try { const x = await api<{ eventId: string }>(`/api/rentman/projects/${p.id}/add`, { body: {} }); setMsg(`${p.name} added to the pipeline.`); await find(); window.open(`/events/${x.eventId}`, '_self'); }
+                      catch (x) { setErr((x as Error).message); } finally { setBusy(''); }
+                    }}>{busy === `add${p.id}` ? 'Adding…' : 'Add to pipeline now'}</button>
+                  )}
+                </div>
+              </li>
+            ))}
+            {r.requests.map((x) => (
+              <li key={`r${x.id}`}>
+                <b>{x.name}</b> <span className="muted">· project request {x.id} · {x.status}{x.start ? ` · ${x.start}` : ''}</span>
+                <div>{x.reason}</div>
+                {x.event && <a className="btn ghost small" href={`/events/${x.event.id}`}>Open event</a>}
+              </li>
+            ))}
+          </ul>
+        )
+      )}
+    </div>
+  );
+}
+
 /** Rentman projects into the pipeline: on/off, from which date, skip canceled projects. */
 function RentmanPipeline({ s, busy, act }: { s: St; busy: string; act: (key: string, msg: string, fn: () => Promise<unknown>) => Promise<boolean> }) {
   const p = s.pipeline ?? { autoEvents: false, fromDate: null, skipCanceled: true, buildShifts: true, lastRunAt: null, lastResult: null };
@@ -37,7 +96,8 @@ function RentmanPipeline({ s, busy, act }: { s: St; busy: string; act: (key: str
       </label>
       <p className="muted small">
         Checked every 30 minutes and on each sync. Each project becomes an event with its customer, venue and dates, in the column its Rentman status
-        matches (concept or inquiry → New, option → Quote, confirmed → Confirmed). Linked events move forward when Rentman’s status does. A project canceled in
+        matches (concept or inquiry → New, option → Quote, confirmed → Confirmed). Open Rentman project requests (not accepted yet) come in as New events too,
+        and link to the project once Rentman accepts them. Linked events follow Rentman’s status. A project canceled in
         Rentman cancels its event only if nobody is booked; otherwise you’re told. New dates are copied while an event has no days or shifts; otherwise you’re told.
       </p>
       <div className="row" style={{ flexWrap: 'wrap', gap: 12, alignItems: 'end' }}>
@@ -58,6 +118,7 @@ function RentmanPipeline({ s, busy, act }: { s: St; busy: string; act: (key: str
       {p.lastRunAt && p.lastResult && (
         <p className="small">Last run {new Date(p.lastRunAt).toLocaleString()}: {runText(p.lastResult)}.</p>
       )}
+      <FindRentman />
       <RoleMap />
     </>
   );
