@@ -4770,3 +4770,54 @@ test('event calendar: each event day with its staffing; canceling an event relea
   assert.ok(notes.some((n: any) => /Canceled: Cal Show/.test(n.title)));
   assert.equal((await call(a, 'GET', '/api/events/calendar?from=2031-11-01&to=2031-11-30')).json.events.some((e: any) => e.id === ev), false);
 });
+
+test('crew import from Excel or CSV, and demo crew with ratings', async () => {
+  const ExcelJS = (await import('exceljs')).default;
+  const a = await register('crewimp');
+  const tid = await tenantOf(a);
+  await call(a, 'POST', '/api/skills', { name: 'Stagehand', payRate: 20 });
+  await call(a, 'POST', '/api/skills', { name: 'Rigger', payRate: 30 });
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Crew');
+  ws.addRow(['First name', 'Last name', 'E-mail', 'Cell', 'Positions', 'Emergency contact', 'Emergency phone']);
+  ws.addRow(['Dana', 'Lee', `dana-${run}@import.example`, '303-555-0100', 'stagehands, Rigger', 'Sam Lee', '303-555-0101']);
+  ws.addRow(['Pat', 'Kim', `pat-${run}@import.example`, '', 'Spotlight Op', '', '']);
+  ws.addRow(['No', 'Email', '', '', '', '', '']);
+  ws.addRow(['Dup', 'Row', `dana-${run}@import.example`, '', '', '', '']);
+  const file = Buffer.from(await wb.xlsx.writeBuffer()).toString('base64');
+  const pre = await call(a, 'POST', '/api/crew/import/preview', { file, filename: 'crew.xlsx' });
+  assert.equal(pre.status, 200, pre.text);
+  assert.equal(pre.json.rows.length, 4);
+  assert.equal(pre.json.ready, 2);
+  assert.deepEqual(pre.json.rows[0].roles, ['Stagehand', 'Rigger']);
+  assert.equal(pre.json.rows[0].name, 'Dana Lee');
+  assert.equal(pre.json.rows[0].emergencyPhone, '303-555-0101');
+  assert.deepEqual(pre.json.unknownRoles, ['Spotlight Op']);
+  const imp = await call(a, 'POST', '/api/crew/import', { rows: pre.json.rows, createRoles: true });
+  assert.equal(imp.status, 200, imp.text);
+  assert.deepEqual([imp.json.created, imp.json.skipped.length, imp.json.rolesAdded], [2, 2, 1]);
+  const crew = (await call(a, 'GET', '/api/crew')).json;
+  const list = crew.crew ?? crew.members ?? crew;
+  assert.ok(list.some((m: any) => m.name === 'Dana Lee' && m.skills.includes('Rigger')));
+  // Same file again: both already registered
+  const again = await call(a, 'POST', '/api/crew/import/preview', { file, filename: 'crew.xlsx' });
+  assert.equal(again.json.ready, 0);
+  // CSV works too
+  const csv = Buffer.from(`Name,Email,Roles\r\n"Lee, Jo",jo-${run}@import.example,Rigger\r\n`).toString('base64');
+  const c2 = await call(a, 'POST', '/api/crew/import/preview', { file: csv, filename: 'crew.csv' });
+  assert.equal(c2.json.rows[0].name, 'Lee, Jo');
+  // No email column → told how to fix it
+  const bad = Buffer.from('Name,Phone\r\nX,1\r\n').toString('base64');
+  assert.match((await call(a, 'POST', '/api/crew/import/preview', { file: bad, filename: 'x.csv' })).json.error, /email column/);
+
+  // Demo crew: 3 per role (3 roles now), each rated; removed in one go
+  const d = await call(a, 'POST', '/api/crew/demo', { perRole: 3 });
+  assert.equal(d.status, 200, d.text);
+  assert.equal(d.json.made, 9);
+  const counts = (await withTenant(tid, (c) => c.query('SELECT count(DISTINCT r.user_id)::int AS n, bool_and(NOT u.notify_email AND NOT u.notify_sms) AS quiet FROM crew_ratings r JOIN users u ON u.id = r.user_id WHERE u.is_demo'))).rows[0];
+  assert.equal(counts.n, 9);
+  assert.equal(counts.quiet, true);
+  assert.equal((await call(a, 'GET', '/api/crew/demo')).json.count, 9);
+  assert.equal((await call(a, 'DELETE', '/api/crew/demo')).json.removed, 9);
+  assert.equal((await call(a, 'GET', '/api/crew/demo')).json.count, 0);
+});

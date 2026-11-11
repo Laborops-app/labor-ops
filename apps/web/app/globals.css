@@ -2125,3 +2125,5 @@ details.card.profile-fold > summary::before { content: none; }
 .evcal-row .evcal-bar { flex: 1; margin-top: 0; }
 .evcal-count { font-style: normal; font-weight: 700; font-size: 0.72rem; color: var(--text); font-variant-numeric: tabular-nums; }
 .cal-grid.week .evcal-card b { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.imp-cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.imp-cols label { display: grid; gap: 4px; }

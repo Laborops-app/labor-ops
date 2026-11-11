@@ -9,10 +9,11 @@ import { Banner, Empty } from '@/components/ui';
 import { api, Me, roleLabel } from '@/lib/api';
 import SkillPicker, { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 import Modal from '@/components/Modal';
+import CrewImport, { DemoCrew } from '@/components/CrewImport';
 import TopbarAction, { PlusIcon, EditIcon, SearchIcon, avClass, initialsOf } from '@/components/TopbarAction';
 
 type Cert = { id: string; name: string; expires_on: string | null; verified: boolean; has_file: boolean };
-type Member = { id: string; name: string; email: string; role: string; phone: string | null; skills: string[]; field_roles?: string[]; active: boolean; certs: Cert[]; has_availability: boolean; can_adjust_rates?: boolean; ratings?: Record<string, number>; rating_avg?: number | null; review_count?: number; flag_count?: number };
+type Member = { id: string; name: string; email: string; role: string; phone: string | null; skills: string[]; field_roles?: string[]; active: boolean; certs: Cert[]; has_availability: boolean; can_adjust_rates?: boolean; ratings?: Record<string, number>; rating_avg?: number | null; review_count?: number; flag_count?: number; is_demo?: boolean };
 
 const certState = (c: Cert) => {
   if (!c.expires_on) return '';
@@ -107,6 +108,8 @@ function Body({ me }: { me: Me }) {
   };
 
   const [adding, setAdding] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [demo, setDemo] = useState(false);
   const [view, setView] = useState<'all' | 'crew' | 'manager' | 'inactive'>('all');
   const [q, setQ] = useState('');
   const needle = q.trim().toLowerCase();
@@ -145,6 +148,8 @@ function Body({ me }: { me: Me }) {
           </div>
         </div>
         <div className="controls">
+          <button type="button" className="btn small" onClick={() => setImporting(true)}>Import from Excel</button>
+          {me.role === 'admin' && <button type="button" className="btn small ghost" onClick={() => setDemo(true)}>Demo crew</button>}
           <span className="pill-input">
             <SearchIcon />
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, skill, phone" aria-label="Search crew" />
@@ -179,7 +184,8 @@ function Body({ me }: { me: Me }) {
                     <td className="av-col"><span className={avClass(m.name)} aria-hidden="true">{initialsOf(m.name)}</span></td>
                     <td>
                       <Link href={`/crew/${m.id}`} className="rowlink" onClick={stop}>{m.name}</Link>
-                      <span className="sub">{m.email}{!m.active ? ' · inactive' : ''}</span>
+                      {m.is_demo && <span className="chip" style={{ marginLeft: 6 }} title="Sample person (Crew › Demo crew)">Demo</span>}
+                      <span className="sub">{m.is_demo ? 'Demo crew · no emails or texts' : m.email}{!m.active ? ' · inactive' : ''}</span>
                     </td>
                     <td>
                       <span className={m.role === 'crew' ? 'pill past' : 'pill'}>{roleLabel(m.role)}</span>
@@ -290,6 +296,8 @@ function Body({ me }: { me: Me }) {
         </div>
       )}
 
+      {importing && <CrewImport isAdmin={me.role === 'admin'} onClose={() => setImporting(false)} onDone={(m) => { setNotice(m); load(); }} />}
+      {demo && <DemoCrew onClose={() => setDemo(false)} onDone={(m) => { setNotice(m); load(); }} />}
       {adding && (
         <Modal title="Add Crew Member" onClose={() => setAdding(false)}>
           <form onSubmit={(e) => add(e).then((ok) => ok && setAdding(false))}>

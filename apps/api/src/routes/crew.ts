@@ -1,3 +1,4 @@
+import { addDemoCrew, FIELDS, ImportError, previewImport, readSheet, removeDemoCrew, runImport } from '../crewImport';
 import { crewRoomFor } from '../billing';
 import type { FastifyInstance } from 'fastify';
 import bcrypt from 'bcryptjs';
@@ -29,7 +30,7 @@ const patchBody = z.object({
   active: z.boolean().optional(),
 });
 
-const COLS = 'id, name, email, role, phone, skills, field_roles, active, created_at, address, emergency_name, emergency_phone, bio, coordinator_notes, can_adjust_rates';
+const COLS = 'id, name, email, role, phone, skills, field_roles, active, created_at, address, emergency_name, emergency_phone, bio, coordinator_notes, can_adjust_rates, is_demo';
 /** Leads are chosen per event (on the assignment), so the only permission kept on the person is this one. */
 export const FIELD_ROLES = ['onsite_coordinator'] as const;
 
@@ -114,6 +115,59 @@ export async function crewRoutes(app: FastifyInstance) {
     });
     return reply.code(201).send({ member: row, tempPassword: body.password ? undefined : tempPassword });
   });
+
+  // ---------- import crew from a spreadsheet ----------
+  const importLimit = { bodyLimit: 12 * 1024 * 1024 };
+  const fileBody = z.object({ file: z.string().min(1).max(16_000_000), filename: z.string().trim().min(1).max(200), columns: z.array(z.enum(FIELDS).nullable()).max(200).optional() });
+  const importFail = (reply: any, e: unknown) => {
+    if (e instanceof ImportError) return reply.code(400).send({ error: e.message });
+    throw e;
+  };
+  app.post('/api/crew/import/preview', { preHandler: guard('admin', 'manager'), ...importLimit }, async (req, reply) => {
+    const b = fileBody.parse(req.body);
+    try {
+      const rows = await readSheet(Buffer.from(b.file, 'base64'), b.filename);
+      return await withTenant(req.user.tid, (c) => previewImport(c, rows, b.columns));
+    } catch (e) {
+      return importFail(reply, e);
+    }
+  });
+  const rowSchema = z.object({
+    row: z.number().int(), name: z.string().max(100), email: z.string().max(200), phone: z.string().max(40).nullable(), roles: z.array(z.string().max(80)).max(30),
+    address: z.string().max(300).nullable(), emergencyName: z.string().max(100).nullable(), emergencyPhone: z.string().max(40).nullable(), notes: z.string().max(1000).nullable(),
+    problems: z.array(z.string()).max(10),
+  });
+  app.post('/api/crew/import', { preHandler: guard('admin', 'manager'), ...importLimit }, async (req, reply) => {
+    const b = z.object({ rows: z.array(rowSchema).min(1).max(2000), invite: z.boolean().default(false), createRoles: z.boolean().default(false) }).parse(req.body);
+    const ok = b.rows.filter((r) => !r.problems.length).length;
+    const full = await crewRoomFor(req.user.tid, ok);
+    if (full) return reply.code(402).send({ error: full, reason: 'plan_limit' });
+    return withTenant(req.user.tid, (c) =>
+      runImport(c, req.user.tid, req.user.sub, b.rows, { createRoles: b.createRoles && req.user.role === 'admin', invite: async (u) => { if (b.invite) await sendInvite(c, req.user.tid, u); } }),
+    );
+  });
+  // A sample sheet with the columns the import understands.
+  app.get('/api/crew/import/template.csv', { preHandler: guard('admin', 'manager') }, async (_req, reply) => {
+    reply.header('Content-Type', 'text/csv; charset=utf-8').header('Content-Disposition', 'attachment; filename="laborops-crew-import.csv"');
+    return 'Name,Email,Phone,Roles,Address,Emergency contact,Emergency phone,Notes\r\nDana Lee,dana@example.com,(303) 555-0100,"Stagehand, Rigger","123 Main St, Denver, CO",Sam Lee,(303) 555-0101,Has CDL\r\n';
+  });
+
+  // ---------- demo crew (sample people with star ratings, removable in one go) ----------
+  app.get('/api/crew/demo', { preHandler: guard('admin') }, async (req) =>
+    withTenant(req.user.tid, async (c) => ({ count: (await c.query('SELECT count(*)::int AS n FROM users WHERE is_demo')).rows[0].n })),
+  );
+  app.post('/api/crew/demo', { preHandler: guard('admin') }, async (req, reply) => {
+    const { perRole } = z.object({ perRole: z.number().int().min(1).max(50).default(15) }).parse(req.body ?? {});
+    try {
+      const n = await withTenant(req.user.tid, async (c) => (await c.query('SELECT count(*)::int AS n FROM skills WHERE active')).rows[0].n as number);
+      const full = await crewRoomFor(req.user.tid, n * perRole);
+      if (full) return reply.code(402).send({ error: full, reason: 'plan_limit' });
+      return await withTenant(req.user.tid, (c) => addDemoCrew(c, req.user.tid, req.user.sub, perRole));
+    } catch (e) {
+      return importFail(reply, e);
+    }
+  });
+  app.delete('/api/crew/demo', { preHandler: guard('admin') }, async (req) => withTenant(req.user.tid, (c) => removeDemoCrew(c, req.user.tid, req.user.sub)));
 
   app.get('/api/crew/:id', { preHandler: guard('admin', 'manager') }, async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
