@@ -4967,3 +4967,25 @@ test('one event per Rentman project: pulls running together, linking and creatin
   const link = await call(a, 'PUT', `/api/events/${other}/rentman`, { projectId: 3331 });
   assert.equal(link.status, 409);
 });
+
+test('Rentman role names: mapping renames existing shifts (so rates apply), Remove hides a name for good, unnamed rates are not listed', async () => {
+  const a = await register('rmmap');
+  const tid = (await adminQuery('SELECT tenant_id FROM users WHERE id = $1', [a.id])).rows[0].tenant_id as string;
+  await call(a, 'POST', '/api/skills', { name: 'A1', payRate: 40 });
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Linked', startDate: '2031-06-01', endDate: '2031-06-01' })).json.event.id;
+  await adminQuery('UPDATE events SET rentman_project_id = 99001 WHERE id = $1', [ev]);
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Audio A1', startsAt: start(30), endsAt: start(36), headcount: 2 })).json.shift.id;
+  await adminQuery("INSERT INTO rentman_role_map (tenant_id, rentman_name) VALUES ($1, 'audio a1'), ($1, 'old name')", [tid]);
+  // Mapping "audio a1" → A1 renames the shift now, and the A1 rate applies
+  const put = await call(a, 'PUT', '/api/rentman/role-map', { rentmanName: 'Audio A1', roleName: 'A1' });
+  assert.equal(put.json.renamed, 1);
+  const s1 = (await call(a, 'GET', `/api/events/${ev}`)).json.shifts.find((x: { id: string }) => x.id === sh);
+  assert.equal(s1.role_name, 'A1');
+  assert.equal(Number(s1.hourly_rate), 40);
+  // Remove hides a name, and a later sync doesn't bring it back
+  assert.equal((await call(a, 'DELETE', '/api/rentman/role-map?name=Old%20Name')).status, 200);
+  await adminQuery("INSERT INTO rentman_role_map (tenant_id, rentman_name) VALUES ($1, 'old name') ON CONFLICT DO NOTHING", [tid]);
+  const map = (await call(a, 'GET', '/api/rentman/role-map')).json.map.map((m: { rentman_name: string }) => m.rentman_name);
+  assert.ok(!map.includes('old name') && map.includes('audio a1'));
+  assert.equal((await call(a, 'DELETE', '/api/rentman/role-map?name=nope')).status, 404);
+});

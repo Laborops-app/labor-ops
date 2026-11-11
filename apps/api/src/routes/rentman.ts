@@ -5,7 +5,7 @@ import { guard } from '../auth';
 import { syncProjects, checkEventRequest, checkOpenRequests, clearToken, getToken, projectQuotes, pushCustomer, pushEventRequest, RentmanError, saveToken, syncEquipment, testToken } from '../rentman';
 import { importRentmanQuote } from '../quoteCompare';
 import { addProjectNow, findRentman, loadPipelineSettings, pullRentman, savePipelineSettings } from '../rentmanPipeline';
-import { buildFromRentman, keepConflict, resyncRoleNames, suggestRole } from '../rentmanBuild';
+import { buildFromRentman, keepConflict, renameMappedShifts, resyncRoleNames, suggestRole } from '../rentmanBuild';
 import { loadOptions, OPTION_KEYS, saveOptions, verifyDigest, webhookToken } from '../rentmanOptions';
 import { queueRentman } from '../rentmanWebhook';
 import { syncCrew, syncRates, unlockRates } from '../rentmanSync';
@@ -354,7 +354,7 @@ export async function rentmanRoutes(app: FastifyInstance) {
     withTenant(req.user.tid, async (c) => ({
       ...(await (async () => {
         const roles = (await c.query('SELECT name FROM skills WHERE active ORDER BY lower(name)')).rows.map((r) => r.name as string);
-        const map = (await c.query('SELECT rentman_name, role_name FROM rentman_role_map ORDER BY role_name IS NOT NULL, rentman_name')).rows
+        const map = (await c.query('SELECT rentman_name, role_name FROM rentman_role_map WHERE NOT ignored ORDER BY role_name IS NOT NULL, rentman_name')).rows
           .map((m) => ({ ...m, suggested: m.role_name ? null : suggestRole(m.rentman_name, roles) }));
         return { map, roles };
       })()),
@@ -365,10 +365,22 @@ export async function rentmanRoutes(app: FastifyInstance) {
     return withTenant(req.user.tid, async (c) => {
       await c.query(
         `INSERT INTO rentman_role_map (tenant_id, rentman_name, role_name) VALUES ($1, lower(regexp_replace(trim($2), '\\s+', ' ', 'g')), $3)
-         ON CONFLICT (tenant_id, rentman_name) DO UPDATE SET role_name = $3, updated_at = now()`,
+         ON CONFLICT (tenant_id, rentman_name) DO UPDATE SET role_name = $3, ignored = false, updated_at = now()`,
         [req.user.tid, b.rentmanName, b.roleName],
       );
-      await audit(c, req.user.tid, req.user.sub, 'rentman.role_map', 'integration', null, b);
+      // Shifts already made under that Rentman name take the role's name now (so its rates apply).
+      const renamed = b.roleName ? await renameMappedShifts(c, b.rentmanName) : 0;
+      await audit(c, req.user.tid, req.user.sub, 'rentman.role_map', 'integration', null, { ...b, renamed });
+      return { ok: true, renamed };
+    });
+  });
+  // Remove a Rentman name from the list. It stays hidden, even if Rentman sends it again.
+  app.delete('/api/rentman/role-map', { preHandler: mgr }, async (req, reply) => {
+    const { name } = z.object({ name: z.string().trim().min(1).max(200) }).parse(req.query);
+    return withTenant(req.user.tid, async (c) => {
+      const r = await c.query("UPDATE rentman_role_map SET ignored = true, role_name = NULL, updated_at = now() WHERE rentman_name = lower(regexp_replace(trim($1), '\\s+', ' ', 'g')) RETURNING rentman_name", [name]);
+      if (!r.rowCount) return reply.code(404).send({ error: 'That name is not on the list' });
+      await audit(c, req.user.tid, req.user.sub, 'rentman.role_map_removed', 'integration', null, { name });
       return { ok: true };
     });
   });

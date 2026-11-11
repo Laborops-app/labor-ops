@@ -1,4 +1,5 @@
 'use client';
+import { ActIcon } from '@/components/ActionMenu';
 import { useEffect, useState } from 'react';
 import Panel from '@/components/Panel';
 import { Banner } from '@/components/ui';
@@ -129,9 +130,20 @@ function RoleMap({ standalone }: { standalone?: boolean }) {
   useEffect(() => { load(); }, []);
   if (!d) return null;
   const set = async (rentmanName: string, roleName: string) => {
-    await api('/api/rentman/role-map', { method: 'PUT', body: { rentmanName, roleName: roleName || null } });
-    setMsg(`“${rentmanName}” ${roleName ? `becomes ${roleName}` : 'keeps its Rentman name'}. Press Re-sync to update shifts now, or it happens on the next sync.`);
+    setErr('');
+    const r = await api<{ renamed?: number }>('/api/rentman/role-map', { method: 'PUT', body: { rentmanName, roleName: roleName || null } });
+    setMsg(roleName
+      ? `“${rentmanName}” becomes ${roleName}.${r.renamed ? ` ${r.renamed} shift${r.renamed === 1 ? '' : 's'} renamed to ${roleName}, so its rates apply.` : ''}`
+      : `“${rentmanName}” keeps its Rentman name.`);
     load();
+  };
+  const remove = async (rentmanName: string) => {
+    setErr('');
+    try {
+      await api(`/api/rentman/role-map?name=${encodeURIComponent(rentmanName)}`, { method: 'DELETE' });
+      setMsg(`“${rentmanName}” removed from the list. It won’t come back on the next sync.`);
+      load();
+    } catch (e) { setErr((e as Error).message); }
   };
   const resync = async () => {
     setBusy(true); setErr(''); setMsg('');
@@ -159,7 +171,7 @@ function RoleMap({ standalone }: { standalone?: boolean }) {
           {open > 0 && <p className="small">{open} name{open === 1 ? '' : 's'} not matched yet.</p>}
           <div className="table-wrap">
             <table className="table">
-              <thead><tr><th>Rentman function</th><th>LaborOps role</th></tr></thead>
+              <thead><tr><th>Rentman function</th><th>LaborOps role</th><th><span className="sr-only">Remove</span></th></tr></thead>
               <tbody>
                 {d.map.map((m) => (
                   <tr key={m.rentman_name}>
@@ -172,6 +184,11 @@ function RoleMap({ standalone }: { standalone?: boolean }) {
                         </select>
                         {!m.role_name && m.suggested && <button type="button" className="btn ghost small" onClick={() => set(m.rentman_name, m.suggested!)}>Use {m.suggested}</button>}
                       </div>
+                    </td>
+                    <td style={{ width: 1, textAlign: 'right' }}>
+                      <button type="button" className="btn ghost small danger" title="Remove from this list (it stays hidden even if Rentman sends it again)" aria-label={`Remove ${m.rentman_name} from the list`} onClick={() => remove(m.rentman_name)}>
+                        <ActIcon n="trash" /> Remove
+                      </button>
                     </td>
                   </tr>
                 ))}

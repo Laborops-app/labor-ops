@@ -91,7 +91,8 @@ export async function syncRates(c: PoolClient, tid: string, token: string) {
     const skill = (mapped && skills.find((s) => s.name.toLowerCase() === mapped.toLowerCase())) || byKey.get(roleKeyOf(clean)) || byKey.get(roleKeyOf(name));
     if (!skill) {
       out.unmatched.push(name);
-      await c.query('INSERT INTO rentman_role_map (tenant_id, rentman_name) VALUES ($1,$2) ON CONFLICT DO NOTHING', [tid, norm(name)]);
+      // Unnamed rates ("0-∞ € 0.40/h + € 5 fixed") aren't role names; don't list them for mapping.
+      if (!/^[0-9].*(\/h|fixed)/i.test(name)) await c.query('INSERT INTO rentman_role_map (tenant_id, rentman_name) VALUES ($1,$2) ON CONFLICT DO NOTHING', [tid, norm(name)]);
       continue;
     }
     const v = readRate(byRate.get(Number(r.id)) ?? []);

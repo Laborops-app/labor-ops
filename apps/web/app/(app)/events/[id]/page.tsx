@@ -820,9 +820,24 @@ function Body({ me }: { me: Me }) {
                 )}
                 {s.role_rate !== undefined && s.hourly_rate == null && (
                   <div className="small" style={{ margin: '.3rem 0', color: 'var(--staff-warn)' }}>
-                    No {s.pay_type === 'day' ? 'day rate' : 'pay rate'} set for {s.role_name}
-                    {s.unpriced_seats ? `, so ${s.unpriced_seats} seat${s.unpriced_seats === 1 ? ' is' : 's are'} not in the cost` : ''}.{' '}
-                    <Link href="/skills">Set it in Roles &amp; rates</Link> or edit this shift&apos;s pay rate.
+                    {skillNames.some((n) => n.trim().toLowerCase() === s.role_name.trim().toLowerCase()) ? (
+                      <>
+                        No {s.pay_type === 'day' ? 'day rate' : 'pay rate'} set for {s.role_name}
+                        {s.unpriced_seats ? `, so ${s.unpriced_seats} seat${s.unpriced_seats === 1 ? ' is' : 's are'} not in the cost` : ''}.{' '}
+                        <Link href="/skills">Set it in Roles &amp; rates</Link> or edit this shift&apos;s pay rate.
+                      </>
+                    ) : (
+                      <>
+                        {s.role_name} isn&apos;t in Roles &amp; rates, so it has no rate
+                        {s.unpriced_seats ? ` and ${s.unpriced_seats} seat${s.unpriced_seats === 1 ? ' is' : 's are'} not in the cost` : ''}.{' '}
+                        {me.role === 'admin' && (
+                          <button type="button" className="btn small" style={{ marginLeft: 4 }} onClick={() => run(() => api('/api/skills', { body: { name: s.role_name.trim() } }), `${s.role_name} added to Roles & rates. Set its pay and bill rates there.`).then((ok) => ok && router.push('/skills'))}>
+                            Add {s.role_name} to Roles &amp; rates
+                          </button>
+                        )}{' '}
+                        {rm?.linked ? <>Or map the Rentman name to an existing role under <Link href="/integrations/rentman">Integrations › Rentman</Link>.</> : <>Or edit the shift and pick a role from the list.</>}
+                      </>
+                    )}
                   </div>
                 )}
                 {editing && timeEdit && (

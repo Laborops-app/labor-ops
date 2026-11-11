@@ -252,7 +252,7 @@ export async function resyncRoleNames(c: PoolClient, tid: string, by: string, to
   }
   // 2) Match the unmapped names where one role clearly fits.
   const roles = (await c.query('SELECT name FROM skills WHERE active')).rows.map((r) => r.name as string);
-  const open = (await c.query('SELECT rentman_name FROM rentman_role_map WHERE role_name IS NULL')).rows.map((r) => r.rentman_name as string);
+  const open = (await c.query('SELECT rentman_name FROM rentman_role_map WHERE role_name IS NULL AND NOT ignored')).rows.map((r) => r.rentman_name as string);
   const matched: { rentman: string; role: string }[] = [];
   for (const n of open) {
     const role = suggestRole(n, roles);
@@ -271,7 +271,37 @@ export async function resyncRoleNames(c: PoolClient, tid: string, by: string, to
       conflicts += r.result?.conflicts ?? 0;
     } catch { await c.query('ROLLBACK TO SAVEPOINT rs'); }
   }
-  const unmatched = (await c.query('SELECT rentman_name FROM rentman_role_map WHERE role_name IS NULL ORDER BY rentman_name')).rows.map((r) => r.rentman_name as string);
+  // Shifts already made under a Rentman name that now maps to a role take the role's name (even when staffed).
+  const renamed = await renameMappedShifts(c);
+  updated += renamed;
+  const unmatched = (await c.query('SELECT rentman_name FROM rentman_role_map WHERE role_name IS NULL AND NOT ignored ORDER BY rentman_name')).rows.map((r) => r.rentman_name as string);
   await audit(c, tid, by, 'rentman.roles_resync', 'integration', null, { events: events.length, matched: matched.length, unmatched: unmatched.length, updated });
   return { events: events.length, matched, unmatched, shiftsUpdated: updated, conflicts };
+}
+
+/**
+ * Shifts on Rentman-linked events still named after a Rentman function that is now mapped to a LaborOps role
+ * ("Audio A1" → "A1") take the role's name, so they pick up its pay and bill rates. Only the name changes; times,
+ * people needed and crew stay. Returns how many shifts were renamed. `only` limits it to one Rentman name.
+ */
+export async function renameMappedShifts(c: PoolClient, only?: string) {
+  const rows = (
+    await c.query(
+      `SELECT s.id, s.role_name, s.starts_at, s.ends_at, s.headcount, s.rentman_hash, m.role_name AS mapped
+         FROM shifts s JOIN events e ON e.id = s.event_id
+         JOIN rentman_role_map m ON m.rentman_name = lower(regexp_replace(trim(s.role_name), '\\s+', ' ', 'g'))
+        WHERE e.rentman_project_id IS NOT NULL AND m.role_name IS NOT NULL AND NOT m.ignored
+          AND s.role_name <> m.role_name AND s.ends_at > now() - interval '1 day'
+          AND ($1::text IS NULL OR m.rentman_name = lower(regexp_replace(trim($1), '\\s+', ' ', 'g')))`,
+      [only ?? null],
+    )
+  ).rows;
+  for (const r of rows) {
+    // Keep Rentman's record in step, so the next build doesn't read the rename as a change made here.
+    const untouched = r.rentman_hash && hashOf(r.role_name, r.starts_at, r.ends_at, Number(r.headcount)) === r.rentman_hash;
+    await c.query('UPDATE shifts SET role_name = $2, rentman_hash = CASE WHEN $3 THEN $4 ELSE rentman_hash END WHERE id = $1', [
+      r.id, r.mapped, !!untouched, hashOf(r.mapped, r.starts_at, r.ends_at, Number(r.headcount)),
+    ]);
+  }
+  return rows.length;
 }
