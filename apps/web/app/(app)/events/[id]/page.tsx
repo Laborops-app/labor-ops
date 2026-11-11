@@ -14,6 +14,7 @@ import CrewPick, { PickOption } from '@/components/CrewPick';
 import TimeEdit from '@/components/TimeEdit';
 import Modal from '@/components/Modal';
 import ActionMenu, { ActIcon } from '@/components/ActionMenu';
+import CrewMenu, { CrewPayForm, type CrewMenuItem } from '@/components/CrewMenu';
 import InvoicePanel from '@/components/InvoicePanel';
 import HrEventView from '@/components/HrEventView';
 import EventCrewSearch from '@/components/EventCrewSearch';
@@ -170,6 +171,8 @@ function Body({ me }: { me: Me }) {
   const [teamEdit, setTeamEdit] = useState<{ id: string; picked: Set<string> } | null>(null);
   // Adding time for someone who never clocked in (assignment id).
   const [addTime, setAddTime] = useState<string | null>(null);
+  // Right-click (or ⋯) menu on a crew member: which shift and assignment, and where it opens.
+  const [crewMenu, setCrewMenu] = useState<{ sid: string; aid: string; x: number; y: number } | null>(null);
   // Who is free for the shift being added (checked against its date, time and certificates while the picker is open).
   const [newElig, setNewElig] = useState<Map<string, Elig> | null>(null);
   // "Confirm automatically": crew are put straight on the shift instead of being asked to accept. Remembered on this device.
@@ -679,14 +682,23 @@ function Body({ me }: { me: Me }) {
           const crewRow = (a: Assignment, n: number | null) => {
             const nudged = !!a.nudged_at && Date.now() - new Date(a.nudged_at).getTime() < 3600_000;
             return (
-              <li key={a.id} className={`cs-row${a.status === 'declined' ? ' off' : ''}`}>
+              <li
+                key={a.id}
+                className={`cs-row${a.status === 'declined' ? ' off' : ''}${crewMenu?.aid === a.id ? ' menu-on' : ''}`}
+                onContextMenu={(e) => {
+                  // Right-click (long-press on a phone) opens this person's menu; inputs keep the browser's own menu.
+                  if ((e.target as HTMLElement).closest('input, textarea, select')) return;
+                  e.preventDefault();
+                  setCrewMenu({ sid: s.id, aid: a.id, x: e.clientX, y: e.clientY });
+                }}
+              >
                 <span className="cs-n" aria-hidden="true">{n == null ? '–' : p2(n)}</span>
                 <div className="cs-who">
                   <div>
                     <b>{a.user_name}</b>
                     {a.is_lead && a.status !== 'declined' && <span className="cs-lead" title="Leads their department on this event: checks the team in and out and rates them on the On site page">Lead</span>}
                     {a.rate != null && a.status !== 'declined' && (
-                      <button type="button" className="chip" style={{ border: 0, cursor: 'pointer', marginLeft: 6 }} title="This person's own rate on this event" onClick={() => setSettings('pay')}>
+                      <button type="button" className="chip" style={{ border: 0, cursor: 'pointer', marginLeft: 6 }} title="This person's own rate on this event. Click to change it." onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setCrewMenu({ sid: s.id, aid: a.id, x: r.left, y: r.bottom + 4 }); }}>
                         {money(a.rate)}{a.pay_type === 'day' ? '/day' : '/hr'}
                       </button>
                     )}
@@ -707,7 +719,12 @@ function Body({ me }: { me: Me }) {
                 {stChip(a)}
                 <span className="cs-acts">
                   {a.planned ? (
-                    <button type="button" className="cs-x" aria-label={`Take ${a.user_name} out of the plan`} title="Take out of the plan" onClick={() => run(() => api(`/api/planned-picks/${a.id}`, { method: 'DELETE' }), `${a.user_name} taken out of the plan.`)}>×</button>
+                    <>
+                      <button type="button" className="cs-x" aria-label={`Take ${a.user_name} out of the plan`} title="Take out of the plan" onClick={() => run(() => api(`/api/planned-picks/${a.id}`, { method: 'DELETE' }), `${a.user_name} taken out of the plan.`)}>×</button>
+                      <button type="button" className="act-dots" aria-label={`Options for ${a.user_name}`} aria-haspopup="menu" aria-expanded={crewMenu?.aid === a.id} title="Options (or right-click the row)" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setCrewMenu(crewMenu?.aid === a.id ? null : { sid: s.id, aid: a.id, x: r.right - 280, y: r.bottom + 4 }); }}>
+                        <ActIcon n="more" size={18} />
+                      </button>
+                    </>
                   ) : (
                     <>
                       {(a.status === 'offered' || a.status === 'pending') && (
@@ -722,17 +739,17 @@ function Body({ me }: { me: Me }) {
                       {editing && (
                         <button type="button" className="cs-x" aria-label={`Remove ${a.user_name} from this shift`} title="Remove from this shift" onClick={() => run(() => api(`/api/assignments/${a.id}`, { method: 'DELETE' }), `${a.user_name} removed.`)}>×</button>
                       )}
-                      <ActionMenu
-                        compact
-                        label={`More for ${a.user_name}`}
-                        items={[
-                          ...(a.status !== 'declined' ? [{ label: a.is_lead ? 'Remove lead' : 'Make lead', icon: 'rate', hint: a.is_lead ? 'Stop this person being the lead on this event' : 'Make this person the lead of their department on this event', onClick: () => { run(() => api(`/api/assignments/${a.id}/lead`, { method: 'PUT', body: { lead: !a.is_lead } }), a.is_lead ? `${a.user_name} is no longer a lead.` : `${a.user_name} is now the lead on this event.`); } }] : []),
-                          ...(a.status === 'accepted' && !a.clocked_in_at && !soon ? [{ label: 'Check in', icon: 'free', onClick: () => { run(() => api(`/api/assignments/${a.id}/check-in`, { body: {} })); } }] : []),
-                          ...(a.status === 'accepted' && !a.clocked_in_at && new Date(s.starts_at) < new Date() ? [{ label: 'Add time', icon: 'pay', hint: 'Enter time for someone who did not clock in', onClick: () => setAddTime(addTime === a.id ? null : a.id) }] : []),
-                          'divider' as const,
-                          { label: 'Remove from this shift', icon: 'trash', danger: true, onClick: () => { run(() => api(`/api/assignments/${a.id}`, { method: 'DELETE' }), `${a.user_name} removed.`); } },
-                        ]}
-                      />
+                      <button
+                        type="button"
+                        className="act-dots"
+                        aria-label={`Options for ${a.user_name}`}
+                        aria-haspopup="menu"
+                        aria-expanded={crewMenu?.aid === a.id}
+                        title="Options (or right-click the row)"
+                        onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setCrewMenu(crewMenu?.aid === a.id ? null : { sid: s.id, aid: a.id, x: r.right - 280, y: r.bottom + 4 }); }}
+                      >
+                        <ActIcon n="more" size={18} />
+                      </button>
                     </>
                   )}
                 </span>
@@ -1388,6 +1405,64 @@ function Body({ me }: { me: Me }) {
 
   return (
     <div className="split">
+      {crewMenu && (() => {
+        const s = d.shifts.find((x) => x.id === crewMenu.sid);
+        const a = s?.assignments.find((x) => x.id === crewMenu.aid);
+        if (!s || !a) return null;
+        const close = () => setCrewMenu(null);
+        const canRates = me.role === 'admin' || !!me.canAdjustRates;
+        const low = (x: string) => x.trim().toLowerCase();
+        const ownRow = (d.crewRates ?? []).find((r) => r.user_id === a.user_id && low(r.role_name ?? '') === low(s.role_name));
+        const started = new Date(s.starts_at) < new Date();
+        const ended = new Date(s.ends_at) < new Date();
+        const nudged = !!a.nudged_at && Date.now() - new Date(a.nudged_at).getTime() < 3600_000;
+        const status = a.planned ? 'Not sent yet' : a.status === 'accepted' ? 'Confirmed' : a.status === 'declined' ? 'Declined' : a.status === 'pending' ? 'Asked to work' : 'Waiting for an answer';
+        const live = a.status !== 'declined';
+        const items: CrewMenuItem[] = [
+          ...(!a.planned && (a.status === 'offered' || a.status === 'pending') ? [{ label: 'Confirm for them', icon: 'publish', hint: 'They said yes by phone or in person', onClick: () => { run(() => api(`/api/assignments/${a.id}/confirm`, { body: {} }), `Confirmed ${a.user_name}.`); } }] : []),
+          ...(!a.planned && a.status === 'offered' ? [{ label: nudged ? 'Reminded in the last hour' : 'Remind them to answer', icon: 'update', disabled: nudged, onClick: () => { run(() => api(`/api/assignments/${a.id}/nudge`, { body: {} }), `Reminded ${a.user_name}.`); } }] : []),
+          ...(live ? [{ label: a.is_lead ? 'Remove as lead' : 'Make lead', icon: 'rate', hint: a.is_lead ? undefined : 'Checks in and rates their department here', onClick: () => { run(() => api(`/api/assignments/${a.id}/lead`, { method: 'PUT', body: { lead: !a.is_lead } }), a.is_lead ? `${a.user_name} is no longer a lead.` : `${a.user_name} is now the lead on this event.`); } }] : []),
+          ...(!a.planned && a.status === 'accepted' && !a.clocked_in_at && !ended ? [{ label: 'Check in', icon: 'free', onClick: () => { run(() => api(`/api/assignments/${a.id}/check-in`, { body: {} }), `${a.user_name} checked in.`); } }] : []),
+          ...(a.clocked_in_at ? [{ label: 'Check out', icon: 'free', onClick: () => { run(() => api(`/api/assignments/${a.id}/check-out`, { body: {} }), `${a.user_name} checked out.`); } }] : []),
+          ...(!a.planned && a.status === 'accepted' && !a.clocked_in_at && started ? [{ label: 'Add time', icon: 'pay', hint: 'They didn’t clock in', onClick: () => setAddTime(a.id) }] : []),
+          'divider',
+          { label: 'Message', icon: 'chat', onClick: () => { api<{ id: string }>('/api/chat/dm', { body: { userId: a.user_id } }).then((r) => router.push(`/chat?c=${r.id}`)).catch((e) => setError(e.message)); } },
+          { label: 'View profile', icon: 'link', hint: 'Skills, certificates, ratings', onClick: () => router.push(`/crew/${a.user_id}`) },
+          ...(ended && a.status === 'accepted' ? [{ label: 'Rate their work', icon: 'rate', onClick: () => setSettings('rate') }] : []),
+          'divider',
+          ...(live ? [{ label: 'Replace with someone else', icon: 'restore', hint: a.planned ? undefined : 'They’ll be told', onClick: () => {
+            if (!a.planned && !confirm(`Take ${a.user_name} off ${s.role_name} and pick someone else? They'll be told.`)) return;
+            run(() => api(a.planned ? `/api/planned-picks/${a.id}` : `/api/assignments/${a.id}`, { method: 'DELETE' })).then((ok) => ok && openPicker(s.id));
+          } }] : []),
+          a.planned
+            ? { label: 'Take out of the plan', icon: 'trash', danger: true, onClick: () => { run(() => api(`/api/planned-picks/${a.id}`, { method: 'DELETE' }), `${a.user_name} taken out of the plan.`); } }
+            : { label: 'Remove from this shift', icon: 'trash', danger: true, onClick: () => { if (a.status === 'declined' || confirm(`Remove ${a.user_name} from ${s.role_name}? They'll be told.`)) run(() => api(`/api/assignments/${a.id}`, { method: 'DELETE' }), `${a.user_name} removed.`); } },
+        ];
+        return (
+          <CrewMenu
+            x={crewMenu.x}
+            y={crewMenu.y}
+            title={a.user_name}
+            sub={`${s.role_name} · ${status}`}
+            items={items}
+            onClose={close}
+            pay={canRates && live ? (
+              <CrewPayForm
+                key={a.id}
+                eventId={id}
+                userId={a.user_id}
+                name={a.user_name}
+                role={s.role_name}
+                own={ownRow ? { pay_type: ownRow.pay_type, rate: Number(ownRow.rate) } : null}
+                shiftRate={s.hourly_rate ?? null}
+                shiftPay={s.pay_type === 'day' ? 'day' : 'hourly'}
+                onSaved={(m) => { close(); setError(''); setNote(m); load(); }}
+                onError={setError}
+              />
+            ) : undefined}
+          />
+        );
+      })()}
       {shiftModal && <Modal title={shiftModalTitle} onClose={() => { setShiftModal(false); setAdding(null); }} wide>{shiftFormBody}</Modal>}
       <datalist id="role-names">{skillNames.map((n) => <option key={n} value={n} />)}</datalist>
       <div className="split-main">

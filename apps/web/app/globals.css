@@ -2544,3 +2544,28 @@ details.card.profile-fold > summary::before { content: none; }
   .cs-rows { grid-template-columns: minmax(0, 1fr); }
 }
 @media print { .ev-bar, .cs-tools, .cs-fill, .cs-acts, .cs-foot { display: none !important; } }
+
+/* Crew member menu (right-click a crew row on the event page) */
+.cm { position: fixed; z-index: 90; width: 280px; max-height: calc(100vh - 16px); overflow-y: auto; background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); border-radius: 12px; padding: 6px; box-shadow: 0 14px 36px rgba(0, 0, 0, 0.22); }
+.cm-head { display: grid; gap: 1px; padding: 8px 10px 8px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.cm-head b { font-size: 15px; }
+.cm-head span { font-size: 12px; color: var(--muted); }
+.cm hr { border: 0; border-top: 1px solid var(--border); margin: 4px 0; }
+.cm-item { display: grid; grid-template-columns: 16px 1fr; column-gap: 10px; align-items: center; width: 100%; min-height: 38px; padding: 6px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+.cm-item small { grid-column: 2; font-size: 12px; color: var(--muted); margin-top: -2px; }
+.cm-item:hover:not(:disabled), .cm-item:focus-visible { background: var(--primary-soft); outline: none; }
+.cm-item:disabled { color: var(--muted); cursor: default; }
+.cm-item.danger { color: var(--bad); }
+.cm-pay { display: grid; gap: 8px; padding: 6px 8px 10px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.cm-pay-label { font-size: 12px; font-weight: 700; color: var(--muted); }
+.cm-seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 2px; border-radius: 8px; background: var(--surface-2); }
+.cm-seg button { min-height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.cm-seg button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15); }
+.cm-pay-row { display: flex; align-items: center; gap: 8px; }
+.cm-pay-row .money-input { display: inline-flex; align-items: center; gap: 4px; flex: 1; min-width: 0; }
+.cm-pay-row input { width: 100%; min-width: 0; }
+.cm-pay-note { font-size: 13px; color: var(--muted); }
+.cm-pay-reset { justify-self: start; }
+.cs-row.menu-on { background: var(--primary-soft); border-radius: 6px; }
+:root[data-look='violet'] .cm { border-radius: 8px; box-shadow: var(--shadow), 0 14px 36px rgba(0, 0, 0, 0.2); }
+:root[data-look='modern'] .cm { border-radius: 14px; }
