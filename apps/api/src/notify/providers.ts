@@ -76,6 +76,10 @@ async function sendZernioSms(c: Resolved['zernio'], m: { to: string; body: strin
     const data: any = await res.json().catch(() => ({}));
     if (res.ok) return { ok: true, id: String(data.id ?? '') };
     const msg = String(data.error?.message ?? data.error ?? data.message ?? 'request failed').slice(0, 250);
+    if (res.status === 404 && /sms-enabled|sender id|no .*number/i.test(msg))
+      return { ok: false, permanent: true, error: `Zernio 404: ${msg}. In Zernio, open Phone numbers, turn SMS on for ${c.from} (and for a US number, finish its carrier registration until it shows approved), and check this API key belongs to the same Zernio account or profile as that number.` };
+    if (res.status === 401 || res.status === 403)
+      return { ok: false, permanent: true, error: `Zernio ${res.status}: ${msg}. Check the API key under Messaging › Text messages (a key limited to certain profiles can only send from those profiles' numbers).` };
     // 409: the person replied STOP (or the same send is still in flight); 404: no such sending number; 401/403: bad key.
     return { ok: false, permanent: res.status >= 400 && res.status < 500 && res.status !== 429, error: `Zernio ${res.status}: ${msg}`, optedOut: res.status === 409 && /opt/i.test(msg) };
   } catch (e: any) {

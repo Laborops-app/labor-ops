@@ -1,6 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, money } from '@/lib/api';
@@ -40,6 +41,7 @@ function Kpi({ label, value, sub, tone }: { label: string; value: string; sub?: 
 }
 
 function Body() {
+  const router = useRouter();
   const [preset, setPreset] = useState('month');
   const [range, setRange] = useState(PRESETS[0].range);
   const [d, setD] = useState<Data | null>(null);
@@ -123,9 +125,10 @@ function Body() {
                   </thead>
                   <tbody>
                     {rows.map((e) => (
-                      <tr key={e.id}>
+                      <tr key={e.id} className="report-row" onClick={(ev) => { if (!(ev.target as HTMLElement).closest('a,button')) router.push(`/reports/${e.id}`); }}>
                         <td>
-                          <Link href={`/events/${e.id}`}><b>{e.name}</b></Link>
+                          <Link href={`/reports/${e.id}`} title="Open the event report"><b>{e.name}</b></Link>
+                          <Link href={`/events/${e.id}`} className="muted small" style={{ marginLeft: 6 }} title="Open the event">event ↗</Link>
                           {e.customer && <div className="muted small">{e.customer}</div>}
                           <div className="report-flags">
                             {e.unapproved > 0 && <span className="chip warn">{e.unapproved} unapproved</span>}
@@ -153,7 +156,7 @@ function Body() {
               </div>
               <p className="muted small">
                 Labor cost counts approved time, priced like payroll (overtime, day rates, minimum calls). Billed uses an accepted quote when the event has one, otherwise
-                the hours worked at each role's billing rate. Set an event's labor budget on its page.
+                the hours worked at each role's billing rate. Set an event's labor budget on its page. Click an event for its full report.
               </p>
             </section>
           )}

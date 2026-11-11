@@ -39,6 +39,7 @@ export const PAGE_ROUTES: PageRoute[] = [
   route('/quotes/[id]', () => import('@/app/(app)/quotes/[id]/page')),
   route('/quotes', () => import('@/app/(app)/quotes/page')),
   route('/reports', () => import('@/app/(app)/reports/page')),
+  route('/reports/[id]', () => import('@/app/(app)/reports/[id]/page')),
   route('/requests', () => import('@/app/(app)/requests/page')),
   route('/rules', () => import('@/app/(app)/rules/page')),
   route('/schedule', () => import('@/app/(app)/schedule/page')),

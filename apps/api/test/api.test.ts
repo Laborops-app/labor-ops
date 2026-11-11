@@ -4709,3 +4709,40 @@ test('new events build quietly by default; picks wait until the crew is requeste
   assert.equal((await call(a, 'PUT', '/api/staffing/settings', { quietByDefault: false })).status, 200);
   assert.equal((await call(a, 'POST', '/api/events', { name: 'Live2', startDate: '2031-08-03', endDate: '2031-08-03' })).json.event.staffing_draft, false);
 });
+
+test('event report: money, hours, staffing and crew for one event', async () => {
+  const a = await register('evrep');
+  const tid = await tenantOf(a);
+  await call(a, 'POST', '/api/skills', { name: 'Stagehand', payRate: 20, billRate: 40 });
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Report Show', startDate: '2031-10-01', endDate: '2031-10-01' })).json.event.id;
+  await call(a, 'PUT', `/api/events/${ev}/budget`, { budget: 1000 });
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: '2031-10-01T15:00:00Z', endsAt: '2031-10-01T23:00:00Z', headcount: 3 })).json.shift.id;
+  const m1 = await mkCrew(a, 'evrep1');
+  const m2 = await mkCrew(a, 'evrep2');
+  for (const m of [m1, m2]) assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: m.id, override: true })).status, 201);
+  const ids = await withTenant(tid, async (c) => (await c.query('SELECT id, user_id FROM shift_assignments WHERE shift_id = $1', [sh])).rows);
+  const a1 = ids.find((x: any) => x.user_id === m1.id).id, a2 = ids.find((x: any) => x.user_id === m2.id).id;
+  assert.equal((await call(m1.session, 'POST', `/api/assignments/${a1}/respond`, { response: 'accepted' })).status, 200);
+  assert.equal((await call(m2.session, 'POST', `/api/assignments/${a2}/respond`, { response: 'declined' })).status, 200);
+  await withTenant(tid, (c) => c.query("INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in, clock_out, status) VALUES ($1,$2,$3,'2031-10-01T15:20:00Z','2031-10-01T23:20:00Z','approved')", [tid, a1, m1.id]));
+  const r = await call(a, 'GET', `/api/reports/events/${ev}`);
+  assert.equal(r.status, 200, r.text);
+  const d = r.json;
+  assert.equal(d.event.name, 'Report Show');
+  assert.equal(d.staffing.slots, 3);
+  assert.equal(d.staffing.filled, 1);
+  assert.equal(d.staffing.declined, 1);
+  assert.equal(d.staffing.late, 1); // 20 minutes after the start
+  assert.equal(d.hours.worked, 8);
+  assert.equal(d.money.laborCost, 160);
+  assert.equal(d.money.billed, 320);
+  assert.equal(d.money.margin, 160);
+  assert.equal(d.money.budgetLeft, 840);
+  assert.equal(d.money.costByRole[0].role, 'Stagehand');
+  assert.ok(d.hours.byDay.some((x: any) => x.worked === 8));
+  assert.equal(d.crew.length, 1);
+  assert.equal(d.crew[0].late, 1);
+  assert.equal(d.crew[0].pay, 160);
+  // Crew can't see it
+  assert.equal((await call(m1.session, 'GET', `/api/reports/events/${ev}`)).status, 403);
+});

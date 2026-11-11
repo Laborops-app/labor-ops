@@ -5,6 +5,7 @@ import { withTenant } from '../db';
 import { payrollSummary, csvCell } from '../payroll';
 import { byRoleKey, hoursBetween, roleKeyOf } from '../pay';
 import type { PoolClient } from 'pg';
+import { eventReport } from '../eventReport';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -149,6 +150,13 @@ export async function reportRoutes(app: FastifyInstance) {
       e.budget?.toFixed(2) ?? '', e.budgetLeft?.toFixed(2) ?? '', e.noShows, e.late, e.autoClockOuts, e.unapproved].map(csvCell).join(','));
     reply.header('Content-Type', 'text/csv; charset=utf-8').header('Content-Disposition', `attachment; filename="laborops-events-${q.data.from}-to-${q.data.to}.csv"`);
     return [head.map(csvCell).join(','), ...lines].join('\r\n') + '\r\n';
+  });
+
+  // One event in depth: money, hours, staffing and crew.
+  app.get('/api/reports/events/:id', { preHandler: viewers }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const r = await withTenant(req.user.tid, (c) => eventReport(c, id));
+    return r ?? reply.code(404).send({ error: 'Event not found' });
   });
 
   // The labor budget for one event (shown on the event page and in reports).
