@@ -2447,6 +2447,8 @@ details.card.profile-fold > summary::before { content: none; }
 .cs-bar { display: flex; gap: 3px; height: 8px; margin: 12px 0 6px; overflow: hidden; }
 .cs-bar.big { height: 12px; margin: 10px 0 8px; }
 .cs-bar span { flex: 1 1 0; min-width: 2px; height: 100%; padding: 0; border: 0; border-radius: 2px; background: var(--cs-open); box-sizing: border-box; }
+.cs-bar.dense { gap: 1px; }
+.cs-bar.dense span { min-width: 1px; border-radius: 1px; }
 .cs-bar .seat-ok { background: var(--cs-ok); }
 .cs-bar .seat-wait { background: var(--cs-wait); }
 .cs-bar .seat-plan { background: transparent; box-shadow: inset 0 0 0 1px var(--muted); }

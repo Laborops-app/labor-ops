@@ -621,8 +621,8 @@ function Body({ me }: { me: Me }) {
     const total = c + w + n + o;
     const kinds: [string, number][] = [['seat-ok', c], ['seat-wait', w], ['seat-plan', n], ['seat-open', o]];
     return (
-      <div className={`cs-bar${big ? ' big' : ''}`} role="img" aria-label={`${c} confirmed, ${w} waiting, ${n} not sent, ${o} open`}>
-        {!big && total <= 24
+      <div className={`cs-bar${big ? ' big' : ''}${total > 30 ? ' dense' : ''}`} role="img" aria-label={`${c} confirmed, ${w} waiting, ${n} not sent, ${o} open`}>
+        {!big && total <= 80
           ? kinds.flatMap(([k, num]) => Array.from({ length: num }).map((_, i) => <span key={`${k}${i}`} className={k} />))
           : kinds.filter(([, num]) => num > 0).map(([k, num]) => <span key={k} className={k} style={{ flexGrow: num }} />)}
       </div>
