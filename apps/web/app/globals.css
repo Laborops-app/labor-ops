@@ -2052,3 +2052,9 @@ details.card.profile-fold > summary::before { content: none; }
 .rm-conflicts { border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); background: var(--warn-bg); border-radius: 10px; padding: 10px 12px; }
 .rm-conflicts li { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 0; border-top: 1px solid color-mix(in srgb, var(--warn) 25%, transparent); }
 .rm-conflicts li:first-child { border-top: 0; }
+
+/* Rentman extras on events and shifts */
+.rm-extras { display: grid; gap: 12px; margin: 12px 0; }
+.rm-extra h3 { margin: 0 0 8px; }
+.rm-extra summary { cursor: pointer; }
+.linklike { background: none; border: 0; padding: 0; color: var(--accent, #2563eb); text-decoration: underline; cursor: pointer; font: inherit; text-align: left; }

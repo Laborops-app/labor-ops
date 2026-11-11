@@ -146,19 +146,26 @@ export default function RentmanOptions() {
       {t('quoted_bill_rates', 'Bill Rentman shifts at the quoted rate', 'Shifts built from a Rentman project bill at the hourly price quoted on their crew function (overtime on top), so the invoice matches the quote unless hours change. Other events keep the role bill rates.')}
 
       <h4>Back to Rentman</h4>
-      {t('push_hours', 'Send approved hours to Rentman', 'Each approved time entry on a Rentman event becomes a time registration for that crew member in Rentman, and is updated if the time is edited. People not linked to Rentman crew are listed and wait.')}
+      {t('push_hours', 'Send approved hours to Rentman', 'Each approved time entry on a Rentman event becomes a time registration for that crew member in Rentman within a couple of minutes, and is updated if the time is edited or removed if it’s unapproved. Rentman’s API can’t attach hours to the project or approve them, so they arrive as pending with the event and role in the note. People not linked to Rentman crew are listed and wait.')}
       {o.push_hours && push && (
         <p className="small rm-sub">
           {push.hours.sent} sent{push.hours.waiting ? `, ${push.hours.waiting} waiting` : ''}{push.hours.failed ? `, ${push.hours.failed} failed (${push.hours.lastError})` : ''}.
           {push.hours.missingCrew.length > 0 && ` Waiting for a Rentman link: ${push.hours.missingCrew.map((m) => m.name).join(', ')}.`}
         </p>
       )}
-      {t('push_time_off', 'Send time off to Rentman', 'Time off entered in LaborOps shows in Rentman’s planner as unavailable (approved), and is removed there when it’s deleted here. Needs crew linked.')}
+      {t('push_time_off', 'Send time off to Rentman', 'Time off entered in LaborOps shows in Rentman’s planner as “not available” for those days, and is removed there when it’s deleted here. Needs crew linked.')}
       {o.push_time_off && push && <p className="small rm-sub">{push.timeOff.sent} sent{push.timeOff.failed ? `, ${push.timeOff.failed} failed (${push.timeOff.lastError})` : ''}.</p>}
+      {(o.push_hours || o.push_time_off) && (
+        <div className="rm-sub">
+          <button type="button" className="btn small" disabled={!!busy} onClick={async () => { setBusy('push'); try { const r = await api<{ hours: { sent: number; updated: number; removed: number; failed: number } | null; timeOff: { sent: number; removed: number; failed: number } | null; status: Push }>('/api/rentman/push/run', { body: {} }); setPush(r.status); setMsg(`Sent to Rentman: ${r.hours ? `${r.hours.sent + r.hours.updated} hours entries` : ''}${r.hours && r.timeOff ? ', ' : ''}${r.timeOff ? `${r.timeOff.sent} time off` : ''}.`); } catch (e) { setErr((e as Error).message); } finally { setBusy(''); } }}>
+            {busy === 'push' ? 'Sending…' : 'Send now'}
+          </button>
+        </div>
+      )}
 
       <h4>On events</h4>
       {t('show_invoices', 'Show Rentman invoices', 'The event’s Invoice tab and the pipeline show the Rentman project’s invoices and whether they’re paid, so labor isn’t billed twice.')}
-      {t('show_files', 'Share Rentman project files with crew', 'Files on the Rentman project (stage plots, call sheets, site maps) appear on the event for the crew on it.')}
+      {t('show_files', 'Share Rentman project files with crew', 'Files on the Rentman project (stage plots, call sheets, site maps) appear on the event for the crew on it. Files marked classified in Rentman are never shown.')}
       {o.show_files && (
         <div className="row rm-sub" style={{ gap: 8, flexWrap: 'wrap' }}>
           <input value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="Only this Rentman folder (blank = all files)" style={{ maxWidth: 320 }} aria-label="Rentman folder" />

@@ -17,7 +17,7 @@ type Card = {
   id: string; name: string; client: string | null; venue: string | null; start_date: string; end_date: string; status: PipelineStatus; priority: Priority;
   status_changed_at: string; customer_id: string | null; customer_name: string | null; created_by: string | null;
   slots: number; filled: number; accepted: number; waiting: number; shift_count: number; on_clock: number; missing_time?: number; to_approve: number; to_rate: number; invoiced: boolean; messages: number;
-  quote: { id: string; number: number; status: string } | null; rentman?: { id: number; number: number | null; status: string | null } | null; crew: { id: string; name: string; status: string }[];
+  quote: { id: string; number: number; status: string } | null; rentman?: { id: number; number: number | null; status: string | null } | null; rentman_invoices?: { count: number; total: number | null; outstanding: number | null; paid: boolean } | null; crew: { id: string; name: string; status: string }[];
 };
 type Board = { events: Card[]; team: { id: string; name: string; role: string }[] };
 type Range = 'upcoming' | '30d' | 'month' | 'all';
@@ -150,6 +150,12 @@ function CardView({ c, onMove, onPriority, onDragStart, onDragEnd, dragging }: {
       {c.rentman && (
         <span className="pm-quote grey pm-rentman" title="Linked to a Rentman project">
           Rentman{c.rentman.number ? ` #${c.rentman.number}` : ''}{c.rentman.status ? ` · ${c.rentman.status}` : ''}
+        </span>
+      )}
+      {c.rentman_invoices && (
+        <span className={`pm-quote ${c.rentman_invoices.paid ? 'green' : 'grey'}`} title="Invoices on the Rentman project">
+          Rentman invoiced {Number(c.rentman_invoices.count)} · {Number(c.rentman_invoices.total ?? 0).toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}
+          {c.rentman_invoices.paid ? ' · paid' : Number(c.rentman_invoices.outstanding ?? 0) > 0 ? ' · open' : ''}
         </span>
       )}
       {c.quote && (

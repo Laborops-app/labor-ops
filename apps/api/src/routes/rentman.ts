@@ -10,6 +10,9 @@ import { loadOptions, OPTION_KEYS, saveOptions, verifyDigest, webhookToken } fro
 import { queueRentman } from '../rentmanWebhook';
 import { syncCrew, syncRates, unlockRates } from '../rentmanSync';
 import { pool } from '../db';
+import { authenticate } from '../auth';
+import { pushHours, pushStatus, pushTimeOff } from '../rentmanPush';
+import { eventExtras, fileUrl, syncInvoices } from '../rentmanExtras';
 import { config } from '../config';
 
 const uuid = z.string().uuid();
@@ -478,4 +481,76 @@ export async function rentmanRoutes(app: FastifyInstance) {
       return fail(reply, e);
     }
   });
+
+  // ---------- back to Rentman: hours and time off ----------
+
+  app.get('/api/rentman/push-status', { preHandler: mgr }, async (req) => withTenant(req.user.tid, (c) => pushStatus(c)));
+
+  app.post('/api/rentman/push/run', { preHandler: adm }, async (req, reply) => {
+    try {
+      return await withTenant(req.user.tid, async (c) => {
+        const token = await getToken(c);
+        if (!token) throw new RentmanError('Connect Rentman first.', 409);
+        const o = await loadOptions(c);
+        return {
+          hours: o.push_hours ? await pushHours(c, req.user.tid, token) : null,
+          timeOff: o.push_time_off ? await pushTimeOff(c, req.user.tid, token) : null,
+          status: await pushStatus(c),
+        };
+      });
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+
+  // ---------- extras on an event (invoices, files, contacts, vehicles, equipment for leads) ----------
+
+  app.get('/api/events/:id/rentman/extras', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    try {
+      const out = await withTenant(req.user.tid, async (c) => {
+        const token = await getToken(c);
+        if (!token) return null;
+        return eventExtras(c, req.user.tid, token, id, { sub: req.user.sub, role: req.user.role });
+      });
+      if (out && 'forbidden' in out) return reply.code(403).send({ error: 'Not on this event' });
+      return out ?? { project: null };
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+
+  app.post('/api/events/:id/rentman/invoices/sync', { preHandler: mgr }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    try {
+      return await withTenant(req.user.tid, async (c) => {
+        const ev = (await c.query('SELECT rentman_project_id FROM events WHERE id = $1', [id])).rows[0];
+        if (!ev?.rentman_project_id) throw new RentmanError('This event is not linked to a Rentman project.', 409);
+        const token = await getToken(c);
+        if (!token) throw new RentmanError('Connect Rentman first.', 409);
+        return { invoices: await syncInvoices(c, req.user.tid, token, Number(ev.rentman_project_id)) };
+      });
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+
+  // A project file: checked against the same rules as the list, then handed off to Rentman's own (expiring) link.
+  app.get('/api/events/:id/rentman/files/:fileId', { preHandler: authenticate }, async (req, reply) => {
+    const { id, fileId } = z.object({ id: uuid, fileId: z.coerce.number().int().positive() }).parse(req.params);
+    try {
+      const out = await withTenant(req.user.tid, async (c) => {
+        const token = await getToken(c);
+        if (!token) return null;
+        const x: any = await eventExtras(c, req.user.tid, token, id, { sub: req.user.sub, role: req.user.role });
+        if (!x || x.forbidden || !x.files?.some((f: any) => f.id === fileId)) return null;
+        return fileUrl(token, x.project, fileId);
+      });
+      if (!out) return reply.code(404).send({ error: 'File not found' });
+      return { url: out.url, name: out.name };
+    } catch (e) {
+      return fail(reply, e);
+    }
+  });
+
 }

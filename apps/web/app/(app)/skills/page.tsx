@@ -5,7 +5,7 @@ import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, Me } from '@/lib/api';
 
-type Skill = { id: string; name: string; payRate: number; dayRate?: number; billRate?: number; dayBillRate?: number; active: boolean; groupId: string | null; isLead?: boolean };
+type Skill = { id: string; name: string; payRate: number; dayRate?: number; billRate?: number; dayBillRate?: number; active: boolean; groupId: string | null; isLead?: boolean; ratesFromRentman?: boolean };
 type Group = { id: string; name: string };
 type Edit = { name: string; payRate: string; dayRate: string; billRate: string; dayBillRate: string };
 
@@ -48,11 +48,11 @@ function RatesOnly() {
                 const bill = e ? Number(e.bill) : s.billRate ?? 0;
                 return (
                   <tr key={s.id}>
-                    <td>{s.name}</td>
-                    <td><input type="number" min={0} step="0.01" value={e?.pay ?? s.payRate.toFixed(2)} onChange={(ev) => setEd({ ...ed, [s.id]: { pay: ev.target.value, day: e?.day ?? String(s.dayRate ?? 0), bill: e?.bill ?? String(s.billRate ?? 0), dbill: e?.dbill ?? String(s.dayBillRate ?? 0) } })} aria-label={`Pay rate for ${s.name}`} style={{ width: '7rem' }} /></td>
-                    <td><input type="number" min={0} step="0.01" value={e?.day ?? (s.dayRate ?? 0).toFixed(2)} onChange={(ev) => setEd({ ...ed, [s.id]: { pay: e?.pay ?? String(s.payRate), day: ev.target.value, bill: e?.bill ?? String(s.billRate ?? 0), dbill: e?.dbill ?? String(s.dayBillRate ?? 0) } })} aria-label={`Day rate for ${s.name}`} style={{ width: '7rem' }} /></td>
-                    <td><input type="number" min={0} step="0.01" value={e?.bill ?? (s.billRate ?? 0).toFixed(2)} onChange={(ev) => setEd({ ...ed, [s.id]: { pay: e?.pay ?? String(s.payRate), day: e?.day ?? String(s.dayRate ?? 0), bill: ev.target.value, dbill: e?.dbill ?? String(s.dayBillRate ?? 0) } })} aria-label={`Bill rate for ${s.name}`} style={{ width: '7rem' }} /></td>
-                    <td><input type="number" min={0} step="0.01" value={e?.dbill ?? (s.dayBillRate ?? 0).toFixed(2)} onChange={(ev) => setEd({ ...ed, [s.id]: { pay: e?.pay ?? String(s.payRate), day: e?.day ?? String(s.dayRate ?? 0), bill: e?.bill ?? String(s.billRate ?? 0), dbill: ev.target.value } })} aria-label={`Day bill rate for ${s.name}`} style={{ width: '7rem' }} /></td>
+                    <td>{s.name}{s.ratesFromRentman && <> <span className="chip" title="Rates are copied from Rentman">from Rentman</span></>}</td>
+                    <td><input type="number" min={0} step="0.01" value={e?.pay ?? s.payRate.toFixed(2)} onChange={(ev) => setEd({ ...ed, [s.id]: { pay: ev.target.value, day: e?.day ?? String(s.dayRate ?? 0), bill: e?.bill ?? String(s.billRate ?? 0), dbill: e?.dbill ?? String(s.dayBillRate ?? 0) } })} aria-label={`Pay rate for ${s.name}`} disabled={!!s.ratesFromRentman} title={s.ratesFromRentman ? "Set in Rentman (Integrations › Rentman › Rentman sets the rates)" : undefined} style={{ width: '7rem' }} /></td>
+                    <td><input type="number" min={0} step="0.01" value={e?.day ?? (s.dayRate ?? 0).toFixed(2)} onChange={(ev) => setEd({ ...ed, [s.id]: { pay: e?.pay ?? String(s.payRate), day: ev.target.value, bill: e?.bill ?? String(s.billRate ?? 0), dbill: e?.dbill ?? String(s.dayBillRate ?? 0) } })} aria-label={`Day rate for ${s.name}`} disabled={!!s.ratesFromRentman} title={s.ratesFromRentman ? "Set in Rentman (Integrations › Rentman › Rentman sets the rates)" : undefined} style={{ width: '7rem' }} /></td>
+                    <td><input type="number" min={0} step="0.01" value={e?.bill ?? (s.billRate ?? 0).toFixed(2)} onChange={(ev) => setEd({ ...ed, [s.id]: { pay: e?.pay ?? String(s.payRate), day: e?.day ?? String(s.dayRate ?? 0), bill: ev.target.value, dbill: e?.dbill ?? String(s.dayBillRate ?? 0) } })} aria-label={`Bill rate for ${s.name}`} disabled={!!s.ratesFromRentman} title={s.ratesFromRentman ? "Set in Rentman (Integrations › Rentman › Rentman sets the rates)" : undefined} style={{ width: '7rem' }} /></td>
+                    <td><input type="number" min={0} step="0.01" value={e?.dbill ?? (s.dayBillRate ?? 0).toFixed(2)} onChange={(ev) => setEd({ ...ed, [s.id]: { pay: e?.pay ?? String(s.payRate), day: e?.day ?? String(s.dayRate ?? 0), bill: e?.bill ?? String(s.billRate ?? 0), dbill: ev.target.value } })} aria-label={`Day bill rate for ${s.name}`} disabled={!!s.ratesFromRentman} title={s.ratesFromRentman ? "Set in Rentman (Integrations › Rentman › Rentman sets the rates)" : undefined} style={{ width: '7rem' }} /></td>
                     <td className="small">{bill > 0 ? `${Math.round(((bill - pay) / bill) * 100)}%` : '—'}</td>
                     <td>{e && <button className="btn small primary" onClick={() => save(s)}>Save</button>}</td>
                   </tr>
@@ -338,6 +338,7 @@ function Body() {
                     <tr key={s.id} className={s.active ? '' : 'inactive'}>
                       <td>
                         <input value={e?.name ?? s.name} onChange={(ev) => set(s, { name: ev.target.value })} aria-label={`Name of ${s.name}`} maxLength={60} />
+                        {s.ratesFromRentman && <span className="chip" title="Rates are copied from Rentman and locked here">from Rentman</span>}
                         <label className="check lead-role-check" title="Whoever is put on a shift with this role leads their department on that event">
                           <input type="checkbox" checked={!!s.isLead} disabled={!!busy} onChange={(ev) => act(s.id, ev.target.checked ? `${s.name} is a lead role.` : `${s.name} is no longer a lead role.`, () => api(`/api/skills/${s.id}`, { method: 'PATCH', body: { isLead: ev.target.checked } }))} />
                           Lead role
@@ -364,7 +365,7 @@ function Body() {
                             inputMode="decimal"
                             value={e?.payRate ?? s.payRate.toFixed(2)}
                             onChange={(ev) => set(s, { payRate: ev.target.value })}
-                            aria-label={`Hourly rate for ${s.name}`}
+                            aria-label={`Hourly rate for ${s.name}`} disabled={!!s.ratesFromRentman} title={s.ratesFromRentman ? "Set in Rentman (Integrations › Rentman › Rentman sets the rates)" : undefined}
                           />
                           <span className="muted small">/hr</span>
                         </span>
@@ -372,21 +373,21 @@ function Body() {
                       <td>
                         <span className="money-input">
                           <span aria-hidden="true">$</span>
-                          <input type="number" min={0} max={10000} step="0.01" inputMode="decimal" value={e?.dayRate ?? (s.dayRate ?? 0).toFixed(2)} onChange={(ev) => set(s, { dayRate: ev.target.value })} aria-label={`Day rate for ${s.name}`} />
+                          <input type="number" min={0} max={10000} step="0.01" inputMode="decimal" value={e?.dayRate ?? (s.dayRate ?? 0).toFixed(2)} onChange={(ev) => set(s, { dayRate: ev.target.value })} aria-label={`Day rate for ${s.name}`} disabled={!!s.ratesFromRentman} title={s.ratesFromRentman ? "Set in Rentman (Integrations › Rentman › Rentman sets the rates)" : undefined} />
                           <span className="muted small">/day</span>
                         </span>
                       </td>
                       <td>
                         <span className="money-input">
                           <span aria-hidden="true">$</span>
-                          <input type="number" min={0} max={10000} step="0.01" inputMode="decimal" value={e?.billRate ?? (s.billRate ?? 0).toFixed(2)} onChange={(ev) => set(s, { billRate: ev.target.value })} aria-label={`Billing rate for ${s.name}`} />
+                          <input type="number" min={0} max={10000} step="0.01" inputMode="decimal" value={e?.billRate ?? (s.billRate ?? 0).toFixed(2)} onChange={(ev) => set(s, { billRate: ev.target.value })} aria-label={`Billing rate for ${s.name}`} disabled={!!s.ratesFromRentman} title={s.ratesFromRentman ? "Set in Rentman (Integrations › Rentman › Rentman sets the rates)" : undefined} />
                           <span className="muted small">/hr</span>
                         </span>
                       </td>
                       <td>
                         <span className="money-input">
                           <span aria-hidden="true">$</span>
-                          <input type="number" min={0} max={10000} step="0.01" inputMode="decimal" value={e?.dayBillRate ?? (s.dayBillRate ?? 0).toFixed(2)} onChange={(ev) => set(s, { dayBillRate: ev.target.value })} aria-label={`Day billing rate for ${s.name}`} />
+                          <input type="number" min={0} max={10000} step="0.01" inputMode="decimal" value={e?.dayBillRate ?? (s.dayBillRate ?? 0).toFixed(2)} onChange={(ev) => set(s, { dayBillRate: ev.target.value })} aria-label={`Day billing rate for ${s.name}`} disabled={!!s.ratesFromRentman} title={s.ratesFromRentman ? "Set in Rentman (Integrations › Rentman › Rentman sets the rates)" : undefined} />
                           <span className="muted small">/day</span>
                         </span>
                       </td>

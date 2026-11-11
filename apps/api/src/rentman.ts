@@ -184,10 +184,10 @@ export async function customerForRentman(c: PoolClient, tid: string, rentmanCont
   return cu;
 }
 
-async function send(token: string, method: 'POST' | 'PUT', path: string, body: unknown, what = 'the customer'): Promise<any> {
+export async function send(token: string, method: 'POST' | 'PUT' | 'DELETE', path: string, body: unknown, what = 'the customer'): Promise<any> {
   let res: Response;
   try {
-    res = await fetch(`${BASE}${path}`, { method, headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(20000) });
+    res = await fetch(`${BASE}${path}`, { method, headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json' }, body: method === 'DELETE' ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(20000) });
   } catch {
     throw new RentmanError('Could not reach Rentman. Try again in a moment.');
   }
@@ -210,9 +210,11 @@ async function send(token: string, method: 'POST' | 'PUT', path: string, body: u
         403,
       );
     if (res.status === 429) throw new RentmanError(`Rentman's rate limit was hit while saving ${what}. Wait a minute and try again.`, 429);
+    if (method === 'DELETE' && res.status === 404) return null; // already gone
     throw new RentmanError(`Rentman could not save ${what} (${res.status}).${why}`);
   }
-  return res.json();
+  if (method === 'DELETE' || res.status === 204) return null;
+  return res.json().catch(() => null);
 }
 
 /** "201 Presidents Cir, Salt Lake City, UT 84112" → Rentman's separate street / city / state / postal code fields. */

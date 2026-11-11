@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import Shell, { initials } from '@/components/Shell';
 import { Banner, Pill } from '@/components/ui';
+import RentmanExtras, { useRentmanExtras } from '@/components/RentmanExtras';
 import { api, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
 
 type Detail = {
@@ -40,6 +41,7 @@ function Body() {
   // Updates the labor coordinator sent about this event.
   const [updates, setUpdates] = useState<{ id: string; title: string; body: string; created_at: string; sent_by_name: string | null }[]>([]);
   const eventId = d?.shift.event_id;
+  const [rmx] = useRentmanExtras(d?.shift.status === 'accepted' ? eventId : undefined);
   useEffect(() => {
     if (eventId) api<{ updates: typeof updates }>(`/api/my/events/${eventId}/updates`).then((r) => setUpdates(r.updates)).catch(() => {});
   }, [eventId]);
@@ -115,6 +117,8 @@ function Body() {
           </div>
         </section>
       )}
+
+      {eventId && <RentmanExtras eventId={eventId} x={rmx} />}
 
       {updates.length > 0 && (
         <section className="card upd-crew">

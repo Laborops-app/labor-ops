@@ -3,6 +3,7 @@ import { getToken } from './rentman';
 import { loadOptions } from './rentmanOptions';
 import { pullRentman, loadPipelineSettings } from './rentmanPipeline';
 import { syncCrew, syncRates } from './rentmanSync';
+import { clearExtrasCache, syncAllInvoices } from './rentmanExtras';
 
 /**
  * Work started by Rentman webhooks. Changes often come in bursts (saving a project touches many items), so each
@@ -46,6 +47,8 @@ export async function runRentmanFor(tid: string, kinds: Set<Kind>) {
       const p = await loadPipelineSettings(c);
       const built = (await c.query('SELECT 1 FROM events WHERE rentman_build LIMIT 1')).rowCount;
       if (p.autoEvents || built) out.pull = await pullRentman(c, tid, token);
+      if (o.show_invoices) out.invoices = await syncAllInvoices(c, tid, token);
+      clearExtrasCache();
     }
     return out;
   });
@@ -56,4 +59,13 @@ export async function runRentmanAll() {
   const { pool } = await import('./db');
   const { rows } = await pool.query('SELECT id FROM notify_tenants()');
   for (const t of rows) await runRentmanFor(t.id, new Set<Kind>(['projects', 'crew', 'rates'])).catch((e) => console.error('rentman run', t.id, e?.message ?? e));
+}
+
+/** Run a company's queued webhook work now (tests, and a manual "sync now"). */
+export async function flushRentman(tid: string) {
+  const cur = pending.get(tid);
+  if (!cur) return null;
+  clearTimeout(cur.timer);
+  pending.delete(tid);
+  return runRentmanFor(tid, cur.kinds);
 }
