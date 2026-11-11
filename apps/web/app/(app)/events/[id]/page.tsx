@@ -27,6 +27,7 @@ import NeedsAttention from '@/components/NeedsAttention';
 import AvailCheck from '@/components/AvailCheck';
 import { api, ApiError, Me, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
 import LaborBudget from '@/components/LaborBudget';
+import RolePicker from '@/components/RolePicker';
 import { EventDetails, Phases, Clocking, RentmanCard, EventFull, Phase, RmView } from '@/components/EventInfo';
 import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 
@@ -120,6 +121,19 @@ function Body({ me }: { me: Me }) {
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
   const [rmBuilding, setRmBuilding] = useState(false);
+  // Building quietly: when the last open spot gets a pick, ask whether to send every request now or later.
+  const [fullAsk, setFullAsk] = useState(false);
+  const wasFull = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (!d) return;
+    const planned = d.shifts.reduce((k, s) => k + s.assignments.filter((a) => a.planned).length, 0);
+    const full = !!d.event.staffing_draft && planned > 0 && d.shifts.length > 0
+      && d.shifts.every((s) => s.assignments.filter((a) => a.status !== 'declined').length >= s.headcount);
+    // Only when it becomes full while you're working (not every time a fully planned event is opened).
+    if (full && wasFull.current === false) setFullAsk(true);
+    if (!full) setFullAsk(false);
+    wasFull.current = full;
+  }, [d]);
   const [adding, setAdding] = useState<string | null>(null); // shift id whose crew picker is open ('new' = the add-shift form)
   // "Add as lead" in the open crew picker: on for lead roles ("Audio Lead"), off otherwise.
   const [asLead, setAsLead] = useState(false);
@@ -300,6 +314,16 @@ function Body({ me }: { me: Me }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, customerId, !!d]);
 
+  const publish = async () => {
+    setError(''); setNote('');
+    try {
+      const r = await api<{ offered: number; confirmed: number; failed: { name: string; role: string; error: string }[] }>(`/api/events/${id}/publish`, { body: {} });
+      const parts = [r.offered && `${r.offered} offer${r.offered === 1 ? '' : 's'} sent`, r.confirmed && `${r.confirmed} confirmed booking${r.confirmed === 1 ? '' : 's'} sent`].filter(Boolean).join(', ');
+      setNote(`Crew requested${parts ? `: ${parts}` : ''}.`);
+      if (r.failed.length) setError(`Not sent: ${r.failed.map((f) => `${f.name} (${f.role}): ${f.error}`).join(' ')}`);
+    } catch (e) { setError((e as Error).message); }
+    load();
+  };
   const run = async (fn: () => Promise<unknown>, okMsg = '') => {
     setError('');
     setNote('');
@@ -580,7 +604,7 @@ function Body({ me }: { me: Me }) {
                     <form className="time-edit" onSubmit={(e) => { e.preventDefault(); saveTime(); }}>
                       <label>
                         Role
-                        <input list="role-names" value={timeEdit.role} onChange={(e) => setTimeEdit({ ...timeEdit, role: e.target.value })} required maxLength={100} />
+                        <RolePicker value={timeEdit.role} onChange={(v) => setTimeEdit({ ...timeEdit, role: v })} sections={skillSections} required ariaLabel="Role" />
                       </label>
                       <label>
                         Starts
@@ -1453,21 +1477,24 @@ function Body({ me }: { me: Me }) {
             <button
               type="button"
               className="btn primary small"
-              onClick={async () => {
-                setError(''); setNote('');
-                try {
-                  const r = await api<{ offered: number; confirmed: number; failed: { name: string; role: string; error: string }[] }>(`/api/events/${id}/publish`, { body: {} });
-                  const parts = [r.offered && `${r.offered} offer${r.offered === 1 ? '' : 's'} sent`, r.confirmed && `${r.confirmed} confirmed booking${r.confirmed === 1 ? '' : 's'} sent`].filter(Boolean).join(', ');
-                  setNote(`Published${parts ? `: ${parts}` : ''}.`);
-                  if (r.failed.length) setError(`Not sent: ${r.failed.map((f) => `${f.name} (${f.role}): ${f.error}`).join(' ')}`);
-                } catch (e) { setError((e as Error).message); }
-                load();
-              }}
+              onClick={publish}
             >
               Publish
             </button>
           </span>
         </div>
+      )}
+      {fullAsk && ev.staffing_draft && (
+        <Modal title="Every position is filled" onClose={() => setFullAsk(false)}>
+          <p>
+            All {d.shifts.reduce((k, s) => k + s.headcount, 0)} spots on {ev.name} have someone picked. Nobody has been told yet.
+          </p>
+          <p className="muted small">Request all crew sends every offer now (people already confirmed get their booking). Save and request later keeps the plan; press Publish when you’re ready.</p>
+          <div className="row" style={{ gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+            <button type="button" className="btn" onClick={() => { setFullAsk(false); setNote('Saved. Nobody has been told yet; press Publish when you’re ready.'); }}>Save and request later</button>
+            <button type="button" className="btn primary" onClick={async () => { setFullAsk(false); await publish(); }}>Request all crew</button>
+          </div>
+        </Modal>
       )}
       <NeedsAttention
         eventId={id}

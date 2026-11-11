@@ -350,7 +350,8 @@ export async function eventRoutes(app: FastifyInstance) {
       } else
         for (const p of [...(b.phases ?? [])].sort((x, y) => x.date.localeCompare(y.date)))
           await addDayPhases(c, req.user.tid, r.rows[0].id, p.label, p.date, p.date);
-      if (b.buildQuietly) await c.query('UPDATE events SET staffing_draft = true WHERE id = $1', [r.rows[0].id]);
+      // New events build quietly by default (company setting); the form can say otherwise for this one.
+      if (b.buildQuietly !== undefined) await c.query('UPDATE events SET staffing_draft = $2 WHERE id = $1', [r.rows[0].id, b.buildQuietly]);
       await advanceStage(c, custId, 'active');
       await audit(c, req.user.tid, req.user.sub, 'event.create', 'event', r.rows[0].id, fromTemplate ? { templateId: b.templateId, ...fromTemplate } : b.phases?.length ? { phases: b.phases.length } : undefined);
       const fresh = (await c.query('SELECT * FROM events WHERE id = $1', [r.rows[0].id])).rows[0];

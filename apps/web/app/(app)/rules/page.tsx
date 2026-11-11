@@ -31,7 +31,9 @@ function Body() {
   const loadStates = () => api<{ states: StateRule[] }>('/api/state-ot-rules').then((x) => setStates(x.states)).catch(() => undefined);
   const [error, setError] = useState('');
   const [ok, setOk] = useState('');
+  const [quiet, setQuiet] = useState<boolean | null>(null);
   useEffect(() => {
+    api<{ quietByDefault: boolean }>('/api/staffing/settings').then((x) => setQuiet(x.quietByDefault)).catch(() => undefined);
     api<Rules>('/api/labor-rules').then(setR).catch((e) => setError(e.message));
     loadStates();
   }, []);
@@ -54,6 +56,27 @@ function Body() {
       <p className="muted">These rules warn coordinators while scheduling and drive the estimated earnings crew see. Pay is an estimate; actual pay follows approved time.</p>
       {error && <Banner>{error}</Banner>}
       {ok && <Banner kind="ok">{ok}</Banner>}
+      {quiet !== null && (
+        <section className="card">
+          <h2>Building the crew</h2>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={quiet}
+              onChange={async (e) => {
+                const on = e.target.checked;
+                setError(''); setOk('');
+                try {
+                  setQuiet((await api<{ quietByDefault: boolean }>('/api/staffing/settings', { method: 'PUT', body: { quietByDefault: on } })).quietByDefault);
+                  setOk(on ? 'New events now start building quietly.' : 'New events now send offers as soon as crew are picked.');
+                } catch (err) { setError((err as Error).message); }
+              }}
+            />
+            Start new events building quietly
+          </label>
+          <p className="muted">Crew picks are kept as a plan and nobody is told. When every position has someone, you’re asked whether to request all the crew now or save and request later. You can change it on each new event.</p>
+        </section>
+      )}
       <form onSubmit={save}>
         <section className="card">
           <h2>Rest and hours</h2>

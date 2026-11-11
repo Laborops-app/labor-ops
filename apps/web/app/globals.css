@@ -2058,3 +2058,6 @@ details.card.profile-fold > summary::before { content: none; }
 .rm-extra h3 { margin: 0 0 8px; }
 .rm-extra summary { cursor: pointer; }
 .linklike { background: none; border: 0; padding: 0; color: var(--accent, #2563eb); text-decoration: underline; cursor: pointer; font: inherit; text-align: left; }
+
+.role-picker { display: flex; gap: 6px; align-items: center; }
+.role-picker input { flex: 1; min-width: 0; }

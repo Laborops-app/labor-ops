@@ -193,6 +193,22 @@ export async function staffingRoutes(app: FastifyInstance) {
   );
 
   // ---------- build quietly, then publish ----------
+  // Whether new events start building quietly (on unless the company turns it off).
+  app.get('/api/staffing/settings', { preHandler: mgr }, async (req) =>
+    withTenant(req.user.tid, async (c) => ({ quietByDefault: (await c.query('SELECT quiet_default FROM staffing_settings LIMIT 1')).rows[0]?.quiet_default ?? true })),
+  );
+  app.put('/api/staffing/settings', { preHandler: guard('admin') }, async (req) => {
+    const b = z.object({ quietByDefault: z.boolean() }).parse(req.body);
+    return withTenant(req.user.tid, async (c) => {
+      await c.query(
+        'INSERT INTO staffing_settings (tenant_id, quiet_default) VALUES ($1,$2) ON CONFLICT (tenant_id) DO UPDATE SET quiet_default = $2, updated_at = now()',
+        [req.user.tid, b.quietByDefault],
+      );
+      await audit(c, req.user.tid, req.user.sub, 'staffing.settings', 'tenant', null, b);
+      return { quietByDefault: b.quietByDefault };
+    });
+  });
+
   app.put('/api/events/:id/build-quietly', { preHandler: mgr }, async (req, reply) => {
     const { id } = idParam.parse(req.params);
     const { on } = z.object({ on: z.boolean() }).parse(req.body);

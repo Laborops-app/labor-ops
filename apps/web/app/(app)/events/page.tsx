@@ -86,7 +86,9 @@ function Body() {
   const [templates, setTemplates] = useState<EvTemplate[] | null>(null);
   const [tplId, setTplId] = useState('');
   const [pastId, setPastId] = useState('');
-  const [quiet, setQuiet] = useState(false);
+  const [quiet, setQuiet] = useState(true);
+  // New events build quietly unless the company turned that off (Labor rules › Building the crew).
+  useEffect(() => { api<{ quietByDefault: boolean }>('/api/staffing/settings').then((r) => setQuiet(r.quietByDefault)).catch(() => {}); }, []);
   const tpl = templates?.find((x) => x.id === tplId) ?? null;
   const custId = cust.mode === 'existing' ? cust.customerId : null;
   useEffect(() => {
@@ -112,7 +114,7 @@ function Body() {
         if (!pastId) return setError('Choose the event to copy.');
         // A copy keeps the past event's venue, phases, groups and positions (no crew), moved to the new start date.
         const r = await api<{ event: { id: string } }>(`/api/events/${pastId}/copy`, { body: { name: f.name, startDate: f.startDate, ...(custId ? { customerId: custId } : {}) } });
-        if (quiet) await api(`/api/events/${r.event.id}/build-quietly`, { method: 'PUT', body: { on: true } });
+        await api(`/api/events/${r.event.id}/build-quietly`, { method: 'PUT', body: { on: quiet } }).catch(() => {});
         router.push(`/events/${r.event.id}`);
         return;
       }
@@ -122,7 +124,7 @@ function Body() {
           ...f, ...customerBody(cust), venue: f.venue || null, address: f.address || null, rentmanProjectId: rm, pushToRentman: !rm && rmSend.on ? true : undefined,
           phases: from === 'blank' && plan ? plan.filter((p) => p.on && p.label.trim()).map((p) => ({ label: p.label.trim(), date: p.date })) : undefined,
           templateId: from === 'template' ? tplId : undefined,
-          buildQuietly: quiet || undefined,
+          buildQuietly: quiet,
         },
       });
       // Rentman trouble does not stop the event; say so before moving on.

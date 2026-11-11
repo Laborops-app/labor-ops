@@ -37,7 +37,7 @@ async function call(s: Session | null, method: 'GET' | 'POST' | 'PUT' | 'PATCH' 
   return { status: res.statusCode, json, text: res.body, res };
 }
 
-async function register(tag: string): Promise<Session> {
+async function register(tag: string, quietDefault = false): Promise<Session> {
   const r = await call(null, 'POST', '/api/auth/register', {
     company: `Co ${tag} ${run}`,
     name: `Admin ${tag}`,
@@ -46,7 +46,10 @@ async function register(tag: string): Promise<Session> {
   });
   assert.equal(r.status, 200, r.text);
   const c = r.res.cookies.find((x) => x.name === 'lo_token')!;
-  return { cookie: `lo_token=${c.value}`, id: r.json.user.id };
+  const s = { cookie: `lo_token=${c.value}`, id: r.json.user.id };
+  // Most tests offer crew straight away; new events otherwise start building quietly.
+  if (!quietDefault) assert.equal((await call(s, 'PUT', '/api/staffing/settings', { quietByDefault: false })).status, 200);
+  return s;
 }
 
 async function login(email: string, password: string): Promise<Session> {
@@ -4667,4 +4670,25 @@ test('Rentman options: webhooks, crew links, rates from Rentman, hours and time 
   } finally {
     globalThis.fetch = real;
   }
+});
+
+test('new events build quietly by default; picks wait until the crew is requested', async () => {
+  const a = await register('quietdef', true);
+  assert.equal((await call(a, 'GET', '/api/staffing/settings')).json.quietByDefault, true);
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Quiet', startDate: '2031-08-01', endDate: '2031-08-01' })).json.event;
+  assert.equal(ev.staffing_draft, true);
+  const sh = (await call(a, 'POST', `/api/events/${ev.id}/shifts`, { roleName: 'Stagehand', startsAt: '2031-08-01T15:00:00Z', endsAt: '2031-08-01T23:00:00Z', headcount: 1 })).json.shift.id;
+  const m = await mkCrew(a, 'quietdef1');
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: m.id, override: true })).status, 201);
+  let d = (await call(a, 'GET', `/api/events/${ev.id}`)).json;
+  assert.equal(d.shifts[0].assignments[0].planned, true);
+  assert.equal((await call(m.session, 'GET', '/api/my/shifts')).json.shifts?.length ?? 0, 0);
+  const pub = (await call(a, 'POST', `/api/events/${ev.id}/publish`)).json;
+  assert.equal(pub.offered + pub.confirmed, 1);
+  d = (await call(a, 'GET', `/api/events/${ev.id}`)).json;
+  assert.equal(d.event.staffing_draft, false);
+  // The form can still start one live, and the company can switch the default off
+  assert.equal((await call(a, 'POST', '/api/events', { name: 'Live', startDate: '2031-08-02', endDate: '2031-08-02', buildQuietly: false })).json.event.staffing_draft, false);
+  assert.equal((await call(a, 'PUT', '/api/staffing/settings', { quietByDefault: false })).status, 200);
+  assert.equal((await call(a, 'POST', '/api/events', { name: 'Live2', startDate: '2031-08-03', endDate: '2031-08-03' })).json.event.staffing_draft, false);
 });
