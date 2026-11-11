@@ -5,7 +5,7 @@ import { guard } from '../auth';
 import { syncProjects, checkEventRequest, checkOpenRequests, clearToken, getToken, projectQuotes, pushCustomer, pushEventRequest, RentmanError, saveToken, syncEquipment, testToken } from '../rentman';
 import { importRentmanQuote } from '../quoteCompare';
 import { addProjectNow, findRentman, loadPipelineSettings, pullRentman, savePipelineSettings } from '../rentmanPipeline';
-import { buildFromRentman, keepConflict } from '../rentmanBuild';
+import { buildFromRentman, keepConflict, resyncRoleNames, suggestRole } from '../rentmanBuild';
 import { loadOptions, OPTION_KEYS, saveOptions, verifyDigest, webhookToken } from '../rentmanOptions';
 import { queueRentman } from '../rentmanWebhook';
 import { syncCrew, syncRates, unlockRates } from '../rentmanSync';
@@ -174,6 +174,10 @@ export async function rentmanRoutes(app: FastifyInstance) {
         if (!(await c.query('SELECT 1 FROM events WHERE id = $1', [id])).rowCount) return undefined;
         if (projectId !== null && !(await c.query('SELECT 1 FROM rentman_projects WHERE id = $1', [projectId])).rowCount)
           throw new RentmanError('That Rentman project is not synced yet. Sync projects first.', 409);
+        if (projectId !== null) {
+          const other = (await c.query('SELECT name FROM events WHERE rentman_project_id = $1 AND id <> $2', [projectId, id])).rows[0];
+          if (other) throw new RentmanError(`That Rentman project is already linked to the event “${other.name}”. One project can only be on one event.`, 409);
+        }
         await c.query('UPDATE events SET rentman_project_id = $2 WHERE id = $1', [id, projectId]);
         await audit(c, req.user.tid, req.user.sub, 'event.rentman', 'event', id, { projectId });
         let warning: string | undefined;
@@ -348,8 +352,12 @@ export async function rentmanRoutes(app: FastifyInstance) {
   // Rentman function names and the LaborOps role each one becomes.
   app.get('/api/rentman/role-map', { preHandler: mgr }, async (req) =>
     withTenant(req.user.tid, async (c) => ({
-      map: (await c.query('SELECT rentman_name, role_name FROM rentman_role_map ORDER BY role_name IS NOT NULL, rentman_name')).rows,
-      roles: (await c.query('SELECT name FROM skills WHERE active ORDER BY lower(name)')).rows.map((r) => r.name),
+      ...(await (async () => {
+        const roles = (await c.query('SELECT name FROM skills WHERE active ORDER BY lower(name)')).rows.map((r) => r.name as string);
+        const map = (await c.query('SELECT rentman_name, role_name FROM rentman_role_map ORDER BY role_name IS NOT NULL, rentman_name')).rows
+          .map((m) => ({ ...m, suggested: m.role_name ? null : suggestRole(m.rentman_name, roles) }));
+        return { map, roles };
+      })()),
     })),
   );
   app.put('/api/rentman/role-map', { preHandler: mgr }, async (req) => {
@@ -579,6 +587,20 @@ export async function rentmanRoutes(app: FastifyInstance) {
     const r = await withTenant(req.user.tid, (c) => addProjectNow(c, req.user.tid, id));
     if ('error' in r) return reply.code(409).send({ error: r.error });
     return r;
+  });
+
+
+  // Re-sync role names: read Rentman's crew function names again, match what's clear, apply to events following Rentman.
+  app.post('/api/rentman/role-map/resync', { preHandler: mgr }, async (req, reply) => {
+    try {
+      return await withTenant(req.user.tid, async (c) => {
+        const token = await getToken(c);
+        if (!token) throw new RentmanError('Connect Rentman first.', 409);
+        return resyncRoleNames(c, req.user.tid, req.user.sub, token);
+      });
+    } catch (e) {
+      return fail(reply, e);
+    }
   });
 
 }

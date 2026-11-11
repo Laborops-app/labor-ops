@@ -212,6 +212,8 @@ export async function applyToPipeline(c: PoolClient, tid: string, token?: string
 
 /** The whole pull for one company: projects, customers, statuses, accepted requests, then the pipeline. */
 export async function pullRentman(c: PoolClient, tid: string, token: string) {
+  // One pull per company at a time (webhooks, the 30-minute run, opening the board and Sync now can overlap).
+  await c.query("SELECT pg_advisory_xact_lock(hashtext('rentman-pull:' || $1))", [tid]);
   const projects = await syncProjects(c, tid, token);
   const customers = await pullCustomers(c, tid, token);
   const linked = await checkOpenRequests(c, tid, token);
@@ -252,11 +254,14 @@ export async function createFromProject(c: PoolClient, tid: string, p: any, buil
   const ev = (
     await c.query(
       `INSERT INTO events (tenant_id, name, client, venue, address, start_date, end_date, notes, rentman_project_id, customer_id, pipeline_status, priority, board_position, rentman_seen, rentman_status_seen)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'medium', (SELECT COALESCE(min(board_position), 1) - 1 FROM events WHERE pipeline_status = $11), $12, $13) RETURNING id`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'medium', (SELECT COALESCE(min(board_position), 1) - 1 FROM events WHERE pipeline_status = $11), $12, $13)
+       ON CONFLICT (tenant_id, rentman_project_id) WHERE rentman_project_id IS NOT NULL DO NOTHING RETURNING id`,
       [tid, p.name, cust?.name ?? p.customer ?? null, p.location ?? null, p.loc_address ?? null, p.sd, p.ed < p.sd ? p.sd : p.ed,
        `From Rentman project ${p.number ?? p.id}${p.status_name ? ` (${p.status_name})` : ''}.`, p.id, cust?.id ?? null, status, `${p.sd}|${p.ed}`, p.status_name ?? null],
     )
   ).rows[0];
+  // Already on an event (added a moment ago by another pull): use that one.
+  if (!ev) return (await c.query('SELECT id FROM events WHERE rentman_project_id = $1', [p.id])).rows[0]?.id as string;
   await c.query('INSERT INTO event_status_log (tenant_id, event_id, from_status, to_status, reason) VALUES ($1,$2,NULL,$3,$4)', [tid, ev.id, status, `Pulled from Rentman${p.status_name ? `: ${p.status_name}` : ''}`]);
   await c.query('INSERT INTO rentman_imports (tenant_id, project_id, event_id) VALUES ($1,$2,$3) ON CONFLICT (tenant_id, project_id) DO UPDATE SET event_id = $3', [tid, p.id, ev.id]);
   if (buildShifts) await c.query('UPDATE events SET rentman_build = true WHERE id = $1', [ev.id]);

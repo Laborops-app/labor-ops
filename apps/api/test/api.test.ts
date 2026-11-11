@@ -1471,7 +1471,7 @@ test('accounting: event billing (time + schedule, per-job OT, day rates), QuickB
   assert.equal(conn.origin + conn.pathname, 'https://appcenter.intuit.com/connect/oauth2');
   assert.equal(conn.searchParams.get('scope'), 'com.intuit.quickbooks.accounting');
   const state = conn.searchParams.get('state')!;
-  assert.equal((await call(a, 'GET', `/api/quickbooks/callback?code=abcdef&realmId=123145&state=bogusbogus.signature`)).res.headers.location, '/integrations?qbo=invalid');
+  assert.equal((await call(a, 'GET', `/api/quickbooks/callback?code=abcdef&realmId=123145&state=bogusbogus.signature`)).res.headers.location, '/integrations/quickbooks?qbo=invalid');
 
   const real = globalThis.fetch;
   const seen: { url: string; init: any }[] = [];
@@ -1515,7 +1515,7 @@ test('accounting: event billing (time + schedule, per-job OT, day rates), QuickB
   }) as typeof fetch;
   try {
     const cb = await call(a, 'GET', `/api/quickbooks/callback?code=auth-code-1&realmId=123145&state=${encodeURIComponent(state)}`);
-    assert.equal(cb.res.headers.location, '/integrations?qbo=connected');
+    assert.equal(cb.res.headers.location, '/integrations/quickbooks?qbo=connected');
     const tok = seen.find((x) => x.url.startsWith('https://oauth.platform.intuit.com/'))!;
     assert.equal(tok.init.headers.authorization, 'Basic ' + Buffer.from('qb-client-id:qb-secret-123').toString('base64'));
     assert.match(tok.init.body, /grant_type=authorization_code/);
@@ -4897,4 +4897,65 @@ test('Rentman: find a project and see why it is not on the pipeline; open reques
   } finally {
     globalThis.fetch = real;
   }
+});
+
+test('Rentman role names: suggestions and re-sync match names to roles and update shifts', async () => {
+  const { suggestRole } = await import('../src/rentmanBuild');
+  const roles = ['Stagehand', 'Rigger', 'Audio Engineer', 'Audio Tech', 'Truck Driver'];
+  assert.equal(suggestRole('Stage hands', roles), 'Stagehand');
+  assert.equal(suggestRole('Rigger IATSE', roles), 'Rigger');
+  assert.equal(suggestRole('A1 Audio Engineer', roles), 'Audio Engineer');
+  assert.equal(suggestRole('Audio', roles), null); // two audio roles: unclear
+  assert.equal(suggestRole('Caterer', roles), null);
+
+  const a = await register('rmresync');
+  const tid = await tenantOf(a);
+  await call(a, 'POST', '/api/skills', { name: 'Stagehand', payRate: 25 });
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Resync', startDate: '2031-07-01', endDate: '2031-07-01' })).json.event.id;
+  await withTenant(tid, (c) => c.query('UPDATE events SET rentman_project_id = 650 WHERE id = $1', [ev]));
+  const real = globalThis.fetch;
+  const json = (d: unknown) => new Response(JSON.stringify(d), { status: 200, headers: { 'content-type': 'application/json' } });
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = String(input);
+    if (!url.startsWith('https://api.rentman.net')) return real(input, init);
+    if (url.includes('/projects/650/projectfunctions')) return json({ data: [{ id: 21, type: 'crew_function', name: 'Rigger IATSE', amount: 2, planperiod_start: '2031-07-01T14:00:00Z', planperiod_end: '2031-07-01T22:00:00Z' }] });
+    return json({ data: [] });
+  }) as typeof fetch;
+  try {
+    assert.equal((await call(a, 'PUT', '/api/rentman/settings', { token: 'good-token-123456' })).status, 200);
+    assert.equal((await call(a, 'POST', `/api/events/${ev}/rentman/build`)).status, 200);
+    assert.ok((await call(a, 'GET', `/api/events/${ev}`)).json.shifts.some((s: any) => s.role_name === 'Rigger IATSE'));
+    // A Rigger role is added later; re-sync matches the name and the shift follows
+    await call(a, 'POST', '/api/skills', { name: 'Rigger', payRate: 35 });
+    const map = (await call(a, 'GET', '/api/rentman/role-map')).json.map;
+    assert.equal(map.find((m: any) => m.rentman_name === 'rigger iatse').suggested, 'Rigger');
+    const r = (await call(a, 'POST', '/api/rentman/role-map/resync')).json;
+    assert.deepEqual(r.matched, [{ rentman: 'rigger iatse', role: 'Rigger' }]);
+    assert.equal(r.unmatched.length, 0);
+    assert.ok((await call(a, 'GET', `/api/events/${ev}`)).json.shifts.some((s: any) => s.role_name === 'Rigger'));
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+test('one event per Rentman project: pulls running together, linking and creating never make a duplicate', async () => {
+  const { createFromProject } = await import('../src/rentmanPipeline');
+  const a = await register('rmdup');
+  const tid = await tenantOf(a);
+  await withTenant(tid, (c) => c.query("INSERT INTO rentman_projects (tenant_id, id, number, name, usageperiod_start, usageperiod_end) VALUES ($1, 3331, 3331, 'Upstage Demo 123', '2031-11-13T16:00:00Z', '2031-11-14T23:00:00Z')", [tid]));
+  const row = { id: 3331, number: 3331, name: 'Upstage Demo 123', sd: '2031-11-13', ed: '2031-11-14', status_kind: 'quote', status_name: 'Pending' };
+  // Two pulls adding the same project at the same moment
+  const [e1, e2] = await Promise.all([
+    withTenant(tid, (c) => createFromProject(c, tid, row, false)),
+    withTenant(tid, (c) => createFromProject(c, tid, row, false)).catch(() => 'conflict'),
+  ]);
+  const n = (await withTenant(tid, (c) => c.query('SELECT count(*)::int AS n FROM events WHERE rentman_project_id = 3331'))).rows[0].n;
+  assert.equal(n, 1, `${e1} ${e2}`);
+  // Creating or linking another event to it is refused with a clear message
+  const made = await call(a, 'POST', '/api/events', { name: 'Again', startDate: '2031-11-13', endDate: '2031-11-14', rentmanProjectId: 3331 });
+  assert.equal(made.status, 409);
+  assert.match(made.json.error, /already on the event/);
+  const other = (await call(a, 'POST', '/api/events', { name: 'Other', startDate: '2031-11-13', endDate: '2031-11-14' })).json.event.id;
+  const link = await call(a, 'PUT', `/api/events/${other}/rentman`, { projectId: 3331 });
+  assert.equal(link.status, 409);
 });

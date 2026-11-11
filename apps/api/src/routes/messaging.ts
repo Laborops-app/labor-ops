@@ -154,8 +154,8 @@ export async function messagingRoutes(app: FastifyInstance) {
   app.get('/api/podium/callback', { preHandler: adm }, async (req, reply) => {
     const q = z.object({ code: z.string().min(5).max(2000).optional(), state: z.string().min(10).max(4000), error: z.string().optional() }).parse(req.query);
     const st = readState(q.state);
-    if (!st || st.sub !== req.user.sub || st.tid !== req.user.tid) return reply.redirect('/messaging?podium=invalid');
-    if (q.error || !q.code) return reply.redirect('/messaging?podium=denied');
+    if (!st || st.sub !== req.user.sub || st.tid !== req.user.tid) return reply.redirect('/integrations/messaging?podium=invalid');
+    if (q.error || !q.code) return reply.redirect('/integrations/messaging?podium=denied');
     try {
       const cfg = await withTenant(req.user.tid, (c) => loadSettings(c, req.user.tid));
       const t = await exchangeCode(cfg.podium, q.code, redirectUri());
@@ -164,10 +164,10 @@ export async function messagingRoutes(app: FastifyInstance) {
         await audit(c, req.user.tid, req.user.sub, 'messaging.podium.connect', 'integration', null);
       });
       invalidateSettings(req.user.tid);
-      return reply.redirect('/messaging?podium=connected');
+      return reply.redirect('/integrations/messaging?podium=connected');
     } catch (e) {
       req.log.error(e);
-      return reply.redirect('/messaging?podium=failed');
+      return reply.redirect('/integrations/messaging?podium=failed');
     }
   });
 

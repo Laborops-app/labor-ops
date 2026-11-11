@@ -357,6 +357,10 @@ export async function eventRoutes(app: FastifyInstance) {
       if (made && !b.address) b.address = b.newCustomer?.address || undefined;
       const rmp = b.rentmanProjectId ? (await c.query('SELECT p.id, p.customer_id, lc.name AS loc_name, lc.address AS loc_address FROM rentman_projects p LEFT JOIN rentman_contacts lc ON lc.id = p.location_id WHERE p.id = $1', [b.rentmanProjectId])).rows[0] : null;
       const rentmanId: number | null = rmp ? rmp.id : null;
+      if (rentmanId) {
+        const other = (await c.query('SELECT name FROM events WHERE rentman_project_id = $1', [rentmanId])).rows[0];
+        if (other) throw new CustomerError(`That Rentman project is already on the event “${other.name}”. Open that event instead.`, 409);
+      }
       // A linked Rentman project fills in the customer (created in the CRM if new), venue and address when they were left empty.
       let custRow = cust;
       if (!custRow && rmp?.customer_id) custRow = await customerForRentman(c, req.user.tid, rmp.customer_id);

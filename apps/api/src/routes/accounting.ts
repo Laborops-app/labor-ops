@@ -116,8 +116,8 @@ export async function accountingRoutes(app: FastifyInstance) {
   app.get('/api/quickbooks/callback', { preHandler: adm }, async (req, reply) => {
     const q = z.object({ code: z.string().min(5).max(2000).optional(), state: z.string().min(10).max(4000), realmId: z.string().regex(/^\d{1,30}$/).optional(), error: z.string().optional() }).parse(req.query);
     const st = readState(q.state);
-    if (!st || st.sub !== req.user.sub || st.tid !== req.user.tid) return reply.redirect('/integrations?qbo=invalid');
-    if (q.error || !q.code || !q.realmId) return reply.redirect('/integrations?qbo=denied');
+    if (!st || st.sub !== req.user.sub || st.tid !== req.user.tid) return reply.redirect('/integrations/quickbooks?qbo=invalid');
+    if (q.error || !q.code || !q.realmId) return reply.redirect('/integrations/quickbooks?qbo=denied');
     try {
       await withTenant(req.user.tid, async (c) => {
         const cfg = await loadQbo(c);
@@ -128,10 +128,10 @@ export async function accountingRoutes(app: FastifyInstance) {
         if (name) await saveQbo(c, req.user.tid, null, { companyName: name });
         await audit(c, req.user.tid, req.user.sub, 'accounting.quickbooks.connect', 'integration', null, { realmId: q.realmId });
       });
-      return reply.redirect('/integrations?qbo=connected');
+      return reply.redirect('/integrations/quickbooks?qbo=connected');
     } catch (e) {
       req.log.error(e);
-      return reply.redirect('/integrations?qbo=failed');
+      return reply.redirect('/integrations/quickbooks?qbo=failed');
     }
   });
 

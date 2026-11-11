@@ -15,7 +15,21 @@ const readOpen = (): string[] => {
  * A card that collapses to a single header row. Closed by default; which panels are open is remembered on this device.
  * `forceOpen` opens it regardless (for example after returning from an OAuth sign-in).
  */
-export default function Panel({ id, title, status, summary, forceOpen, children }: { id: string; title: string; status?: React.ReactNode; summary?: string; forceOpen?: boolean; children: React.ReactNode }) {
+export default function Panel({ id, title, status, summary, forceOpen, flat, children }: { id: string; title: string; status?: React.ReactNode; summary?: string; forceOpen?: boolean; flat?: boolean; children: React.ReactNode }) {
+  // On an integration's own page: always open, with a plain header.
+  if (flat)
+    return (
+      <section className="card panel open flat" id={id}>
+        <div className="int-head">
+          <div>
+            <h2 style={{ margin: 0 }}>{title}</h2>
+            {summary && <p className="muted small" style={{ margin: '4px 0 0' }}>{summary}</p>}
+          </div>
+          {status}
+        </div>
+        <div className="panel-body">{children}</div>
+      </section>
+    );
   const [open, setOpen] = useState(false);
   useEffect(() => {
     setOpen(!!forceOpen || readOpen().includes(id));

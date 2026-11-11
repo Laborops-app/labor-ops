@@ -21,7 +21,8 @@ type Lookups = { items: { id: string; name: string }[]; accounts: { id: string; 
 const PROVIDERS: [Provider, string][] = [['adp', 'ADP'], ['gusto', 'Gusto'], ['quickbooks', 'QuickBooks Payroll']];
 
 /** QuickBooks (Online and Desktop) and payroll settings, shown as collapsible panels on the Integrations page. */
-export default function AccountingPanels({ qbo }: { qbo: string | null }) {
+export default function AccountingPanels({ qbo, only }: { qbo: string | null; only?: 'quickbooks' | 'desktop' | 'payroll' }) {
+  const show = (k: 'quickbooks' | 'desktop' | 'payroll') => !only || only === k;
   const [d, setD] = useState<Data | null>(null);
   const [s, setS] = useState<Settings | null>(null);
   const [keys, setKeys] = useState({ clientId: '', clientSecret: '', environment: 'sandbox' as 'sandbox' | 'production' });
@@ -82,12 +83,14 @@ export default function AccountingPanels({ qbo }: { qbo: string | null }) {
 
   return (
     <>
-      <h2 className="panel-group-title">Accounting &amp; payroll</h2>
-      <p className="muted small">LaborOps sends billing to QuickBooks and hours to your payroll provider. Invoices are created from an event (the <b>Invoice</b> button), and pay periods are exported on the <b>Payroll</b> page.</p>
+      {!only && <h2 className="panel-group-title">Accounting &amp; payroll</h2>}
+      {!only && <p className="muted small">LaborOps sends billing to QuickBooks and hours to your payroll provider. Invoices are created from an event (the <b>Invoice</b> button), and pay periods are exported on the <b>Payroll</b> page.</p>}
       {error && <Banner onClose={() => setError('')}>{error}</Banner>}
       {ok && <Banner kind="ok" onClose={() => setOk('')}>{ok}</Banner>}
 
+      {show('quickbooks') && (<>
       <Panel
+        flat={!!only}
         id="quickbooks"
         title="QuickBooks Online"
         summary="Send event invoices and crew hours to QuickBooks"
@@ -191,8 +194,10 @@ export default function AccountingPanels({ qbo }: { qbo: string | null }) {
           </details>
         </Panel>
       )}
+      </>)}
 
-      <Panel id="qb-desktop" title="QuickBooks Desktop" summary="Settings for the .IIF invoice import file">
+      {show('desktop') && (
+      <Panel flat={!!only} id="qb-desktop" title="QuickBooks Desktop" summary="Settings for the .IIF invoice import file">
         <p className="muted small">On an event, <b>Download for QuickBooks Desktop</b> gives an .IIF file. In QuickBooks Desktop use File › Utilities › Import › IIF Files. The customer, accounts and items must already exist there with these exact names.</p>
         <div className="settings-grid">
           <label>
@@ -219,8 +224,11 @@ export default function AccountingPanels({ qbo }: { qbo: string | null }) {
         </div>
         <button className="btn primary" disabled={!!busy} onClick={() => saveSettings('Desktop file settings saved.')}>Save</button>
       </Panel>
+      )}
 
+      {show('payroll') && (
       <Panel
+        flat={!!only}
         id="payroll"
         title="Payroll"
         summary="ADP, Gusto and QuickBooks Payroll exports"
@@ -406,6 +414,7 @@ export default function AccountingPanels({ qbo }: { qbo: string | null }) {
         {s.payroll.enabled.includes('quickbooks') && !q.connected && <p className="small muted">QuickBooks Payroll can take hours straight from LaborOps once QuickBooks Online is connected above; until then use its file.</p>}
         <button className="btn primary" disabled={!!busy} onClick={() => saveSettings('Payroll settings saved.')}>Save payroll settings</button>
       </Panel>
+      )}
     </>
   );
 }

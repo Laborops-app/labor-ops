@@ -211,3 +211,67 @@ export async function keepConflict(c: PoolClient, eventId: string, key: string, 
   // Gone from Rentman: the shift stays as an ordinary shift of this event.
   return (await c.query('UPDATE shifts SET rentman_key = NULL, rentman_hash = NULL WHERE event_id = $1 AND rentman_key = $2', [eventId, key])).rowCount;
 }
+
+const words = (s: string) => s.toLowerCase().replace(/\(.*?\)/g, ' ').split(/[^a-z0-9]+/).filter((w) => w.length > 2).map((w) => (w.length > 4 ? w.replace(/s$/, '') : w));
+
+/**
+ * The LaborOps role a Rentman name most likely means, when only one fits: same name ("Stage hands" → Stagehand), or a
+ * role whose name is inside it ("Rigger IATSE" → Rigger, "A1 Audio Engineer" → Audio Engineer). Null when unclear.
+ */
+export function suggestRole(name: string, roles: string[]): string | null {
+  const k = roleKeyOf(name);
+  const exact = roles.filter((r) => roleKeyOf(r) === k);
+  if (exact.length === 1) return exact[0];
+  const contains = roles.filter((r) => { const rk = roleKeyOf(r); return rk.length >= 4 && (k.includes(rk) || rk.includes(k)); });
+  if (contains.length === 1) return contains[0];
+  // Every word of the role appears in the Rentman name.
+  const nw = new Set(words(name));
+  const byWords = roles.filter((r) => { const rw = words(r); return rw.length > 0 && rw.every((w) => nw.has(w)); });
+  if (byWords.length === 1) return byWords[0];
+  if (byWords.length > 1) { const longest = byWords.sort((a, b) => words(b).length - words(a).length); if (words(longest[0]).length > words(longest[1]).length) return longest[0]; }
+  return null;
+}
+
+/**
+ * Re-sync role names with Rentman: read the crew function names on every linked upcoming event again, match the ones
+ * nobody has mapped to a LaborOps role where it's clear, then rebuild the events that follow Rentman so shifts pick
+ * up the roles (staffed or edited shifts are listed to decide, as always).
+ */
+export async function resyncRoleNames(c: PoolClient, tid: string, by: string, token: string) {
+  const events = (
+    await c.query(
+      `SELECT id, rentman_build FROM events WHERE rentman_project_id IS NOT NULL AND archived_at IS NULL
+          AND pipeline_status NOT IN ('completed', 'canceled') AND end_date >= current_date - 1 ORDER BY start_date LIMIT 80`,
+    )
+  ).rows;
+  // 1) Read the names (a preview build records any it can't match).
+  for (const e of events) {
+    await c.query('SAVEPOINT rs');
+    try { await buildFromRentman(c, tid, by, e.id, token, { apply: false }); await c.query('RELEASE SAVEPOINT rs'); }
+    catch { await c.query('ROLLBACK TO SAVEPOINT rs'); }
+  }
+  // 2) Match the unmapped names where one role clearly fits.
+  const roles = (await c.query('SELECT name FROM skills WHERE active')).rows.map((r) => r.name as string);
+  const open = (await c.query('SELECT rentman_name FROM rentman_role_map WHERE role_name IS NULL')).rows.map((r) => r.rentman_name as string);
+  const matched: { rentman: string; role: string }[] = [];
+  for (const n of open) {
+    const role = suggestRole(n, roles);
+    if (!role) continue;
+    await c.query('UPDATE rentman_role_map SET role_name = $2 WHERE rentman_name = $1', [n, role]);
+    matched.push({ rentman: n, role });
+  }
+  // 3) Apply to events that follow Rentman.
+  let updated = 0, conflicts = 0;
+  for (const e of events.filter((x) => x.rentman_build)) {
+    await c.query('SAVEPOINT rs');
+    try {
+      const r = await buildFromRentman(c, tid, by, e.id, token, { apply: true });
+      await c.query('RELEASE SAVEPOINT rs');
+      updated += (r.result?.updated ?? 0) + (r.result?.added ?? 0);
+      conflicts += r.result?.conflicts ?? 0;
+    } catch { await c.query('ROLLBACK TO SAVEPOINT rs'); }
+  }
+  const unmatched = (await c.query('SELECT rentman_name FROM rentman_role_map WHERE role_name IS NULL ORDER BY rentman_name')).rows.map((r) => r.rentman_name as string);
+  await audit(c, tid, by, 'rentman.roles_resync', 'integration', null, { events: events.length, matched: matched.length, unmatched: unmatched.length, updated });
+  return { events: events.length, matched, unmatched, shiftsUpdated: updated, conflicts };
+}

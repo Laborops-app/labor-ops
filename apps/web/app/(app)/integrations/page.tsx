@@ -1,391 +1,78 @@
 'use client';
-import { Suspense, useEffect, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import Link from 'next/link';
+import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
-import Panel from '@/components/Panel';
-import AccountingPanels from '@/components/AccountingPanels';
-import type { Me } from '@/lib/api';
-import { Banner } from '@/components/ui';
 import { api } from '@/lib/api';
-import RentmanOptions from '@/components/RentmanOptions';
 
-type RunResult = { created: number; moved: number; datesUpdated: number; flagged: number; skipped: number; built?: number; shiftChanges?: number; errors?: string };
-type St = {
-  connected: boolean; projects: number; lastSync: string | null;
-  pipeline?: { autoEvents: boolean; fromDate: string | null; skipCanceled: boolean; buildShifts?: boolean; lastRunAt: string | null; lastResult: RunResult | null };
-};
-const runText = (r: RunResult) =>
-  r.errors ? `Failed: ${r.errors}` : [`${r.created} new event${r.created === 1 ? '' : 's'}`, `${r.moved} moved`, r.datesUpdated ? `${r.datesUpdated} re-dated` : '', r.shiftChanges ? `${r.shiftChanges} shift change${r.shiftChanges === 1 ? '' : 's'} from Rentman` : '', r.flagged ? `${r.flagged} sent to a coordinator to check` : ''].filter(Boolean).join(', ');
+type Status = { text: string; tone: 'on' | 'off' | 'warn' } | null;
+type Card = { slug: string; title: string; blurb: string; icon: React.ReactNode; group: 'apps' | 'money' | 'comms' };
 
-type Found = {
-  projects: { id: number; number: number | null; name: string; status: string | null; start: string | null; end: string | null; event: { id: string; name: string } | null; reason: string; canAdd: boolean }[];
-  requests: { id: number; name: string; status: string; start: string | null; event: { id: string; name: string } | null; reason: string }[];
-};
-/** "Why isn't my Rentman project on the pipeline?": search by project number or name and see what LaborOps did with it. */
-function FindRentman() {
-  const [q, setQ] = useState('');
-  const [r, setR] = useState<Found | null>(null);
-  const [busy, setBusy] = useState('');
-  const [err, setErr] = useState('');
-  const [msg, setMsg] = useState('');
-  const find = async (e?: React.FormEvent) => {
-    e?.preventDefault();
-    if (!q.trim()) return;
-    setBusy('find'); setErr(''); setMsg('');
-    try { setR(await api<Found>(`/api/rentman/find?q=${encodeURIComponent(q.trim())}`)); } catch (x) { setErr((x as Error).message); } finally { setBusy(''); }
-  };
-  return (
-    <div className="rm-find">
-      <h4>Missing a project?</h4>
-      <form className="row" style={{ gap: 8, flexWrap: 'wrap' }} onSubmit={find}>
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Rentman project number or name" style={{ maxWidth: 300 }} aria-label="Rentman project number or name" />
-        <button className="btn small" disabled={!!busy || !q.trim()}>{busy === 'find' ? 'Checking Rentman…' : 'Find'}</button>
-      </form>
-      {err && <p className="error small">{err}</p>}
-      {msg && <p className="small" style={{ color: 'var(--good)' }}>{msg}</p>}
-      {r && (
-        r.projects.length + r.requests.length === 0 ? <p className="muted small">Nothing in Rentman matches “{q}”. Check the number, or that the API token’s Rentman user can see that project.</p> : (
-          <ul className="plain small">
-            {r.projects.map((p) => (
-              <li key={`p${p.id}`}>
-                <b>{p.number ? `#${p.number} ` : ''}{p.name}</b> <span className="muted">· project{p.status ? ` · ${p.status}` : ''}{p.start ? ` · ${p.start}${p.end && p.end !== p.start ? ` to ${p.end}` : ''}` : ''}</span>
-                <div>{p.reason}</div>
-                <div className="row" style={{ gap: 8, marginTop: 4 }}>
-                  {p.event && <a className="btn ghost small" href={`/events/${p.event.id}`}>Open event</a>}
-                  {!p.event && p.canAdd && (
-                    <button type="button" className="btn small primary" disabled={!!busy} onClick={async () => {
-                      setBusy(`add${p.id}`); setErr('');
-                      try { const x = await api<{ eventId: string }>(`/api/rentman/projects/${p.id}/add`, { body: {} }); setMsg(`${p.name} added to the pipeline.`); await find(); window.open(`/events/${x.eventId}`, '_self'); }
-                      catch (x) { setErr((x as Error).message); } finally { setBusy(''); }
-                    }}>{busy === `add${p.id}` ? 'Adding…' : 'Add to pipeline now'}</button>
-                  )}
-                </div>
-              </li>
-            ))}
-            {r.requests.map((x) => (
-              <li key={`r${x.id}`}>
-                <b>{x.name}</b> <span className="muted">· project request {x.id} · {x.status}{x.start ? ` · ${x.start}` : ''}</span>
-                <div>{x.reason}</div>
-                {x.event && <a className="btn ghost small" href={`/events/${x.event.id}`}>Open event</a>}
-              </li>
-            ))}
-          </ul>
-        )
-      )}
-    </div>
-  );
-}
+const I = (d: string) => (
+  <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>
+);
+export const INTEGRATIONS: Card[] = [
+  { slug: 'rentman', title: 'Rentman', group: 'apps', blurb: 'Projects into the pipeline, crew needs into shifts, quotes, invoices; hours and time off back.', icon: I('M3 7h18M3 12h18M3 17h12M17 15l2 2 4-4') },
+  { slug: 'academy', title: 'Upstage Academy', group: 'apps', blurb: 'Certificates students earn are added to their crew profile.', icon: I('M22 10 12 5 2 10l10 5 10-5ZM6 12v5c3 2 9 2 12 0v-5') },
+  { slug: 'quickbooks', title: 'QuickBooks Online', group: 'money', blurb: 'Send event invoices and crew hours to QuickBooks.', icon: I('M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18ZM9 8v8m6-8v8M9 12h6') },
+  { slug: 'quickbooks-desktop', title: 'QuickBooks Desktop', group: 'money', blurb: 'Settings for the .IIF invoice import file.', icon: I('M4 5h16v11H4zM8 20h8M12 16v4') },
+  { slug: 'payroll', title: 'Payroll', group: 'money', blurb: 'ADP, Gusto and QuickBooks Payroll exports.', icon: I('M3 7h18v10H3zM7 12h.01M17 12h.01M12 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z') },
+  { slug: 'messaging', title: 'Email & texting', group: 'comms', blurb: 'Email (Amazon SES) and texts (Zernio or Podium) to crew; send a test.', icon: I('M4 6h16v12H4zM4 7l8 6 8-6') },
+];
+const GROUPS: [Card['group'], string][] = [['apps', 'Apps'], ['money', 'Accounting & payroll'], ['comms', 'Messages to crew']];
 
-/** Rentman projects into the pipeline: on/off, from which date, skip canceled projects. */
-function RentmanPipeline({ s, busy, act }: { s: St; busy: string; act: (key: string, msg: string, fn: () => Promise<unknown>) => Promise<boolean> }) {
-  const p = s.pipeline ?? { autoEvents: false, fromDate: null, skipCanceled: true, buildShifts: true, lastRunAt: null, lastResult: null };
-  const [from, setFrom] = useState(p.fromDate ?? '');
-  const [skip, setSkip] = useState(p.skipCanceled);
-  const [build, setBuild] = useState(p.buildShifts ?? true);
-  const save = (autoEvents: boolean) =>
-    act('pipe', autoEvents ? 'Rentman projects now come into the pipeline. Syncing…' : 'Rentman projects no longer come into the pipeline on their own.', async () => {
-      await api('/api/rentman/pipeline', { method: 'PUT', body: { autoEvents, fromDate: from || null, skipCanceled: skip, buildShifts: build } });
-      if (autoEvents) await api('/api/rentman/sync', { body: {} });
-    });
-  return (
-    <>
-      <h3>Pipeline</h3>
-      <label className="check">
-        <input type="checkbox" checked={p.autoEvents} disabled={!!busy} onChange={(e) => save(e.target.checked)} />
-        <span>Add new Rentman projects to the pipeline as events</span>
-      </label>
-      <p className="muted small">
-        Checked every 30 minutes and on each sync. Each project becomes an event with its customer, venue and dates, in the column its Rentman status
-        matches (concept or inquiry → New, option → Quote, confirmed → Confirmed). Open Rentman project requests (not accepted yet) come in as New events too,
-        and link to the project once Rentman accepts them. Linked events follow Rentman’s status. A project canceled in
-        Rentman cancels its event only if nobody is booked; otherwise you’re told. New dates are copied while an event has no days or shifts; otherwise you’re told.
-      </p>
-      <div className="row" style={{ flexWrap: 'wrap', gap: 12, alignItems: 'end' }}>
-        <label style={{ maxWidth: 220 }}>
-          Projects ending on or after
-          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={skip} onChange={(e) => setSkip(e.target.checked)} /> Skip projects already canceled
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={build} onChange={(e) => setBuild(e.target.checked)} /> Build days and shifts from Rentman’s crew and transport
-        </label>
-        {(from !== (p.fromDate ?? '') || skip !== p.skipCanceled || build !== (p.buildShifts ?? true)) && (
-          <button type="button" className="btn small" disabled={!!busy} onClick={() => save(p.autoEvents)}>Save</button>
-        )}
-      </div>
-      {p.lastRunAt && p.lastResult && (
-        <p className="small">Last run {new Date(p.lastRunAt).toLocaleString()}: {runText(p.lastResult)}.</p>
-      )}
-      <FindRentman />
-      <RoleMap />
-    </>
-  );
-}
-
-/** Rentman function names that aren't a LaborOps role by name: pick the role once. */
-function RoleMap() {
-  const [d, setD] = useState<{ map: { rentman_name: string; role_name: string | null }[]; roles: string[] } | null>(null);
-  const [msg, setMsg] = useState('');
-  const load = () => api<NonNullable<typeof d>>('/api/rentman/role-map').then(setD).catch(() => {});
-  useEffect(() => { load(); }, []);
-  if (!d || !d.map.length) return null;
-  const set = async (rentmanName: string, roleName: string) => {
-    await api('/api/rentman/role-map', { method: 'PUT', body: { rentmanName, roleName: roleName || null } });
-    setMsg(`“${rentmanName}” ${roleName ? `becomes ${roleName}` : 'keeps its Rentman name'} from the next sync.`);
-    load();
-  };
-  return (
-    <>
-      <h3>Role names</h3>
-      <p className="muted small">Rentman crew functions whose names aren’t a LaborOps role. Pick the role each one becomes; shifts not yet staffed or edited change on the next sync.</p>
-      {msg && <p className="small">{msg}</p>}
-      <div className="table-wrap">
-        <table className="table">
-          <thead><tr><th>Rentman function</th><th>LaborOps role</th></tr></thead>
-          <tbody>
-            {d.map.map((m) => (
-              <tr key={m.rentman_name}>
-                <td>{m.rentman_name}</td>
-                <td>
-                  <select value={m.role_name ?? ''} onChange={(e) => set(m.rentman_name, e.target.value)} aria-label={`Role for ${m.rentman_name}`}>
-                    <option value="">Keep Rentman’s name</option>
-                    {d.roles.map((r) => <option key={r} value={r}>{r}</option>)}
-                  </select>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </>
-  );
-}
-
-type Ac = {
-  url: string;
-  siteUrl: string;
-  secretSet: boolean;
-  stats: { total: number; applied: number };
-  recent: { code: string; email: string; title: string; kind: string; issued_at: string; applied_at: string | null; user_name: string | null }[];
-};
-
-function Academy() {
-  const [a, setA] = useState<Ac | null>(null);
-  const [secret, setSecret] = useState('');
-  const [site, setSite] = useState<string | null>(null);
-  const [msg, setMsg] = useState('');
-  const [error, setError] = useState('');
-  const load = () => api<Ac>('/api/integrations/academy').then(setA).catch((e) => setError(e.message));
+/** Integrations: one card per connection with where it stands; each opens its own page. */
+function Body() {
+  const [st, setSt] = useState<Record<string, Status>>({});
   useEffect(() => {
-    load();
+    // Returning from a QuickBooks or Podium sign-in that still points here.
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('qbo')) { window.location.replace(`/integrations/quickbooks?qbo=${q.get('qbo')}`); return; }
+    if (q.get('podium')) { window.location.replace(`/integrations/messaging?podium=${q.get('podium')}`); return; }
+    const set = (k: string, v: Status) => setSt((x) => ({ ...x, [k]: v }));
+    api<{ connected: boolean; projects: number; pipeline?: { autoEvents: boolean } }>('/api/rentman/settings')
+      .then((r) => set('rentman', r.connected ? { text: `Connected · ${r.projects} projects`, tone: 'on' } : { text: 'Not connected', tone: 'off' })).catch(() => set('rentman', null));
+    api<{ secretSet: boolean; stats: { applied: number; total: number } }>('/api/integrations/academy')
+      .then((r) => set('academy', r.secretSet ? { text: `Set up · ${r.stats.applied} certificates added`, tone: 'on' } : { text: 'Not set up', tone: 'off' })).catch(() => set('academy', null));
+    api<{ quickbooks: { connected: boolean; expired: boolean; companyName?: string | null }; settings: { payroll: { enabled: string[] } } }>('/api/accounting')
+      .then((r) => {
+        const q2 = r.quickbooks;
+        set('quickbooks', q2.connected && !q2.expired ? { text: `Connected${q2.companyName ? ` · ${q2.companyName}` : ''}`, tone: 'on' } : q2.expired ? { text: 'Connection expired', tone: 'warn' } : { text: 'Not connected', tone: 'off' });
+        set('quickbooks-desktop', { text: 'File export', tone: 'on' });
+        const names: Record<string, string> = { adp: 'ADP', gusto: 'Gusto', qbo: 'QuickBooks Payroll', quickbooks: 'QuickBooks Payroll' };
+        set('payroll', { text: r.settings.payroll.enabled.map((p) => names[p] ?? p).join(', ') || 'None', tone: 'on' });
+      }).catch(() => { set('quickbooks', null); set('payroll', null); });
+    api<{ email: { live: boolean }; sms: { live: boolean; provider: string } }>('/api/messaging')
+      .then((r) => set('messaging', { text: `Email ${r.email.live ? 'on' : 'off'} · Texts ${r.sms.live ? `via ${r.sms.provider === 'podium' ? 'Podium' : 'Zernio'}` : 'off'}`, tone: r.email.live && r.sms.live ? 'on' : r.email.live || r.sms.live ? 'warn' : 'off' }))
+      .catch(() => set('messaging', null));
   }, []);
-  if (!a) return error ? <Banner>{error}</Banner> : null;
-  return (
-    <Panel
-      id="academy"
-      title="Upstage Academy"
-      summary="Add certificates students earn to their profiles"
-      status={a.secretSet ? <span className="chip open">Set up · {a.stats.applied}/{a.stats.total} added</span> : <span className="chip">Not set up</span>}
-    >
-      <p className="muted small">
-        Certificates students earn in the academy are added to their profile automatically. A student is matched by the email in their LaborOps account, which must be the same as their academy username. In the academy go to Academy → LaborOps, paste the webhook URL below, and paste the secret you generate here.
-      </p>
-      {error && <Banner onClose={() => setError('')}>{error}</Banner>}
-      {msg && <Banner kind="ok" onClose={() => setMsg('')}>{msg}</Banner>}
-      <form
-        className="row"
-        style={{ alignItems: 'flex-end', gap: 8, marginBottom: 12 }}
-        onSubmit={async (e) => {
-          e.preventDefault();
-          setError('');
-          try {
-            await api('/api/integrations/academy/site', { method: 'PUT', body: { url: site ?? a.siteUrl } });
-            setSite(null);
-            setMsg('Academy address saved. Course groups can now be synced on the Trainings page.');
-            await load();
-          } catch (x) {
-            setError((x as Error).message);
-          }
-        }}
-      >
-        <label style={{ flex: 1, margin: 0 }}>
-          Academy web address <span className="muted small">(filled in automatically after the academy&apos;s first test ping)</span>
-          <input type="url" value={site ?? a.siteUrl} onChange={(e) => setSite(e.target.value)} placeholder="https://academy.example.com" />
-        </label>
-        <button className="btn" disabled={site === null || site === a.siteUrl}>Save address</button>
-      </form>
-      <label>
-        Webhook URL
-        <input readOnly value={a.url} onFocus={(e) => e.currentTarget.select()} />
-      </label>
-      {secret && (
-        <label>
-          New secret <span className="muted small">(shown once. Copy it into the academy now)</span>
-          <input readOnly value={secret} onFocus={(e) => e.currentTarget.select()} />
-        </label>
-      )}
-      <div className="row">
-        <button
-          className="btn primary"
-          onClick={async () => {
-            if (a.secretSet && !confirm('Create a new secret? The academy stops syncing until you paste the new one there.')) return;
-            setError('');
-            try {
-              const r = await api<{ secret: string }>('/api/integrations/academy/secret', { body: {} });
-              setSecret(r.secret);
-              await load();
-            } catch (e) {
-              setError((e as Error).message);
-            }
-          }}
-        >
-          {a.secretSet ? 'Create a new secret' : 'Create secret'}
-        </button>
-        <button
-          className="btn ghost"
-          onClick={async () => {
-            setError('');
-            try {
-              const r = await api<{ checked: number; matched: number }>('/api/integrations/academy/apply', { body: {} });
-              setMsg(`${r.matched} of ${r.checked} waiting certificates matched a user.`);
-              await load();
-            } catch (e) {
-              setError((e as Error).message);
-            }
-          }}
-        >
-          Match waiting certificates
-        </button>
-      </div>
-      <p className="muted small">
-        {a.stats.applied} of {a.stats.total} received certificates are on a profile.
-      </p>
-      {a.recent.length > 0 && (
-        <table>
-          <thead>
-            <tr><th>Certificate</th><th>Email</th><th>Result</th></tr>
-          </thead>
-          <tbody>
-            {a.recent.map((r) => (
-              <tr key={r.code}>
-                <td>{r.title}{r.kind === 'group' ? ' (group)' : ''}</td>
-                <td>{r.email}</td>
-                <td>{r.applied_at ? `Added to ${r.user_name ?? 'profile'}` : 'No matching user yet'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </Panel>
-  );
-}
-
-function Body({ me }: { me: Me }) {
-  const params = useSearchParams();
-  const [s, setS] = useState<St | null>(null);
-  const [token, setToken] = useState('');
-  const [error, setError] = useState('');
-  const [ok, setOk] = useState('');
-  const [busy, setBusy] = useState('');
-  const load = () => api<St>('/api/rentman/settings').then(setS).catch((e) => setError(e.message));
-  useEffect(() => {
-    load();
-  }, []);
-  const act = async (key: string, msg: string, fn: () => Promise<unknown>) => {
-    setError('');
-    setOk('');
-    setBusy(key);
-    try {
-      await fn();
-      setOk(msg);
-      await load();
-      return true;
-    } catch (e) {
-      setError((e as Error).message);
-      return false;
-    } finally {
-      setBusy('');
-    }
-  };
-  if (!s) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
   return (
     <>
       <h1>Integrations</h1>
-      <p className="muted">Click an integration to open its settings.</p>
-      <h2 className="panel-group-title">Apps</h2>
-      {error && <Banner onClose={() => setError('')}>{error}</Banner>}
-      {ok && <Banner kind="ok" onClose={() => setOk('')}>{ok}</Banner>}
-      <Panel
-        id="rentman"
-        title="Rentman"
-        summary="Link events to Rentman projects and sync customers"
-        status={s.connected ? <span className="chip open">Connected · {s.projects} project{s.projects === 1 ? '' : 's'}</span> : <span className="chip">Not connected</span>}
-      >
-        <p className="muted small">
-          Link events to Rentman projects and see the project details and equipment rentals on the event page. In Rentman, open Settings → Extensions → API, create an API token and paste it here. The token is stored encrypted and is never shown again.
-        </p>
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            if (await act('save', 'Rentman is connected. Syncing projects…', () => api('/api/rentman/settings', { method: 'PUT', body: { token } }))) {
-              setToken('');
-              await act('sync', 'Rentman is connected and projects are synced.', () => api('/api/rentman/sync', { body: {} }));
-            }
-          }}
-        >
-          <label>
-            API token {s.connected && <span className="muted small">(saved, paste a new one to replace it)</span>}
-            <input type="password" value={token} onChange={(e) => setToken(e.target.value)} autoComplete="new-password" placeholder={s.connected ? '••••••••••••' : ''} required minLength={10} />
-          </label>
-          <div className="row">
-            <button className="btn primary" disabled={!!busy}>{s.connected ? 'Replace token' : 'Connect Rentman'}</button>
-            {s.connected && (
-              <button type="button" className="btn ghost" disabled={!!busy} onClick={() => confirm('Disconnect Rentman? Linked events keep their last synced details.') && act('off', 'Rentman is disconnected.', () => api('/api/rentman/settings', { method: 'DELETE' }))}>
-                Disconnect
-              </button>
-            )}
+      <p className="muted">Connect LaborOps to the tools you already use. Open one to set it up.</p>
+      {GROUPS.map(([g, label]) => (
+        <section key={g} className="int-group">
+          <h2 className="panel-group-title">{label}</h2>
+          <div className="int-grid">
+            {INTEGRATIONS.filter((c) => c.group === g).map((c) => {
+              const s = st[c.slug];
+              return (
+                <Link key={c.slug} href={`/integrations/${c.slug}`} className="int-card">
+                  <span className="int-ico">{c.icon}</span>
+                  <span className="int-txt">
+                    <b>{c.title}</b>
+                    <span className="muted small">{c.blurb}</span>
+                  </span>
+                  <span className={`int-status ${s?.tone ?? ''}`}>{s === undefined ? '…' : s ? s.text : 'Open to check'}</span>
+                </Link>
+              );
+            })}
           </div>
-        </form>
-        {s.connected && (
-          <>
-            <h3>Projects</h3>
-            <p className="small">
-              {s.projects} project{s.projects === 1 ? '' : 's'} synced{s.lastSync ? `, last at ${new Date(s.lastSync).toLocaleString()}` : ''}.
-            </p>
-            <p className="muted small">Syncing also brings Rentman's customers into Customers (contact people and addresses are added, nothing you already entered is overwritten). Customers you create here can be sent the other way; one with the same name in Rentman is linked, not duplicated.</p>
-            <div className="row">
-            <button className="btn" disabled={!!busy} onClick={() => act('sync', 'Projects and customers synced.', async () => {
-              const r = await api<{ pipeline?: RunResult }>('/api/rentman/sync', { body: {} });
-              if (r.pipeline && s.pipeline?.autoEvents) setTimeout(() => setOk(`Projects and customers synced. Pipeline: ${runText(r.pipeline!)}.`), 0);
-            })}>
-              {busy === 'sync' ? 'Syncing…' : 'Sync projects & customers now'}
-            </button>
-            <button className="btn" disabled={!!busy} onClick={() => act('push', 'Customers sent to Rentman.', () => api('/api/rentman/push-customers', { body: {} }))}>
-              {busy === 'push' ? 'Sending…' : 'Send new customers to Rentman'}
-            </button>
-            </div>
-            <RentmanPipeline s={s} busy={busy} act={act} />
-            <RentmanOptions />
-          </>
-        )}
-      </Panel>
-      <Academy />
-      <AccountingPanels qbo={params.get('qbo')} />
-
+        </section>
+      ))}
     </>
   );
 }
 
 export default function Page() {
-  return (
-    <Shell roles={['admin']}>
-      {(me) => (
-        <Suspense fallback={<div className="muted">Loading…</div>}>
-          <Body me={me} />
-        </Suspense>
-      )}
-    </Shell>
-  );
+  return <Shell roles={['admin']}>{() => <Body />}</Shell>;
 }

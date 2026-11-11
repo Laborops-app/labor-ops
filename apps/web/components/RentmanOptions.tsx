@@ -25,7 +25,8 @@ function Toggle({ on, label, help, disabled, onChange }: { on: boolean; label: s
 }
 
 /** Integrations › Rentman: every optional feature, each with its own switch. */
-export default function RentmanOptions() {
+export default function RentmanOptions({ section }: { section?: 'updates' | 'crew' | 'back' | 'events' }) {
+  const show = (k: 'updates' | 'crew' | 'back' | 'events') => !section || section === k;
   const [o, setO] = useState<Opts | null>(null);
   const [crew, setCrew] = useState<{ crew: Crew[]; notInRentman: { id: string; name: string; email: string }[]; people: { id: string; name: string }[] } | null>(null);
   const [push, setPush] = useState<Push | null>(null);
@@ -64,11 +65,12 @@ export default function RentmanOptions() {
 
   return (
     <div className="rm-options">
-      <h3>More from Rentman</h3>
-      <p className="muted small">Each part is off until you switch it on.</p>
+      {!section && <h3>More from Rentman</h3>}
+      <p className="muted small">Each option is off until you switch it on.</p>
       {err && <Banner onClose={() => setErr('')}>{err}</Banner>}
       {msg && <Banner kind="ok" onClose={() => setMsg('')}>{msg}</Banner>}
 
+      {show('updates') && <>
       <h4>Your Rentman address</h4>
       <div className="row rm-sub" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <input value={acct} onChange={(e) => setAcct(e.target.value)} placeholder="yourcompany.rentmanapp.com" style={{ maxWidth: 320 }} aria-label="Rentman address" />
@@ -93,6 +95,8 @@ export default function RentmanOptions() {
         </div>
       )}
 
+      </>}
+      {show('crew') && <>
       <h4>Crew and rates</h4>
       {t('crew_link', 'Link Rentman crew to LaborOps crew', 'Matches Rentman’s crew list to LaborOps people by email, then phone, then exact name. LaborOps stays the master for profiles, certificates and ratings. Needed to send hours or time off to Rentman.')}
       {o.crew_link && crew && (
@@ -153,6 +157,8 @@ export default function RentmanOptions() {
       )}
       {t('quoted_bill_rates', 'Bill Rentman shifts at the quoted rate', 'Shifts built from a Rentman project bill at the hourly price quoted on their crew function (overtime on top), so the invoice matches the quote unless hours change. Other events keep the role bill rates.')}
 
+      </>}
+      {show('back') && <>
       <h4>Back to Rentman</h4>
       {t('push_hours', 'Send approved hours to Rentman', 'Each approved time entry on a Rentman event becomes a time registration for that crew member in Rentman within a couple of minutes, and is updated if the time is edited or removed if it’s unapproved. Rentman’s API can’t attach hours to the project or approve them, so they arrive as pending with the event and role in the note. People not linked to Rentman crew are listed and wait.')}
       {o.push_hours && push && (
@@ -171,6 +177,8 @@ export default function RentmanOptions() {
         </div>
       )}
 
+      </>}
+      {show('events') && <>
       <h4>On events</h4>
       {t('show_invoices', 'Show Rentman invoices', 'The event’s Invoice tab and the pipeline show the Rentman project’s invoices and whether they’re paid, so labor isn’t billed twice.')}
       {t('show_files', 'Share Rentman project files with crew', 'Files on the Rentman project (stage plots, call sheets, site maps) appear on the event for the crew on it. Files marked classified in Rentman are never shown.')}
@@ -183,6 +191,7 @@ export default function RentmanOptions() {
       {t('show_contacts', 'Show site contacts to leads', 'The Rentman project’s customer and location contact people (name and phone) show to the event’s leads and on-site coordinator.')}
       {t('show_vehicles', 'Vehicle details on driver shifts', 'Driver shifts built from Rentman transport show the vehicle, its plate and the pickup and return times.')}
       {t('show_equipment_leads', 'Equipment list for leads', 'Each department lead sees the Rentman equipment for their department (Audio sees audio gear) to check the load.')}
+      </>}
     </div>
   );
 }

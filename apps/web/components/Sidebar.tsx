@@ -12,7 +12,7 @@ const SECTIONS: { title: string; items: string[] }[] = [
   { title: 'My work', items: ['/onsite', '/my-shifts', '/my-calendar', '/open-shifts', '/availability'] },
   { title: 'Sales', items: ['/customers', '/quotes'] },
   { title: 'People', items: ['/crew', '/skills', '/trainings'] },
-  { title: 'Admin', items: ['/payroll', '/rules', '/integrations', '/messaging', '/billing'] },
+  { title: 'Admin', items: ['/payroll', '/rules', '/integrations', '/billing'] },
   { title: 'Account', items: ['/profile'] },
 ];
 const CHILDREN: Record<string, string[]> = { '/quotes': ['/quote-layouts'], '/crew': ['/groups'] };

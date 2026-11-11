@@ -1,11 +1,11 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import CustomerSelect from '@/components/CustomerSelect';
 
 /** Start a new event from an old one: same details, phases and shifts, moved to a new date. Crew are not copied. */
-export default function CopyEvent({ eventId, name, customerId = null, onError, label = 'Copy into new event', defaultName, defaultStart = '' }: { eventId: string; name: string; customerId?: string | null; onError?: (m: string) => void; label?: string; defaultName?: string; defaultStart?: string }) {
+export default function CopyEvent({ eventId, name, customerId = null, onError, label = 'Copy into new event', defaultName, defaultStart = '', openSignal, onClose }: { eventId: string; name: string; customerId?: string | null; onError?: (m: string) => void; label?: string; defaultName?: string; defaultStart?: string; openSignal?: number; onClose?: () => void }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [f, setF] = useState({ name: '', startDate: '', includePhases: true, includeShifts: true, customerId: customerId as string | null });
@@ -25,7 +25,9 @@ export default function CopyEvent({ eventId, name, customerId = null, onError, l
       setBusy(false);
     }
   };
-  if (!open) return <button className="btn small" onClick={show}>{label}</button>;
+  // Opened from elsewhere (an actions menu): no button of its own.
+  useEffect(() => { if (openSignal) show(); }, [openSignal]);
+  if (!open) return openSignal === undefined ? <button className="btn small" onClick={show}>{label}</button> : null;
   return (
     <form className="card" onSubmit={go} style={{ marginTop: '.5rem', textAlign: 'left', flexBasis: '100%' }}>
       <h2>Copy "{name}" into a new event</h2>

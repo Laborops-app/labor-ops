@@ -154,7 +154,7 @@ function StaffView({ isAdmin }: { isAdmin: boolean }) {
         <section className="card">
           <p className="small" style={{ margin: 0 }}>
             Connect Upstage Academy to send its course groups to crew.{' '}
-            {isAdmin ? <>Add the academy&apos;s web address under <Link href="/integrations">Integrations → Upstage Academy</Link>.</> : 'Ask an admin to add the academy under Integrations.'}
+            {isAdmin ? <>Add the academy&apos;s web address under <Link href="/integrations/academy">Integrations → Upstage Academy</Link>.</> : 'Ask an admin to add the academy under Integrations.'}
           </p>
         </section>
       ) : d.groups.length === 0 ? (

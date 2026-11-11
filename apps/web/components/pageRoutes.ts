@@ -24,6 +24,7 @@ export const PAGE_ROUTES: PageRoute[] = [
   route('/events', () => import('@/app/(app)/events/page')),
   route('/groups', () => import('@/app/(app)/groups/page')),
   route('/integrations', () => import('@/app/(app)/integrations/page')),
+  route('/integrations/[slug]', () => import('@/app/(app)/integrations/[slug]/page')),
   route('/messaging', () => import('@/app/(app)/messaging/page')),
   route('/my-calendar', () => import('@/app/(app)/my-calendar/page')),
   route('/my-shifts/[id]', () => import('@/app/(app)/my-shifts/[id]/page')),

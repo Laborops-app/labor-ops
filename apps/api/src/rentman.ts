@@ -460,6 +460,8 @@ export async function checkEventRequest(c: PoolClient, tid: string, token: strin
       };
       const [cust, loc] = [await names(p.customer), await names(p.location)];
       await upsertProject(c, tid, p, (v) => (v === p.customer ? cust : v === p.location ? loc : null));
+      // The project may already be on another event (added from the pipeline): don't make a second one.
+      if ((await c.query('SELECT 1 FROM events WHERE rentman_project_id = $1 AND id <> $2', [projectId, eventId])).rowCount) return { status, projectId: null, duplicateOf: projectId };
       await c.query('UPDATE events SET rentman_project_id = $2 WHERE id = $1', [eventId, projectId]);
       await syncEquipment(c, tid, token, projectId).catch(() => undefined);
     }

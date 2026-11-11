@@ -13,6 +13,7 @@ import FillFromGroup from '@/components/FillFromGroup';
 import CrewPick, { PickOption } from '@/components/CrewPick';
 import TimeEdit from '@/components/TimeEdit';
 import Modal from '@/components/Modal';
+import ActionMenu, { ActIcon } from '@/components/ActionMenu';
 import InvoicePanel from '@/components/InvoicePanel';
 import HrEventView from '@/components/HrEventView';
 import EventCrewSearch from '@/components/EventCrewSearch';
@@ -121,6 +122,7 @@ function Body({ me }: { me: Me }) {
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
   const [rmBuilding, setRmBuilding] = useState(false);
+  const [copySignal, setCopySignal] = useState(0);
   // Building quietly: when the last open spot gets a pick, ask whether to send every request now or later.
   const [fullAsk, setFullAsk] = useState(false);
   const wasFull = useRef<boolean | null>(null);
@@ -314,6 +316,27 @@ function Body({ me }: { me: Me }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, customerId, !!d]);
 
+  const buildFromRentmanNow = async () => {
+                  setRmBuilding(true);
+                  setError('');
+                  setNote('');
+                  try {
+                    const r = await api<{ result: { added: number; updated: number; removed: number; unchanged: number; conflicts: number } | null; unmatched: string[]; unscheduled: number }>(`/api/events/${id}/rentman/build`, { body: {} });
+                    const x = r.result;
+                    const done = x ? [x.added && `${x.added} added`, x.updated && `${x.updated} updated`, x.removed && `${x.removed} removed`].filter(Boolean).join(', ') : '';
+                    const more = [
+                      x?.conflicts ? `${x.conflicts} change${x.conflicts === 1 ? '' : 's'} need you to decide (open Rentman)` : '',
+                      r.unmatched?.length ? `Rentman names with no LaborOps role yet: ${r.unmatched.join(', ')} (map them under Integrations › Rentman)` : '',
+                      r.unscheduled ? `${r.unscheduled} Rentman function${r.unscheduled === 1 ? ' has' : 's have'} no times yet and ${r.unscheduled === 1 ? 'was' : 'were'} skipped` : '',
+                    ].filter(Boolean).join('. ');
+                    setNote(`${done ? `Crew built from Rentman: ${done}.` : 'The crew is already up to date with Rentman.'}${more ? ` ${more}.` : ''}`);
+                    await load();
+                  } catch (err) {
+                    setError((err as Error).message);
+                  } finally {
+                    setRmBuilding(false);
+                  }
+  };
   const publish = async () => {
     setError(''); setNote('');
     try {
@@ -525,6 +548,7 @@ function Body({ me }: { me: Me }) {
   useTabTitle(d?.event.name);
   if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
   const ev = d.event;
+  const plannedCount = d.shifts.reduce((k, x) => k + x.assignments.filter((a) => a.planned).length, 0);
 
   const shortWhen = (iso: string) => `${new Date(iso).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}, ${fmtTime(iso)}`;
   const isLeadShift = (s: Shift) => LEAD_ROLE.test(s.role_name) || s.assignments.some((a) => a.is_lead) || d.shifts.some((x) => x.lead_shift_id === s.id);
@@ -1374,77 +1398,55 @@ function Body({ me }: { me: Me }) {
             )}
           </div>
                 </div>
-          <div className="acts">
-            <button className={rateInfo?.due ? 'btn small rt-due-btn' : 'btn small'} onClick={() => setSettings('rate')} aria-haspopup="dialog" title="Rate the crew who worked this event">
-              ★ Rate crew{rateInfo?.due ? ` · ${rateInfo.due}` : rateInfo?.total ? ` · ${rateInfo.rated}/${rateInfo.total}` : ''}
-            </button>
-            <button className="btn small" onClick={() => setSettings('clock')} aria-haspopup="dialog">⚙ Settings</button>
-            <button className="btn small" onClick={() => setSettings('update')} aria-haspopup="dialog" title="Send an update to the crew scheduled on this event">📣 Send update</button>
-            <button className="btn small" onClick={() => { setAfCheck(''); setSettings('autofill'); }} aria-haspopup="dialog" title="Propose the best available crew for every open seat">✨ Auto-fill</button>
-            <button className="btn small" onClick={() => setSettings('avail')} aria-haspopup="dialog" title="Ask crew which days they're free before booking">🙋 Who&apos;s free?</button>
-            {!ev.staffing_draft && (
-              <button className="btn small" title="Pick crew without telling anyone, then send every offer at once with Publish" onClick={() => run(() => api(`/api/events/${id}/build-quietly`, { method: 'PUT', body: { on: true } }), 'Building quietly: picks are kept as a plan until you press Publish.')}>
-                ✎ Build quietly
+          <div className="acts ev-acts">
+            {/* Main actions: building and sending the crew, then talking to them and billing. Everything else is under More. */}
+            {ev.staffing_draft ? (
+              <button className="btn small primary act-btn" title="Send every planned pick at once" onClick={publish}>
+                <ActIcon n="publish" /> Publish crew{plannedCount ? ` · ${plannedCount}` : ''}
+              </button>
+            ) : (
+              <button className="btn small act-btn" title="Pick crew without telling anyone, then send every offer at once with Publish" onClick={() => run(() => api(`/api/events/${id}/build-quietly`, { method: 'PUT', body: { on: true } }), 'Building quietly: picks are kept as a plan until you press Publish.')}>
+                <ActIcon n="quiet" /> Build quietly
               </button>
             )}
+            <button className="btn small act-btn" onClick={() => { setAfCheck(''); setSettings('autofill'); }} aria-haspopup="dialog" title="Propose the best available crew for every open seat">
+              <ActIcon n="autofill" /> Auto-fill
+            </button>
             {rm?.linked && rm.project && (me.role === 'admin' || me.role === 'manager') && (
-              <button
-                className="btn small primary"
-                disabled={rmBuilding}
-                title="Make this event's days and shifts from the Rentman project's crew and transport functions, and keep them in step"
-                onClick={async () => {
-                  setRmBuilding(true);
-                  setError('');
-                  setNote('');
-                  try {
-                    const r = await api<{ result: { added: number; updated: number; removed: number; unchanged: number; conflicts: number } | null; unmatched: string[]; unscheduled: number }>(`/api/events/${id}/rentman/build`, { body: {} });
-                    const x = r.result;
-                    const done = x ? [x.added && `${x.added} added`, x.updated && `${x.updated} updated`, x.removed && `${x.removed} removed`].filter(Boolean).join(', ') : '';
-                    const more = [
-                      x?.conflicts ? `${x.conflicts} change${x.conflicts === 1 ? '' : 's'} need you to decide (open Rentman)` : '',
-                      r.unmatched?.length ? `Rentman names with no LaborOps role yet: ${r.unmatched.join(', ')} (map them under Integrations › Rentman)` : '',
-                      r.unscheduled ? `${r.unscheduled} Rentman function${r.unscheduled === 1 ? ' has' : 's have'} no times yet and ${r.unscheduled === 1 ? 'was' : 'were'} skipped` : '',
-                    ].filter(Boolean).join('. ');
-                    setNote(`${done ? `Crew built from Rentman: ${done}.` : 'The crew is already up to date with Rentman.'}${more ? ` ${more}.` : ''}`);
-                    await load();
-                  } catch (err) {
-                    setError((err as Error).message);
-                  } finally {
-                    setRmBuilding(false);
-                  }
-                }}
-              >
-                {rmBuilding ? 'Building the crew…' : 'Build the crew from Rentman'}
+              <button className="btn small act-btn" disabled={rmBuilding} title="Make this event's days and shifts from the Rentman project's crew and transport, and keep them in step" onClick={buildFromRentmanNow}>
+                <ActIcon n="rentman" /> {rmBuilding ? 'Building the crew…' : 'Build the crew from Rentman'}
               </button>
             )}
-            {rm && (rm.connected || rm.linked) && (
-              <button className="btn small" onClick={() => setSettings('rentman')} aria-haspopup="dialog" title={rm.project ? rm.project.name : 'Link a Rentman project'}>
-                Rentman{rm.linked && rm.project ? ` · ${rm.project.number ? `#${rm.project.number}` : rm.project.name}` : ''}
-              </button>
-            )}
+            <button className="btn small act-btn" onClick={() => setSettings('update')} aria-haspopup="dialog" title="Send an update to the crew scheduled on this event">
+              <ActIcon n="update" /> Send update
+            </button>
             {(me.role === 'admin' || me.canAdjustRates) && (
-              <>
-                <button className="btn small" onClick={() => setSettings('pay')} aria-haspopup="dialog">Crew pay</button>
-                <button className="btn small" onClick={() => setSettings('invoice')} aria-haspopup="dialog">Invoice</button>
-              </>
+              <button className="btn small act-btn" onClick={() => setSettings('invoice')} aria-haspopup="dialog" title="Bill the customer for this event">
+                <ActIcon n="invoice" /> Invoice
+              </button>
             )}
-            <CopyEvent eventId={id} name={ev.name} customerId={ev.customer_id ?? null} onError={setError} label="Copy" />
-            {(ev.pipeline_status === 'completed' || ev.pipeline_status === 'canceled') && (
-              (ev as { archived_at?: string | null }).archived_at ? (
-                <button className="btn small" onClick={() => api(`/api/events/${id}/restore`, { body: {} }).then(() => { setNote('Back on the pipeline.'); load(); }).catch((e) => setError(e.message))}>Restore</button>
-              ) : (
-                <button className="btn small" title="Take it off the pipeline (kept in the Archive: 4 years, or 2 if canceled)" onClick={() => api(`/api/events/${id}/archive`, { body: {} }).then(() => { setNote(ev.pipeline_status === 'canceled' ? 'Archived. It stays on the Archive page for 2 years.' : 'Archived. It stays on the Archive page for 4 years.'); load(); }).catch((e) => setError(e.message))}>Archive</button>
-              )
-            )}
-            <button className="btn-round" title="Event chat" aria-label="Event chat" onClick={() => api<{ id: string }>('/api/chat/channels', { body: { eventId: id } }).then((r) => router.push(`/chat?c=${r.id}`)).catch((e) => setError(e.message))}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z" /></svg>
-            </button>
-            <button className="btn-round" title="Create a quote" aria-label="Create a quote" onClick={() => api<{ quote: { id: string } }>('/api/quotes', { body: { eventId: id } }).then((r) => router.push(`/quotes/${r.quote.id}`)).catch((e) => setError(e.message))}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4" /></svg>
-            </button>
-            <button className="btn-round danger" title="Delete event" aria-label="Delete event" onClick={() => { if (confirm(`Delete "${ev.name}" and all its shifts?`)) api(`/api/events/${id}`, { method: 'DELETE' }).then(() => router.replace('/events')); }}>
-              <TrashIcon />
-            </button>
+            <ActionMenu
+              badge={!!rateInfo?.due}
+              items={[
+                { label: 'Who’s free?', icon: 'free', hint: 'Ask crew which days they’re free before booking', onClick: () => setSettings('avail') },
+                { label: 'Rate crew', icon: 'rate', badge: rateInfo?.due ? `${rateInfo.due} to rate` : rateInfo?.total ? `${rateInfo.rated}/${rateInfo.total}` : null, onClick: () => setSettings('rate') },
+                ...((me.role === 'admin' || me.canAdjustRates) ? [{ label: 'Crew pay', icon: 'pay', hint: 'Personal rates for this event', onClick: () => setSettings('pay') }] : []),
+                'divider',
+                ...(rm && (rm.connected || rm.linked) ? [{ label: rm.linked && rm.project ? `Rentman · ${rm.project.number ? `#${rm.project.number}` : rm.project.name}` : 'Link a Rentman project', icon: 'link', onClick: () => setSettings('rentman') }] : []),
+                { label: 'Create a quote', icon: 'quote', onClick: () => api<{ quote: { id: string } }>('/api/quotes', { body: { eventId: id } }).then((r) => router.push(`/quotes/${r.quote.id}`)).catch((e) => setError(e.message)) },
+                { label: 'Event chat', icon: 'chat', onClick: () => api<{ id: string }>('/api/chat/channels', { body: { eventId: id } }).then((r) => router.push(`/chat?c=${r.id}`)).catch((e) => setError(e.message)) },
+                { label: 'Copy into a new event', icon: 'copy', onClick: () => setCopySignal((n) => n + 1) },
+                { label: 'Event settings', icon: 'settings', hint: 'Clock-in, overtime and work rules, templates', onClick: () => setSettings('clock') },
+                'divider',
+                ...((ev.pipeline_status === 'completed' || ev.pipeline_status === 'canceled')
+                  ? [(ev as { archived_at?: string | null }).archived_at
+                    ? { label: 'Restore to the pipeline', icon: 'restore', onClick: () => api(`/api/events/${id}/restore`, { body: {} }).then(() => { setNote('Back on the pipeline.'); load(); }).catch((e) => setError(e.message)) }
+                    : { label: 'Archive', icon: 'archive', hint: 'Take it off the pipeline (kept in the Archive: 4 years, or 2 if canceled)', onClick: () => api(`/api/events/${id}/archive`, { body: {} }).then(() => { setNote(ev.pipeline_status === 'canceled' ? 'Archived. It stays on the Archive page for 2 years.' : 'Archived. It stays on the Archive page for 4 years.'); load(); }).catch((e) => setError(e.message)) }]
+                  : []),
+                { label: 'Delete event', icon: 'trash', danger: true, onClick: () => { if (confirm(`Delete "${ev.name}" and all its shifts?`)) api(`/api/events/${id}`, { method: 'DELETE' }).then(() => router.replace('/events')); } },
+              ]}
+            />
+            <CopyEvent eventId={id} name={ev.name} customerId={ev.customer_id ?? null} onError={setError} openSignal={copySignal} />
           </div>
       </div>
       {!!rateInfo?.due && settings !== 'rate' && (
