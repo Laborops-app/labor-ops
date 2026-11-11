@@ -1,4 +1,4 @@
-import { addDemoCrew, FIELDS, ImportError, previewImport, readSheet, removeDemoCrew, runImport } from '../crewImport';
+import { addDemoCrew, rentmanCrewSheet, FIELDS, ImportError, previewImport, readSheet, removeDemoCrew, runImport } from '../crewImport';
 import { crewRoomFor } from '../billing';
 import type { FastifyInstance } from 'fastify';
 import bcrypt from 'bcryptjs';
@@ -150,6 +150,22 @@ export async function crewRoutes(app: FastifyInstance) {
   app.get('/api/crew/import/template.csv', { preHandler: guard('admin', 'manager') }, async (_req, reply) => {
     reply.header('Content-Type', 'text/csv; charset=utf-8').header('Content-Disposition', 'attachment; filename="laborops-crew-import.csv"');
     return 'Name,Email,Phone,Roles,Address,Emergency contact,Emergency phone,Notes\r\nDana Lee,dana@example.com,(303) 555-0100,"Stagehand, Rigger","123 Main St, Denver, CO",Sam Lee,(303) 555-0101,Has CDL\r\n';
+  });
+
+  // Crew as an .xlsx laid out for Rentman's crew import.
+  app.get('/api/crew/export/rentman.xlsx', { preHandler: guard('admin', 'manager') }, async (req, reply) => {
+    const q = z.object({ missing: z.enum(['0', '1']).optional(), folders: z.enum(['0', '1']).optional() }).parse(req.query);
+    const r = await withTenant(req.user.tid, async (c) => {
+      const out = await rentmanCrewSheet(c, { onlyMissing: q.missing === '1', folders: q.folders !== '0' });
+      await audit(c, req.user.tid, req.user.sub, 'crew.export_rentman', 'user', null, { count: out.count, onlyMissing: q.missing === '1' });
+      return out;
+    });
+    const day = new Date().toISOString().slice(0, 10);
+    reply
+      .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      .header('Content-Disposition', `attachment; filename="laborops-crew-for-rentman-${day}.xlsx"`)
+      .header('X-Crew-Count', String(r.count));
+    return reply.send(r.buffer);
   });
 
   // ---------- demo crew (sample people with star ratings, removable in one go) ----------

@@ -4821,3 +4821,33 @@ test('crew import from Excel or CSV, and demo crew with ratings', async () => {
   assert.equal((await call(a, 'DELETE', '/api/crew/demo')).json.removed, 9);
   assert.equal((await call(a, 'GET', '/api/crew/demo')).json.count, 0);
 });
+
+test('crew export for Rentman: one sheet, Rentman column names, first role as folder', async () => {
+  const ExcelJS = (await import('exceljs')).default;
+  const a = await register('rmexp');
+  const tid = await tenantOf(a);
+  const m = await call(a, 'POST', '/api/crew', { name: 'Dana Marie Lee', email: `dana-rmexp-${run}@test.example`, phone: '0303 555 0100', skills: ['Rigger', 'Stagehand'] });
+  assert.equal(m.status, 201);
+  await call(a, 'POST', '/api/crew', { name: 'Linked Person', email: `linked-rmexp-${run}@test.example` });
+  await withTenant(tid, (c) => c.query(`INSERT INTO rentman_crew (tenant_id, id, name, user_id) SELECT $1, 77, 'Linked Person', id FROM users WHERE email = $2`, [tid, `linked-rmexp-${run}@test.example`]));
+  await call(a, 'POST', '/api/crew/demo', { perRole: 1 }).catch(() => undefined);
+  const read = async (url: string) => {
+    const r = await app.inject({ method: 'GET', url, headers: { cookie: a.cookie } });
+    assert.equal(r.statusCode, 200, r.body);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(r.rawPayload as any);
+    assert.equal(wb.worksheets.length, 1);
+    const rows: string[][] = [];
+    wb.worksheets[0].eachRow((row) => rows.push((row.values as any[]).slice(1).map((v) => String(v ?? ''))));
+    return rows;
+  };
+  const all = await read('/api/crew/export/rentman.xlsx');
+  assert.deepEqual(all[0], ['First name', 'Middle name', 'Last name', 'Email', 'Phone', 'Folder', 'Description', 'Emergency contact', 'Address']);
+  const dana = all.find((r) => r[2] === 'Lee')!;
+  assert.deepEqual(dana.slice(0, 6), ['Dana', 'Marie', 'Lee', `dana-rmexp-${run}@test.example`, '0303 555 0100', 'Rigger']);
+  assert.equal(dana[6], 'Roles: Rigger, Stagehand');
+  assert.equal(all.length, 3); // header + 2 people, no demo crew
+  const missing = await read('/api/crew/export/rentman.xlsx?missing=1&folders=0');
+  assert.equal(missing.length, 2);
+  assert.equal(missing[0].includes('Folder'), false);
+});

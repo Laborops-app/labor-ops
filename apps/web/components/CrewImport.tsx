@@ -178,3 +178,39 @@ export function DemoCrew({ onClose, onDone }: { onClose: () => void; onDone: (ms
     </Modal>
   );
 }
+
+/** Crew › Export for Rentman: an .xlsx laid out for Rentman's crew import (Crew members › More actions › Import). */
+export function RentmanExport({ onClose }: { onClose: () => void }) {
+  const [missing, setMissing] = useState(true);
+  const [folders, setFolders] = useState(true);
+  const [linked, setLinked] = useState<boolean | null>(null);
+  useEffect(() => { api<{ crew: unknown[] }>('/api/rentman/crew').then((r) => setLinked(r.crew.length > 0)).catch(() => setLinked(false)); }, []);
+  const href = `/api/crew/export/rentman.xlsx?missing=${linked && missing ? 1 : 0}&folders=${folders ? 1 : 0}`;
+  return (
+    <Modal title="Export crew for Rentman" onClose={onClose}>
+      <p className="muted small">
+        Downloads an Excel file in the layout Rentman’s crew import expects: one sheet, plain text, with columns named First name, Middle name, Last name, Email,
+        Phone, Folder, Description (their roles), Emergency contact and Address, so Rentman matches them on its own. Active crew only; demo crew are left out.
+      </p>
+      {linked && (
+        <label className="check small">
+          <input type="checkbox" checked={missing} onChange={(e) => setMissing(e.target.checked)} />
+          Only people not linked to Rentman crew yet (so nobody is added twice)
+        </label>
+      )}
+      <label className="check small">
+        <input type="checkbox" checked={folders} onChange={(e) => setFolders(e.target.checked)} />
+        Put each person in a Rentman folder named after their first role
+      </label>
+      <p className="muted small" style={{ marginTop: 12 }}>
+        In Rentman: <b>Crew members › More actions › Import</b>, choose <b>Add new and skip existing</b> with Email as the match column, upload the file, check the
+        columns, pick a root folder, then import. Rentman may email each new crew member an invitation when they’re imported. Once they’re in, turn on
+        <b> Link Rentman crew</b> under Integrations › Rentman so LaborOps links them by email.
+      </p>
+      <div className="row" style={{ justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+        <button className="btn" onClick={onClose}>Close</button>
+        <a className="btn primary" href={href} download onClick={() => setTimeout(onClose, 300)}>Download .xlsx</a>
+      </div>
+    </Modal>
+  );
+}

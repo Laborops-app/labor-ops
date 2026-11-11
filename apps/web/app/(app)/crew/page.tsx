@@ -9,7 +9,7 @@ import { Banner, Empty } from '@/components/ui';
 import { api, Me, roleLabel } from '@/lib/api';
 import SkillPicker, { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 import Modal from '@/components/Modal';
-import CrewImport, { DemoCrew } from '@/components/CrewImport';
+import CrewImport, { DemoCrew, RentmanExport } from '@/components/CrewImport';
 import TopbarAction, { PlusIcon, EditIcon, SearchIcon, avClass, initialsOf } from '@/components/TopbarAction';
 
 type Cert = { id: string; name: string; expires_on: string | null; verified: boolean; has_file: boolean };
@@ -110,6 +110,7 @@ function Body({ me }: { me: Me }) {
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
   const [demo, setDemo] = useState(false);
+  const [rmExport, setRmExport] = useState(false);
   const [view, setView] = useState<'all' | 'crew' | 'manager' | 'inactive'>('all');
   const [q, setQ] = useState('');
   const needle = q.trim().toLowerCase();
@@ -149,6 +150,7 @@ function Body({ me }: { me: Me }) {
         </div>
         <div className="controls">
           <button type="button" className="btn small" onClick={() => setImporting(true)}>Import from Excel</button>
+          <button type="button" className="btn small" onClick={() => setRmExport(true)}>Export for Rentman</button>
           {me.role === 'admin' && <button type="button" className="btn small ghost" onClick={() => setDemo(true)}>Demo crew</button>}
           <span className="pill-input">
             <SearchIcon />
@@ -297,6 +299,7 @@ function Body({ me }: { me: Me }) {
       )}
 
       {importing && <CrewImport isAdmin={me.role === 'admin'} onClose={() => setImporting(false)} onDone={(m) => { setNotice(m); load(); }} />}
+      {rmExport && <RentmanExport onClose={() => setRmExport(false)} />}
       {demo && <DemoCrew onClose={() => setDemo(false)} onDone={(m) => { setNotice(m); load(); }} />}
       {adding && (
         <Modal title="Add Crew Member" onClose={() => setAdding(false)}>

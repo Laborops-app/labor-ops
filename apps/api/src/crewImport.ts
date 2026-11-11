@@ -249,3 +249,47 @@ export async function removeDemoCrew(c: PoolClient, tid: string, by: string) {
   await audit(c, tid, by, 'crew.demo_remove', 'user', null, { removed: r.rowCount });
   return { removed: r.rowCount ?? 0 };
 }
+
+// ---------- export for Rentman's crew import ----------
+
+/** "Dana Marie Lee" → first, middle, last (one word goes in the last name). */
+export function splitName(full: string) {
+  const parts = full.trim().split(/\s+/).filter(Boolean);
+  if (parts.length <= 1) return { first: '', middle: '', last: parts[0] ?? '' };
+  return { first: parts[0], middle: parts.slice(1, -1).join(' '), last: parts[parts.length - 1] };
+}
+
+/**
+ * Active crew as a one-sheet .xlsx in Rentman's crew import layout (Crew members › Import): plain-text cells, the first
+ * row as headers named like Rentman's fields so they match on their own. Folder is each person's first role, so Rentman
+ * files them by position. Demo crew are left out; `onlyMissing` leaves out people already linked to Rentman crew.
+ */
+export async function rentmanCrewSheet(c: PoolClient, o: { onlyMissing: boolean; folders: boolean }) {
+  const rows = (
+    await c.query(
+      `SELECT u.name, u.email, u.phone, u.skills, u.address, u.emergency_name, u.emergency_phone
+         FROM users u
+        WHERE u.active AND u.role = 'crew' AND NOT u.is_demo
+          AND ($1::boolean IS NOT TRUE OR NOT EXISTS (SELECT 1 FROM rentman_crew rc WHERE rc.user_id = u.id))
+        ORDER BY lower(u.name)`,
+      [o.onlyMissing],
+    )
+  ).rows;
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Crew members');
+  const head = ['First name', 'Middle name', 'Last name', 'Email', 'Phone', ...(o.folders ? ['Folder'] : []), 'Description', 'Emergency contact', 'Address'];
+  ws.addRow(head);
+  for (const r of rows) {
+    const n = splitName(r.name);
+    const skills: string[] = r.skills ?? [];
+    const emergency = [r.emergency_name, r.emergency_phone].filter(Boolean).join(' ');
+    ws.addRow([
+      n.first, n.middle, n.last, r.email ?? '', r.phone ?? '', ...(o.folders ? [skills[0] ?? ''] : []),
+      skills.length ? `Roles: ${skills.join(', ')}` : '', emergency, (r.address ?? '').replace(/\s*\n\s*/g, ', '),
+    ].map((v) => String(v)));
+  }
+  // Plain text everywhere (phone numbers keep their leading zeros and dashes).
+  ws.eachRow((row) => row.eachCell((cell) => { cell.numFmt = '@'; }));
+  ws.columns.forEach((col, i) => { col.width = Math.max(14, head[i].length + 4); });
+  return { buffer: Buffer.from(await wb.xlsx.writeBuffer()), count: rows.length };
+}
