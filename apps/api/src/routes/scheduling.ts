@@ -48,7 +48,7 @@ export async function claimShift(c: PoolClient, tid: string, user: { id: string;
   if ((await filledCount(c, id)) >= s.headcount) return { code: 409, error: 'Someone else just took the last spot' };
   if ((await c.query('SELECT 1 FROM shift_assignments WHERE shift_id = $1 AND user_id = $2', [id, user.id])).rowCount)
     return { code: 409, error: 'You are already on this shift' };
-  const clash = await findClash(c, user.id, id, s.starts_at, s.ends_at);
+  const clash = await findClash(c, user.id, id, s.starts_at, s.ends_at, false);
   if (clash) return { code: 409, error: `You are already booked for ${clash.role_name} at ${clash.event_name} at that time` };
   const [el] = await evaluateShift(c, id, user.id);
   if (el?.missing_certs.length) return { code: 409, error: `You need a valid ${el.missing_certs.join(', ')} certificate for this shift` };
@@ -512,7 +512,7 @@ export async function schedulingRoutes(app: FastifyInstance) {
       const out = [];
       for (const s of rows) {
         const [el] = await evaluateShift(c, s.id, req.user.sub);
-        const clash = await findClash(c, req.user.sub, s.id, s.starts_at, s.ends_at);
+        const clash = await findClash(c, req.user.sub, s.id, s.starts_at, s.ends_at, false);
         const reason = el?.missing_certs.length
           ? `Needs a valid ${el.missing_certs.join(', ')} certificate`
           : clash
@@ -583,7 +583,7 @@ export async function schedulingRoutes(app: FastifyInstance) {
       const out = [];
       for (const w of rows) {
         const [el] = await evaluateShift(c, w.shift_id, req.user.sub);
-        const clash = await findClash(c, req.user.sub, w.shift_id, w.starts_at, w.ends_at);
+        const clash = await findClash(c, req.user.sub, w.shift_id, w.starts_at, w.ends_at, false);
         const reason = el?.missing_certs.length
           ? `Needs a valid ${el.missing_certs.join(', ')} certificate`
           : clash
@@ -610,7 +610,7 @@ export async function schedulingRoutes(app: FastifyInstance) {
       if (w.offered_by === req.user.sub) return { code: 409, error: 'You offered this shift yourself' };
       if ((await c.query('SELECT 1 FROM shift_assignments WHERE shift_id = $1 AND user_id = $2', [w.shift_id, req.user.sub])).rowCount)
         return { code: 409, error: 'You are already on this shift' };
-      const clash = await findClash(c, req.user.sub, w.shift_id, w.starts_at, w.ends_at);
+      const clash = await findClash(c, req.user.sub, w.shift_id, w.starts_at, w.ends_at, false);
       if (clash) return { code: 409, error: `You are already booked for ${clash.role_name} at ${clash.event_name} at that time` };
       const [el] = await evaluateShift(c, w.shift_id, req.user.sub);
       if (el?.missing_certs.length) return { code: 409, error: `You need a valid ${el.missing_certs.join(', ')} certificate for this shift` };

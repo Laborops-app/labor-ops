@@ -4196,6 +4196,14 @@ test('fast staffing: build quietly then publish, honest counts, nudges, Are you 
   assert.equal(det.filter((x: { status: string }) => x.status === 'planned').length, 2);
   // Can't switch back to live while picks are held
   assert.equal((await call(a, 'PUT', `/api/events/${ev}/build-quietly`, { on: false })).status, 409);
+  // A quiet pick counts as booked in another event's crew picker (not shown as free)
+  const ev2 = (await call(a, 'POST', '/api/events', { name: 'Same day', startDate: '2031-04-01', endDate: '2031-04-01' })).json.event.id;
+  const other = (await call(a, 'POST', `/api/events/${ev2}/shifts`, { roleName: 'Loader', startsAt: start(3), endsAt: start(6), headcount: 2 })).json.shift.id;
+  const st2 = (await call(a, 'GET', `/api/events/${ev2}`)).json.shifts.find((x: { id: string }) => x.id === other).crew_status;
+  const b1 = st2.find((x: { user_id: string }) => x.user_id === c1.id).booked;
+  assert.ok(b1 && /planned/.test(b1.role_name) && b1.event_name === 'Quiet build');
+  assert.equal(st2.find((x: { user_id: string }) => x.user_id === c3.id).booked, null);
+  await call(a, 'DELETE', `/api/events/${ev2}`);
 
   // Publish: one offer, one confirmed booking
   const pub = await call(a, 'POST', `/api/events/${ev}/publish`);

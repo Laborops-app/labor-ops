@@ -8,7 +8,7 @@ export type Elig = { user_id: string; missing_certs: string[]; time_off: boolean
  *  - missing_certs: required certificates the person does not hold, or holds but expired on the shift date
  *  - time_off: approved time off overlaps the shift
  *  - outside_availability: they set weekly availability and this shift falls outside it
- *  - booked: another shift they are on (not declined) on the same day, if any
+ *  - booked: another shift they are on (not declined) on the same day, if any, including quiet (not yet sent) picks
  * Times are evaluated in the company's time zone. A person with no availability rows counts as always available.
  */
 export async function evaluateShift(c: PoolClient, shiftId: string, userId?: string): Promise<Elig[]> {
@@ -31,11 +31,17 @@ export async function evaluateWindow(c: PoolClient, startsAt: string | Date, end
         AND NOT EXISTS (SELECT 1 FROM availability a WHERE a.user_id = u.id
           AND a.weekday = EXTRACT(dow FROM x.ls)::int AND a.start_time <= x.ls::time
           AND (CASE WHEN x.le::date = x.ls::date THEN a.end_time >= x.le::time ELSE a.end_time >= time '23:59' END))) AS outside_availability,
-       (SELECT json_build_object('role_name', s2.role_name, 'event_name', e2.name, 'starts_at', s2.starts_at, 'ends_at', s2.ends_at)
-          FROM shift_assignments a2 JOIN shifts s2 ON s2.id = a2.shift_id JOIN events e2 ON e2.id = s2.event_id
-         WHERE a2.user_id = u.id AND a2.status <> 'declined' AND s2.id IS DISTINCT FROM $4::uuid
-           AND (s2.starts_at AT TIME ZONE x.tz)::date <= x.le::date AND (s2.ends_at AT TIME ZONE x.tz)::date >= x.ls::date
-         ORDER BY s2.starts_at LIMIT 1) AS booked
+       -- Another shift that day: offers and bookings, and picks still held back while an event is built quietly.
+       (SELECT json_build_object('role_name', b.role_name, 'event_name', b.event_name, 'starts_at', b.starts_at, 'ends_at', b.ends_at)
+          FROM (SELECT s2.role_name, e2.name AS event_name, s2.starts_at, s2.ends_at
+                  FROM shift_assignments a2 JOIN shifts s2 ON s2.id = a2.shift_id JOIN events e2 ON e2.id = s2.event_id
+                 WHERE a2.user_id = u.id AND a2.status <> 'declined' AND s2.id IS DISTINCT FROM $4::uuid
+                UNION ALL
+                SELECT s2.role_name || ' (planned)', e2.name, s2.starts_at, s2.ends_at
+                  FROM planned_picks p2 JOIN shifts s2 ON s2.id = p2.shift_id JOIN events e2 ON e2.id = s2.event_id
+                 WHERE p2.user_id = u.id AND s2.id IS DISTINCT FROM $4::uuid) b
+         WHERE (b.starts_at AT TIME ZONE x.tz)::date <= x.le::date AND (b.ends_at AT TIME ZONE x.tz)::date >= x.ls::date
+         ORDER BY b.starts_at LIMIT 1) AS booked
      FROM users u, x WHERE u.role = 'crew' AND u.active AND ($5::uuid IS NULL OR u.id = $5)
      ORDER BY u.name`,
     [startsAt, endsAt, certs, opts.shiftId ?? null, opts.userId ?? null],
@@ -43,15 +49,23 @@ export async function evaluateWindow(c: PoolClient, startsAt: string | Date, end
   return r.rows;
 }
 
-/** Another active (non-declined) assignment of this person that overlaps the time range, if any. */
-export async function findClash(c: PoolClient, userId: string, excludeShiftId: string, startsAt: string | Date, endsAt: string | Date) {
+/**
+ * Another active (non-declined) assignment of this person that overlaps the time range, if any. Quiet picks on events still
+ * being built count too, unless `planned` is false (crew claiming a shift themselves can't see those plans).
+ */
+export async function findClash(c: PoolClient, userId: string, excludeShiftId: string, startsAt: string | Date, endsAt: string | Date, planned = true) {
   const r = await c.query(
     `SELECT e.name AS event_name, s.role_name, s.starts_at, s.ends_at
      FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
      WHERE a.user_id = $1 AND a.status <> 'declined' AND s.id <> $2
        AND tstzrange(s.starts_at, s.ends_at) && tstzrange($3::timestamptz, $4::timestamptz)
+     UNION ALL
+     SELECT e.name, s.role_name || ' (planned)', s.starts_at, s.ends_at
+     FROM planned_picks p JOIN shifts s ON s.id = p.shift_id JOIN events e ON e.id = s.event_id
+     WHERE $5 AND p.user_id = $1 AND s.id <> $2
+       AND tstzrange(s.starts_at, s.ends_at) && tstzrange($3::timestamptz, $4::timestamptz)
      LIMIT 1`,
-    [userId, excludeShiftId, startsAt, endsAt],
+    [userId, excludeShiftId, startsAt, endsAt, planned],
   );
   return r.rows[0] as { event_name: string; role_name: string; starts_at: string; ends_at: string } | undefined;
 }
