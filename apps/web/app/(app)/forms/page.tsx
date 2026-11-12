@@ -7,6 +7,7 @@ import { api, type Me } from '@/lib/api';
 import FormBuilder from '@/components/docs/FormBuilder';
 import PdfFieldEditor from '@/components/docs/PdfFieldEditor';
 import { DEFAULT_SETTINGS, FORM_PRESETS, newId, type DocSettings, type FormField, type PdfField, type Template } from '@/components/docs/types';
+import { askConfirm } from '@/components/Toasts';
 
 type Settings = { onboardingOn: boolean; onboardingBlock: boolean; onboardingRemind: boolean; formsOn: boolean };
 type Progress = { total: number; people: { id: string; name: string; done: number; left: string[]; reminded_at: string | null; finished_at: string | null }[] };
@@ -237,7 +238,7 @@ function Body({ me }: { me: Me }) {
                   {tab === 'onboarding' && <><button type="button" className="btn ghost small" disabled={i === 0} onClick={() => order(i, -1, items)} aria-label={`Move ${t.name} up`}>↑</button><button type="button" className="btn ghost small" disabled={i === items.length - 1} onClick={() => order(i, 1, items)} aria-label={`Move ${t.name} down`}>↓</button></>}
                   <button type="button" className="btn small" onClick={() => setDraft({ id: t.id, name: t.name, kind: t.kind, purpose: t.purpose, fields: t.fields, settings: t.settings })}>Edit</button>
                   <button type="button" className="btn ghost small" onClick={() => run(() => api(`/api/docs/templates/${t.id}`, { method: 'PUT', body: { active: !t.active } }), t.active ? `${t.name} is off.` : `${t.name} is back on.`)}>{t.active ? 'Turn off' : 'Turn on'}</button>
-                  <button type="button" className="btn ghost small danger" onClick={() => confirm(`Remove “${t.name}”? Copies people already signed are kept.`) && run(() => api(`/api/docs/templates/${t.id}`, { method: 'DELETE' }), `${t.name} removed.`)}>Remove</button>
+                  <button type="button" className="btn ghost small danger" onClick={() => askConfirm(`Remove “${t.name}”? Copies people already signed are kept.`).then((ok): unknown => ok && (run(() => api(`/api/docs/templates/${t.id}`, { method: 'DELETE' }), `${t.name} removed.`)))}>Remove</button>
                 </span>
               </li>
             ))}

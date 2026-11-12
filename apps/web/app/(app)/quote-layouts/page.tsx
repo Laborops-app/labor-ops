@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner } from '@/components/ui';
 import { api } from '@/lib/api';
+import { askConfirm } from '@/components/Toasts';
 
 type Block =
   | { id: string; type: 'header'; showLogo: boolean; logoAlign: 'left' | 'center' | 'right'; logoHeight: number; companyName: string; lines: string; align: 'left' | 'center' | 'right' }
@@ -158,7 +159,7 @@ function Body() {
           <button className="btn primary" disabled={!name.trim() || (!dirty && sel !== 'new')} onClick={save}>{sel === 'new' ? 'Create layout' : 'Save changes'}</button>
           {sel !== 'new' && <button className="btn" onClick={() => { setSel('new'); setName(`${name} copy`); setDirty(true); }}>Duplicate</button>}
           {sel !== 'new' && !items.find((i) => i.id === sel)?.is_default && <button className="btn" onClick={() => api(`/api/quote-layouts/${sel}/default`, { body: {} }).then(() => { loadList(); setNote('This is now the default layout.'); }).catch((e) => setError(e.message))}>Make default</button>}
-          {sel !== 'new' && <button className="btn ghost danger" onClick={() => confirm('Delete this layout? Quotes using it fall back to the default.') && api(`/api/quote-layouts/${sel}`, { method: 'DELETE' }).then(async () => { const r = await loadList(); r.layouts[0] ? open(r.layouts[0].id) : (setSel('new'), setCfg(builtIn)); }).catch((e) => setError(e.message))}>Delete</button>}
+          {sel !== 'new' && <button className="btn ghost danger" onClick={() => askConfirm('Delete this layout? Quotes using it fall back to the default.').then((ok): unknown => ok && (api(`/api/quote-layouts/${sel}`, { method: 'DELETE' }).then(async () => { const r = await loadList(); r.layouts[0] ? open(r.layouts[0].id) : (setSel('new'), setCfg(builtIn)); }).catch((e) => setError(e.message))))}>Delete</button>}
         </div>
       </section>
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '1rem', alignItems: 'start' }} className="designer">

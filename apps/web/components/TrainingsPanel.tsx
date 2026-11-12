@@ -4,6 +4,7 @@ import Panel from '@/components/Panel';
 import AcademyCourses from '@/components/AcademyCourses';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { api, fmtDateTime, Me } from '@/lib/api';
+import { askConfirm } from '@/components/Toasts';
 
 type App = { id: string; user_id: string; user_name: string; status: string; ratings: string | null };
 type Training = {
@@ -121,11 +122,10 @@ export default function TrainingsPanel({ me, embedded = false }: { me: Me; embed
                 {t.status === 'open' && (
                   <div className="row">
                     <button className="btn primary" disabled={t.approved_count === 0}
-                      onClick={() => confirm(`Mark “${t.title}” complete for ${t.approved_count} approved attendee(s)?${t.grants_cert ? ` They will each receive the ${t.grants_cert} certificate.` : ''}`) &&
-                        run(() => api(`/api/trainings/${t.id}/complete`, { body: {} }), 'Training completed.')}>
+                      onClick={() => askConfirm(`Mark “${t.title}” complete for ${t.approved_count} approved attendee(s)?${t.grants_cert ? ` They will each receive the ${t.grants_cert} certificate.` : ''}`).then((ok): unknown => ok && (run(() => api(`/api/trainings/${t.id}/complete`, { body: {} }), 'Training completed.')))}>
                       Mark complete{t.grants_cert ? ' & grant certificate' : ''}
                     </button>
-                    <button className="btn ghost small" onClick={() => confirm('Cancel this training and tell applicants?') && run(() => api(`/api/trainings/${t.id}`, { method: 'PATCH', body: { status: 'cancelled' } }))}>Cancel training</button>
+                    <button className="btn ghost small" onClick={() => askConfirm('Cancel this training and tell applicants?').then((ok): unknown => ok && (run(() => api(`/api/trainings/${t.id}`, { method: 'PATCH', body: { status: 'cancelled' } }))))}>Cancel training</button>
                   </div>
                 )}
               </>

@@ -8,6 +8,8 @@ import ThemeToggle from '@/components/ThemeToggle';
 import InstallApp, { InstallPopup } from '@/components/InstallApp';
 import IosInstallGuide from '@/components/IosInstallGuide';
 import AlertsPrompt from '@/components/AlertsPrompt';
+import SearchPalette from '@/components/SearchPalette';
+import ToastHost from '@/components/Toasts';
 import PunchSync from '@/components/PunchSync';
 import DemoBanner from '@/components/DemoBanner';
 import NotificationBell from '@/components/NotificationBell';
@@ -461,11 +463,13 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
           </Link>
           <span className="page-title">{current?.label ?? ''}</span>
           <span className="spacer" />
+          <SearchPalette pages={items.map((n) => ({ href: n.href, label: n.label }))} office={me.role === 'admin' || me.role === 'manager' || me.role === 'hr'} />
           <div id="topbar-actions" className="topbar-actions" />
           <InstallApp className="btn small install-btn" />
           <InstallPopup />
           <IosInstallGuide />
           <AlertsPrompt />
+          <ToastHost />
           <ThemeToggle />
           <NotificationBell />
           <Link href="/profile" className="me" aria-label={`My profile (${me.name}, ${roleLabel(me.role)})`} title={`${me.name} · ${me.company ? `${me.company} · ` : ''}${roleLabel(me.role)}`}>

@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Banner, Empty } from '@/components/ui';
 import { api, money } from '@/lib/api';
+import { askConfirm } from '@/components/Toasts';
 
 type Adj = { id: string; kind: 'cancellation' | 'manual'; date: string; hours: number; amount: number | null; note: string | null; event_name: string | null; role_name: string | null; voided_at: string | null; exported_at: string | null; user_name: string; created_by_name: string | null };
 type Person = { id: string; name: string; role: string };
@@ -67,7 +68,7 @@ export default function PayAdjustments({ from, to, onChanged, known = [] }: { fr
                   <td>
                     {a.voided_at ? 'voided' : a.exported_at ? <span className="chip warn">exported</span> : (
                       <button type="button" className="btn ghost small" onClick={async () => {
-                        if (!confirm('Void this? It won’t be paid.')) return;
+                        if (!(await askConfirm('Void this? It won’t be paid.'))) return;
                         try { await api(`/api/pay-adjustments/${a.id}/void`, { body: {} }); load(); onChanged(); } catch (x) { setErr((x as Error).message); }
                       }}>Void</button>
                     )}

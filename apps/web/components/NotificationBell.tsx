@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { askConfirm } from '@/components/Toasts';
 
 type Item = { id: string; category: string; title: string; body: string; link: string | null; read_at: string | null; created_at: string };
 
@@ -65,7 +66,7 @@ export default function NotificationBell() {
     await api(`/api/notifications/${n.id}`, { method: 'DELETE' }).catch(() => load());
   };
   const clear = async (scope: 'read' | 'all') => {
-    if (scope === 'all' && !confirm('Delete all your notifications?')) return;
+    if (scope === 'all' && !(await askConfirm('Delete all your notifications?'))) return;
     await api('/api/notifications/delete', { body: { scope } }).catch(() => undefined);
     load();
   };

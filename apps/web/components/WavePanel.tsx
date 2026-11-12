@@ -1,6 +1,7 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
+import { askConfirm } from '@/components/Toasts';
 
 type Cfg = { topN: number; wait1Min: number; wave2: boolean; wait2Min: number; wave3: boolean; answerByHours: number; remindAfterMin: number; rollOnDecline: boolean };
 type Offer = { user_id: string; name: string; wave: number; offered_at: string; reminded_at: string | null; note: string | null; state: 'waiting' | 'accepted' | 'declined' | 'expired' | 'removed' | 'skipped' };
@@ -157,7 +158,7 @@ export default function WavePanel({ shiftId, onChanged }: { shiftId: string; onC
             {d.plan.status === 'active'
               ? <button type="button" className="btn" disabled={busy} onClick={() => run(() => api(`/api/shifts/${shiftId}/waves/pause`, { body: {} }))}>Pause</button>
               : <button type="button" className="btn primary" disabled={busy} onClick={() => run(() => api(`/api/shifts/${shiftId}/waves/resume`, { body: {} }))}>Carry on</button>}
-            <button type="button" className="btn ghost danger" disabled={busy} onClick={() => confirm('Stop the waves? Offers already out stay as they are.') && run(() => api(`/api/shifts/${shiftId}/waves/stop`, { body: {} }))}>Stop</button>
+            <button type="button" className="btn ghost danger" disabled={busy} onClick={() => askConfirm('Stop the waves? Offers already out stay as they are.').then((ok): unknown => ok && (run(() => api(`/api/shifts/${shiftId}/waves/stop`, { body: {} }))))}>Stop</button>
           </>
         )}
         {open <= 0 && !running && <span className="muted small">Every spot is taken, so there’s nothing to offer.</span>}

@@ -5227,3 +5227,50 @@ test('QR clock-in: two scans at the same moment clock in once', async () => {
   assert.equal(both.find((r) => r.status === 200)!.json.already, true);
   assert.equal((await adminQuery('SELECT count(*)::int AS n FROM time_entries WHERE user_id = $1', [c1.id])).rows[0].n, 1);
 });
+
+test('search everything finds events, people, customers and quotes; HR sees no crew', async () => {
+  const a = await register('srch');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Zephyr Gala', venue: 'Orchid Hall', startDate: '2031-03-01', endDate: '2031-03-01' })).json.event.id;
+  const c = await mkCrew(a, 'zephyrcrew');
+  const cu = (await call(a, 'POST', '/api/customers', { name: 'Zephyr Events Co' })).json;
+  const sr = await call(a, 'GET', '/api/search?q=zeph');
+  assert.equal(sr.status, 200, sr.text);
+  const r = sr.json.results as { kind: string; id: string; href: string }[];
+  assert.ok(r.some((x) => x.kind === 'event' && x.id === ev && x.href === `/events/${ev}`));
+  assert.ok(r.some((x) => x.kind === 'person' && x.id === c.id));
+  assert.ok(r.some((x) => x.kind === 'customer' && x.id === (cu.customer?.id ?? cu.id)));
+  assert.ok((await call(a, 'GET', '/api/search?q=orchid')).json.results.some((x: { id: string }) => x.id === ev));
+  assert.deepEqual((await call(a, 'GET', '/api/search?q=z')).json.results, []);
+  assert.equal((await call(c.session, 'GET', '/api/search?q=zeph')).status, 403);
+  // Another company's records never show up
+  const b = await register('srch2');
+  assert.equal((await call(b, 'GET', '/api/search?q=zeph')).json.results.length, 0);
+});
+
+test('move someone to another shift on the event: keeps their yes, checks clashes, refuses other events', async () => {
+  const a = await register('mvshift');
+  const ev = await mkEvent(a);
+  const other = await mkEvent(a);
+  const at = (h: number) => new Date(Date.UTC(2030, 0, 1, h)).toISOString();
+  const s1 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: at(8), endsAt: at(12), headcount: 2 })).json.shift.id;
+  const s2 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Loader', startsAt: at(14), endsAt: at(18), headcount: 1 })).json.shift.id;
+  const s3 = (await call(a, 'POST', `/api/events/${other}/shifts`, { roleName: 'Stagehand', startsAt: at(20), endsAt: at(23), headcount: 1 })).json.shift.id;
+  const p = await mkCrew(a, 'mover1'), q = await mkCrew(a, 'mover2');
+  const asg = (await call(a, 'POST', `/api/shifts/${s1}/assign`, { userId: p.id, confirmed: true })).json.assignment.id;
+  await call(a, 'POST', `/api/shifts/${s2}/assign`, { userId: q.id });
+  // Full shift: nothing changes
+  const full = await call(a, 'POST', `/api/assignments/${asg}/move`, { shiftId: s2 });
+  assert.equal(full.status, 409);
+  assert.ok((await call(a, 'GET', `/api/events/${ev}`)).json.shifts.find((s: any) => s.id === s1).assignments.some((x: any) => x.user_id === p.id));
+  // Not on this event
+  assert.equal((await call(a, 'POST', `/api/assignments/${asg}/move`, { shiftId: s3 })).status, 404);
+  // Free a seat on s2, then move: still confirmed
+  const qa = (await call(a, 'GET', `/api/events/${ev}`)).json.shifts.find((s: any) => s.id === s2).assignments[0].id;
+  await call(a, 'DELETE', `/api/assignments/${qa}`);
+  assert.equal((await call(a, 'POST', `/api/assignments/${asg}/move`, { shiftId: s2 })).status, 200);
+  const shifts = (await call(a, 'GET', `/api/events/${ev}`)).json.shifts;
+  assert.equal(shifts.find((s: any) => s.id === s1).assignments.length, 0);
+  const moved = shifts.find((s: any) => s.id === s2).assignments[0];
+  assert.equal(moved.user_id, p.id);
+  assert.equal(moved.status, 'accepted');
+});

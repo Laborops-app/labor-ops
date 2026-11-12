@@ -4,6 +4,7 @@ import { api, ApiError, money, fmtDate } from '@/lib/api';
 import { Banner, Empty } from '@/components/ui';
 import { RentmanInvoices, useRentmanExtras } from '@/components/RentmanExtras';
 import QuoteCompare, { type Comparison, type QuoteChoice } from '@/components/QuoteCompare';
+import { askConfirm } from '@/components/Toasts';
 
 type Line = { role: string; date: string; kind: 'regular' | 'overtime' | 'double' | 'day'; qty: number; unit: 'hour' | 'day'; rate: number; amount: number; description: string; qboItemId: string | null };
 type Billing = {
@@ -42,7 +43,7 @@ export default function InvoicePanel({ eventId, isAdmin }: { eventId: string; is
   const toQbo = async (again = false, overOk = false) => {
     // More than was quoted: ask before creating it.
     if (over && !overOk) {
-      if (!confirm(`${overText}\n\nCreate the invoice anyway?`)) return;
+      if (!(await askConfirm(`${overText}\n\nCreate the invoice anyway?`))) return;
       overOk = true;
     }
     setBusy(true);
@@ -55,8 +56,8 @@ export default function InvoicePanel({ eventId, isAdmin }: { eventId: string; is
       setOk({ text: `Invoice ${r.invoice.docNumber ? `#${r.invoice.docNumber} ` : ''}created in QuickBooks. Review and send it from there.`, url: r.invoice.url });
       await load();
     } catch (e) {
-      if (e instanceof ApiError && e.reason === 'duplicate' && confirm(`${e.message}\n\nCreate another invoice?`)) return toQbo(true, overOk);
-      if (e instanceof ApiError && e.reason === 'over_quote' && confirm(`${e.message}\n\nCreate the invoice anyway?`)) return toQbo(again, true);
+      if (e instanceof ApiError && e.reason === 'duplicate' && (await askConfirm(`${e.message}\n\nCreate another invoice?`))) return toQbo(true, overOk);
+      if (e instanceof ApiError && e.reason === 'over_quote' && (await askConfirm(`${e.message}\n\nCreate the invoice anyway?`))) return toQbo(again, true);
       setError((e as Error).message);
     } finally {
       setBusy(false);
@@ -158,8 +159,11 @@ export default function InvoicePanel({ eventId, isAdmin }: { eventId: string; is
                   className="btn"
                   href={`/api/events/${eventId}/billing/iif?source=${source}${doc ? `&docNumber=${encodeURIComponent(doc)}` : ''}${cmp ? `&quoteId=${cmp.quote.id}` : ''}${over ? '&overQuote=1' : ''}`}
                   onClick={(e) => {
-                    if (over && !confirm(`${overText}\n\nDownload the invoice anyway?`)) return e.preventDefault();
-                    setTimeout(load, 1500);
+                    if (!over) { setTimeout(load, 1500); return; }
+                    // Asked in the app's own window, so hold the download until the answer comes back.
+                    e.preventDefault();
+                    const href = e.currentTarget.href;
+                    askConfirm(`${overText}\n\nDownload the invoice anyway?`).then((ok) => { if (ok) { window.location.href = href; setTimeout(load, 1500); } });
                   }}
                 >
                   Download .IIF file

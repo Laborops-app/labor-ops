@@ -70,3 +70,51 @@ test('offer waves: best rated first, live progress, pause and carry on', async (
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: /Waves running · wave 1/ })).toBeVisible();
 });
+
+test('search everything: Ctrl+K finds an event and opens it', async ({ page }) => {
+  await newCompany(page);
+  const { eventId } = await eventWithShift(page, { name: 'Quasar Launch Party', startInMin: 24 * 60 });
+  await page.goto('/dashboard');
+  await expect(page.getByRole('heading', { name: /Welcome back/ })).toBeVisible();
+  await page.keyboard.press('Control+k');
+  const box = page.getByRole('dialog', { name: 'Search' });
+  await box.getByRole('combobox', { name: 'Search' }).fill('quasar');
+  await expect(box.getByRole('option', { name: /Quasar Launch Party/ })).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(new RegExp(`/events/${eventId}`));
+  await expect(page.getByRole('heading', { name: 'Quasar Launch Party' })).toBeVisible();
+});
+
+test('remove with Undo, then select several crew and move them to another shift', async ({ page }) => {
+  await newCompany(page, { quiet: false });
+  const a = await newCrew(page, 'Ava Reyes'), b = await newCrew(page, 'Ben Cole');
+  const { eventId, shiftId } = await eventWithShift(page, { name: 'Bulk Show', headcount: 2, startInMin: 3 * 24 * 60 });
+  const ev = await api<{ event: { start_date: string } }>(page, 'GET', `/api/events/${eventId}`);
+  const st = new Date(Date.now() + 3 * 24 * 3600_000 + 10 * 3600_000);
+  const s2 = (await api<{ shift: { id: string } }>(page, 'POST', `/api/events/${eventId}/shifts`, { roleName: 'Loader', startsAt: st.toISOString(), endsAt: new Date(st.getTime() + 4 * 3600_000).toISOString(), headcount: 2 })).shift.id;
+  void ev;
+  for (const p of [a, b]) await api(page, 'POST', `/api/shifts/${shiftId}/assign`, { userId: p.id, confirmed: true });
+
+  await page.goto(`/events/${eventId}`);
+  // Remove, then Undo: Ava stays on the shift and nothing was sent
+  await page.locator('.cs-row', { hasText: 'Ava Reyes' }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Remove from this shift' }).click();
+  await expect(page.locator('.cs-row', { hasText: 'Ava Reyes' })).toHaveCount(0);
+  await page.getByRole('button', { name: /^Undo/ }).click();
+  await expect(page.locator('.cs-row', { hasText: 'Ava Reyes' })).toBeVisible();
+  await page.waitForTimeout(5500);
+  const still = await api<{ shifts: { id: string; assignments: { user_id: string }[] }[] }>(page, 'GET', `/api/events/${eventId}`);
+  expect(still.shifts.find((s) => s.id === shiftId)!.assignments.some((x) => x.user_id === a.id)).toBe(true);
+
+  // Select both and move them to the Loader shift
+  await page.getByRole('button', { name: 'Select crew' }).click();
+  await page.getByLabel('Select Ava Reyes').check();
+  await page.getByLabel('Select Ben Cole').check();
+  const bar = page.getByRole('toolbar', { name: 'Selected crew' });
+  await expect(bar).toContainText('2 selected');
+  await bar.locator('select').selectOption(s2);
+  await expect(page.getByText(/Moved: 2 people/)).toBeVisible();
+  const after = await api<{ shifts: { id: string; assignments: { user_id: string; status: string }[] }[] }>(page, 'GET', `/api/events/${eventId}`);
+  expect(after.shifts.find((s) => s.id === s2)!.assignments.map((x) => x.status)).toEqual(['accepted', 'accepted']);
+  expect(after.shifts.find((s) => s.id === shiftId)!.assignments).toHaveLength(0);
+});

@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import Modal from '@/components/Modal';
 import { api } from '@/lib/api';
+import { askConfirm } from '@/components/Toasts';
 
 type Field = 'name' | 'first' | 'last' | 'email' | 'phone' | 'roles' | 'address' | 'emergencyName' | 'emergencyPhone' | 'notes';
 type Row = { row: number; name: string; email: string; phone: string | null; roles: string[]; address: string | null; emergencyName: string | null; emergencyPhone: string | null; notes: string | null; problems: string[] };
@@ -152,7 +153,7 @@ export function DemoCrew({ onClose, onDone }: { onClose: () => void; onDone: (ms
     } catch (e) { setErr((e as Error).message); } finally { setBusy(''); }
   };
   const remove = async () => {
-    if (!confirm(`Remove all ${count} demo crew? Their shifts, time and ratings go with them.`)) return;
+    if (!(await askConfirm(`Remove all ${count} demo crew? Their shifts, time and ratings go with them.`))) return;
     setBusy('remove'); setErr('');
     try {
       const r = await api<{ removed: number }>('/api/crew/demo', { method: 'DELETE' });

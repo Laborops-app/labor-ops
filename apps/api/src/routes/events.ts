@@ -851,6 +851,34 @@ export async function eventRoutes(app: FastifyInstance) {
     return n ? { ok: true } : reply.code(404).send({ error: 'Assignment not found' });
   });
 
+  // Move someone to another shift on the same event, keeping whether they had said yes. The usual clash, rest and
+  // certificate checks apply to the new shift; nothing changes if it can't be done. They're told about the new shift only.
+  app.post('/api/assignments/:id/move', { preHandler: mgr }, async (req, reply) => {
+    const { id: aId } = id.parse(req.params);
+    const b = z.object({ shiftId: z.string().uuid(), override: z.boolean().optional(), acceptFlags: z.boolean().optional() }).parse(req.body);
+    class Stop extends Error { constructor(public out: { code: number; [k: string]: unknown }) { super('stop'); } }
+    try {
+      const out = await withTenant(req.user.tid, async (c) => {
+        const prev = (await c.query('SELECT a.user_id, a.shift_id, a.status, a.is_lead, s.event_id FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE a.id = $1 FOR UPDATE OF a', [aId])).rows[0];
+        if (!prev) return { code: 404, error: 'Assignment not found' };
+        if (prev.status === 'declined') return { code: 409, error: 'They declined this shift; offer them the other one instead.' };
+        if (prev.shift_id === b.shiftId) return { code: 200, ok: true, assignment: { id: aId } };
+        const target = (await c.query('SELECT event_id FROM shifts WHERE id = $1', [b.shiftId])).rows[0];
+        if (!target || target.event_id !== prev.event_id) return { code: 404, error: 'That shift is not on this event' };
+        await c.query('DELETE FROM shift_assignments WHERE id = $1', [aId]);
+        const r = await assignCrew(c, req.user.tid, req.user.sub, b.shiftId, prev.user_id, b.override, prev.status === 'accepted', b.acceptFlags);
+        if (r.code >= 300) throw new Stop(r);
+        await audit(c, req.user.tid, req.user.sub, 'assignment.move', 'assignment', aId, { from: prev.shift_id, to: b.shiftId });
+        return r;
+      });
+      const { code, ...body } = out;
+      return reply.code(code === 201 ? 200 : code).send(body);
+    } catch (e) {
+      if (e instanceof Stop) { const { code, ...body } = e.out; return reply.code(code).send(body); }
+      throw e;
+    }
+  });
+
   app.get('/api/dashboard', { preHandler: mgr }, async (req) =>
     withTenant(req.user.tid, async (c) => {
       const one = async (sql: string) => (await c.query(sql)).rows[0].n as number;

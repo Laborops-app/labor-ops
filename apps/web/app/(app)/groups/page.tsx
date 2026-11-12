@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api } from '@/lib/api';
+import { askConfirm, undoRemove, useGone } from '@/components/Toasts';
 
 type Group = { id: string; name: string; description: string | null; members: { id: string; name: string; active: boolean }[] };
 type Crew = { id: string; name: string; role: string; active: boolean };
@@ -19,6 +20,7 @@ function Body() {
     load();
     api<{ crew: Crew[] }>('/api/crew').then((r) => setCrew(r.crew.filter((m) => m.role === 'crew' && m.active))).catch(() => {});
   }, []);
+  const gone = useGone();
   const run = async (fn: () => Promise<unknown>) => {
     setError('');
     try { await fn(); await load(); return true; } catch (e) { setError((e as Error).message); return false; }
@@ -37,7 +39,7 @@ function Body() {
         </form>
       </section>
       {groups.length === 0 && <Empty>No groups yet.</Empty>}
-      {groups.map((g) => (
+      {groups.filter((g) => !gone.has(`grp:${g.id}`)).map((g) => (
         <section className="card" key={g.id}>
           <div className="row space">
             <div>
@@ -46,7 +48,7 @@ function Body() {
             </div>
             <span className="row">
               <button className="btn small" onClick={() => edit(g)} aria-expanded={open === g.id}>{open === g.id ? 'Close' : 'Edit members'}</button>
-              <button className="btn ghost small" onClick={() => confirm(`Delete the ${g.name} group?`) && run(() => api(`/api/crew-groups/${g.id}`, { method: 'DELETE' }))}>Delete</button>
+              <button className="btn ghost small" onClick={() => undoRemove(`${g.name} group deleted.`, `grp:${g.id}`, () => api(`/api/crew-groups/${g.id}`, { method: 'DELETE' }), load)}>Delete</button>
             </span>
           </div>
           {open === g.id && (

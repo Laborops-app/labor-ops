@@ -5,6 +5,7 @@ import Shell from '@/components/Shell';
 import { Banner } from '@/components/ui';
 import { avClass, initialsOf } from '@/components/TopbarAction';
 import { api, fmtDateTime, Me, roleLabel } from '@/lib/api';
+import { askConfirm } from '@/components/Toasts';
 
 type Channel = {
   id: string; kind: 'dm' | 'group' | 'event'; name: string | null; unread: number; muted: boolean; pinned: boolean; member_count: number;
@@ -354,7 +355,7 @@ function Details({ me, detail, files, onChange, onClose, onDelete }: { me: Me; d
 
       <div className="cx-info-foot">
         {ch.kind !== 'dm' && (
-          <button className="cx-danger" onClick={() => confirm('Leave this conversation?') && run(async () => { await api(`/api/chat/channels/${ch.id}/members/${me.id}`, { method: 'DELETE' }); location.href = '/chat'; })}>
+          <button className="cx-danger" onClick={() => askConfirm('Leave this conversation?').then((ok): unknown => ok && (run(async () => { await api(`/api/chat/channels/${ch.id}/members/${me.id}`, { method: 'DELETE' }); location.href = '/chat'; })))}>
             <Icon d={I.leave} size={16} /> Leave conversation
           </button>
         )}
@@ -536,7 +537,7 @@ function Thread({ me, id, channel, infoOpen, onInfo, onBack, onChanged }: { me: 
     api(`/api/chat/channels/${id}/typing`, { body: {} }).catch(() => undefined);
   };
   const del = async (m: Msg) => {
-    if (!confirm('Delete this message for everyone?')) return;
+    if (!(await askConfirm('Delete this message for everyone?'))) return;
     try {
       await api(`/api/chat/messages/${m.id}`, { method: 'DELETE' });
       setMsgs((x) => x.map((y) => (y.id === m.id ? { ...y, deleted: true, body: '', files: [] } : y)));
@@ -546,7 +547,7 @@ function Thread({ me, id, channel, infoOpen, onInfo, onBack, onChanged }: { me: 
     }
   };
   const deleteConversation = async () => {
-    if (!confirm('Delete this conversation? Its messages are removed from your view only; the others still have them. It comes back if someone writes again.')) return;
+    if (!(await askConfirm('Delete this conversation? Its messages are removed from your view only; the others still have them. It comes back if someone writes again.'))) return;
     try {
       await api(`/api/chat/channels/${id}`, { method: 'DELETE' });
       onChanged();

@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Banner, Empty } from '@/components/ui';
 import { api, fmtDateTime } from '@/lib/api';
+import { askConfirm } from '@/components/Toasts';
 
 type A = { user_id: string; user_name: string; status: string };
 type S = { id: string; role_name: string; phase_id: string | null; group_id?: string | null; assignments: A[] };
@@ -26,10 +27,11 @@ const TEMPLATES: { label: string; title: string; body: string }[] = [
 const toggle = (list: string[], v: string) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
 
 /** Write an update, pick who on the event gets it, send it; and the history of updates already sent. */
-export default function EventUpdates({ eventId, eventName, shifts, phases, groups }: { eventId: string; eventName: string; shifts: S[]; phases: P[]; groups: G[] }) {
+export default function EventUpdates({ eventId, eventName, shifts, phases, groups, people: preset }: { eventId: string; eventName: string; shifts: S[]; phases: P[]; groups: G[]; people?: string[] }) {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
-  const [aud, setAud] = useState<Audience>({ include: 'confirmed', upcoming: true, phases: [], groups: [], roles: [], people: [] });
+  // Opened from a selection on the event page: start with just those people, waiting answers included.
+  const [aud, setAud] = useState<Audience>({ include: preset?.length ? 'all' : 'confirmed', upcoming: true, phases: [], groups: [], roles: [], people: preset ?? [] });
   const [includeShifts, setIncludeShifts] = useState(true);
   const [text, setText] = useState(false);
   const [who, setWho] = useState<{ count: number; people: { userId: string; name: string; offered: boolean }[] } | null>(null);
@@ -65,7 +67,7 @@ export default function EventUpdates({ eventId, eventName, shifts, phases, group
     setErr(''); setOk('');
     if (!title.trim() || !body.trim()) return setErr('Add a subject and a message.');
     if (!who?.count) return setErr('No one on this event matches who you picked.');
-    if (!confirm(`Send “${title.trim()}” to ${who.count} ${who.count === 1 ? 'person' : 'people'}${text ? ', also by text where they allow it' : ''}?`)) return;
+    if (!(await askConfirm(`Send “${title.trim()}” to ${who.count} ${who.count === 1 ? 'person' : 'people'}${text ? ', also by text where they allow it' : ''}?`))) return;
     setBusy(true);
     try {
       const r = await api<{ update: { recipients: number } }>(`/api/events/${eventId}/updates`, { body: { title, body, audience: aud, includeShifts, text } });

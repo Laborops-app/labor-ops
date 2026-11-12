@@ -6,6 +6,7 @@ import RentmanPicker, { RmProject } from '@/components/RentmanPicker';
 import { api, fmtDate, getPosition } from '@/lib/api';
 import CustomerSelect from '@/components/CustomerSelect';
 import LocationPick from '@/components/LocationPick';
+import { askConfirm } from '@/components/Toasts';
 
 export type EventFull = { id: string; customer_id?: string | null; name: string; client: string | null; venue: string | null; address: string | null; notes: string | null; start_date: string; end_date: string; clock_mode?: 'self' | 'coordinator'; geo_lat?: number | null; geo_lng?: number | null; geofence_m?: number | null; pipeline_status?: string; priority?: string; staffing_draft?: boolean };
 export type Phase = { id: string; label: string; starts_on: string; ends_on: string };
@@ -206,7 +207,7 @@ export function Phases({ eventId, phases, onChanged, onError }: { eventId: strin
                       <button className="btn ghost small" onClick={() => setEdit({ ...edit, [p.id]: { label: p.label, startDate: d10(p.starts_on), endDate: d10(p.ends_on) } })}>
                         Edit
                       </button>
-                      <button className="btn ghost small danger" onClick={() => confirm(`Remove “${p.label}”? Shifts already created stay.`) && act(() => api(`/api/event-phases/${p.id}`, { method: 'DELETE' }))}>
+                      <button className="btn ghost small danger" onClick={() => askConfirm(`Remove “${p.label}”? Shifts already created stay.`).then((ok): unknown => ok && (act(() => api(`/api/event-phases/${p.id}`, { method: 'DELETE' }))))}>
                         Remove
                       </button>
                     </span>
@@ -381,7 +382,7 @@ export function RentmanCard({ eventId, isAdmin, onError, onView, onShifts }: { e
           <span className="row">
             {v.url && <a className="btn small primary" href={v.url} target="_blank" rel="noopener noreferrer">Open in Rentman ↗</a>}
             <button className="btn small" disabled={busy} onClick={() => run(() => api<RmView>(`/api/events/${eventId}/rentman/refresh`, { body: {} }))}>Refresh equipment</button>
-            <button className="btn ghost small" disabled={busy} onClick={() => confirm('Unlink this event from its Rentman project?') && run(() => api<RmView>(`/api/events/${eventId}/rentman`, { method: 'PUT', body: { projectId: null } }))}>Unlink</button>
+            <button className="btn ghost small" disabled={busy} onClick={() => askConfirm('Unlink this event from its Rentman project?').then((ok): unknown => ok && (run(() => api<RmView>(`/api/events/${eventId}/rentman`, { method: 'PUT', body: { projectId: null } }))))}>Unlink</button>
           </span>
         )}
       </div>

@@ -36,6 +36,7 @@ import LaborBudget from '@/components/LaborBudget';
 import RolePicker from '@/components/RolePicker';
 import { EventDetails, Phases, Clocking, RentmanCard, EventFull, Phase, RmView } from '@/components/EventInfo';
 import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
+import { askConfirm, undoable } from '@/components/Toasts';
 
 type Assignment = { id: string; user_id: string; user_name: string; status: string; is_lead?: boolean; created_at?: string; nudged_at?: string | null; planned?: boolean; clocked_in_at?: string | null; last_clock_out?: string | null; pay_type?: 'hourly' | 'day'; rate?: number | null; estimated_pay?: number | null };
 type CrewRate = { user_id: string; user_name: string; role_name?: string; pay_type: 'hourly' | 'day'; rate: number; note: string | null };
@@ -196,6 +197,11 @@ function Body({ me }: { me: Me }) {
   const [addTime, setAddTime] = useState<string | null>(null);
   // Right-click (or ⋯) menu on a crew member: which shift and assignment, and where it opens.
   const [crewMenu, setCrewMenu] = useState<{ sid: string; aid: string; x: number; y: number } | null>(null);
+  // Select mode: tick several crew, then message, confirm, move or remove them together. null = off.
+  const [sel, setSel] = useState<Set<string> | null>(null);
+  const [msgPeople, setMsgPeople] = useState<string[] | undefined>(undefined);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const toggleSel = (aid: string) => setSel((x) => { if (!x) return x; const n = new Set(x); if (n.has(aid)) n.delete(aid); else n.add(aid); return n; });
   // Who is free for the shift being added (checked against its date, time and certificates while the picker is open).
   const [newElig, setNewElig] = useState<Map<string, Elig> | null>(null);
   // "Confirm automatically": crew are put straight on the shift instead of being asked to accept. Remembered on this device.
@@ -375,6 +381,11 @@ function Body({ me }: { me: Me }) {
     } catch (e) { setError((e as Error).message); }
     load();
   };
+  // Removals wait 5 seconds with Undo: the row disappears now, and the change (and any message to the crew) only goes out after.
+  const removeLater = (text: string, url: string, hide: (x: Detail) => Detail) =>
+    undoable(text, async () => { await api(url, { method: 'DELETE' }); await load(); }, { hide: () => setD((x) => (x ? hide(x) : x)), restore: () => { load(); } });
+  const dropAssignment = (aid: string) => (x: Detail): Detail => ({ ...x, shifts: x.shifts.map((sh) => ({ ...sh, assignments: sh.assignments.filter((a) => a.id !== aid) })) });
+  const dropShift = (sid: string) => (x: Detail): Detail => ({ ...x, shifts: x.shifts.filter((sh) => sh.id !== sid) });
   const run = async (fn: () => Promise<unknown>, okMsg = '') => {
     setError('');
     setNote('');
@@ -402,7 +413,7 @@ function Body({ me }: { me: Me }) {
       setNote('Shift updated. Anyone on it has been told about any new time.');
       await load();
     } catch (err) {
-      if (err instanceof ApiError && err.reason === 'clash' && !force && confirm(`${err.message}\n\nSave the new time anyway?`)) return saveTime(true);
+      if (err instanceof ApiError && err.reason === 'clash' && !force && (await askConfirm(`${err.message}\n\nSave the new time anyway?`))) return saveTime(true);
       setError((err as Error).message);
     }
   };
@@ -524,10 +535,10 @@ function Body({ me }: { me: Me }) {
       if (r.warnings?.length) setNote(r.warnings.join(' '));
       return null;
     } catch (err) {
-      if (ask && err instanceof ApiError && err.reason === 'rules' && !override && confirm(`${err.message}\n\nAssign anyway?`)) return assignUser(shiftId, userId, true, ask, acceptFlags, lead);
+      if (ask && err instanceof ApiError && err.reason === 'rules' && !override && (await askConfirm(`${err.message}\n\nAssign anyway?`))) return assignUser(shiftId, userId, true, ask, acceptFlags, lead);
       // Flagged in past reviews (No-show / Do not rehire): always ask, even when adding several people at once.
       if (err instanceof ApiError && err.reason === 'flagged' && !acceptFlags) {
-        if (confirm(`⚠ ${err.message}\n\nAdd them to this shift anyway?`)) return assignUser(shiftId, userId, override, ask, true, lead);
+        if ((await askConfirm(`⚠ ${err.message}\n\nAdd them to this shift anyway?`))) return assignUser(shiftId, userId, override, ask, true, lead);
         return 'Not added. ' + err.message;
       }
       return (err as Error).message;
@@ -715,7 +726,9 @@ function Body({ me }: { me: Me }) {
                   setCrewMenu({ sid: s.id, aid: a.id, x: e.clientX, y: e.clientY });
                 }}
               >
-                <span className="cs-n" aria-hidden="true">{n == null ? '–' : p2(n)}</span>
+                {sel ? (
+                  <label className="cs-pick"><input type="checkbox" checked={sel.has(a.id)} onChange={() => toggleSel(a.id)} aria-label={`Select ${a.user_name}`} /></label>
+                ) : <span className="cs-n" aria-hidden="true">{n == null ? '–' : p2(n)}</span>}
                 <div className="cs-who">
                   <div>
                     <b>{a.user_name}</b>
@@ -760,7 +773,7 @@ function Body({ me }: { me: Me }) {
                         <button type="button" className="btn small" onClick={() => run(() => api(`/api/assignments/${a.id}/check-out`, { body: {} }))}>Check out</button>
                       )}
                       {editing && (
-                        <button type="button" className="cs-x" aria-label={`Remove ${a.user_name} from this shift`} title="Remove from this shift" onClick={() => run(() => api(`/api/assignments/${a.id}`, { method: 'DELETE' }), `${a.user_name} removed.`)}>×</button>
+                        <button type="button" className="cs-x" aria-label={`Remove ${a.user_name} from this shift`} title="Remove from this shift" onClick={() => removeLater(`${a.user_name} removed from ${s.role_name}.`, `/api/assignments/${a.id}`, dropAssignment(a.id))}>×</button>
                       )}
                       <button
                         type="button"
@@ -824,7 +837,7 @@ function Body({ me }: { me: Me }) {
                     <button type="button" className="btn small cs-ico" aria-label={`Duplicate ${s.role_name}`} title="Add the same position again (same times and pay, no crew)" onClick={() => run(() => api(`/api/shifts/${s.id}/duplicate`, { body: {} }), `Added another ${s.role_name}.`)}>
                       <ActIcon n="copy" />
                     </button>
-                    <button type="button" className="btn small cs-ico danger" aria-label={`Delete ${s.role_name}`} title="Delete this shift" onClick={() => confirm('Delete this shift?') && run(() => api(`/api/shifts/${s.id}`, { method: 'DELETE' }))}>
+                    <button type="button" className="btn small cs-ico danger" aria-label={`Delete ${s.role_name}`} title="Delete this shift" onClick={() => { setTimeEdit(null); removeLater(`${s.role_name} shift deleted.`, `/api/shifts/${s.id}`, dropShift(s.id)); }}>
                       <ActIcon n="trash" />
                     </button>
                   </div>
@@ -1045,7 +1058,7 @@ function Body({ me }: { me: Me }) {
                   <div className="cs-edit-foot">
                     <button type="submit" form={`edit-${s.id}`} className="btn primary">Save shift</button>
                     <button type="button" className="btn" onClick={() => { setTimeEdit(null); setPayEdit(null); }}>Cancel</button>
-                    <button type="button" className="btn ghost danger" style={{ marginLeft: 'auto' }} onClick={() => confirm('Delete this shift?') && run(() => api(`/api/shifts/${s.id}`, { method: 'DELETE' }))}>Delete shift</button>
+                    <button type="button" className="btn ghost danger" style={{ marginLeft: 'auto' }} onClick={() => { setTimeEdit(null); removeLater(`${s.role_name} shift deleted.`, `/api/shifts/${s.id}`, dropShift(s.id)); }}>Delete shift</button>
                   </div>
                 )}
               </div>
@@ -1143,7 +1156,7 @@ function Body({ me }: { me: Me }) {
                       className="btn ghost small danger"
                       title="Remove this group (its shifts stay in the phase)"
                       aria-label={`Remove ${grp.label}`}
-                      onClick={() => { if (confirm(`Remove the group “${grp.label}”? Its shifts stay in ${g.phase!.label}.`)) run(() => api(`/api/phase-groups/${grp.id}`, { method: 'DELETE' }), 'Group removed.'); }}
+                      onClick={async () => { if ((await askConfirm(`Remove the group “${grp.label}”? Its shifts stay in ${g.phase!.label}.`))) run(() => api(`/api/phase-groups/${grp.id}`, { method: 'DELETE' }), 'Group removed.'); }}
                     >
                       ×
                     </button>
@@ -1460,7 +1473,7 @@ function Body({ me }: { me: Me }) {
         onFill={(sid) => openPicker(sid)}
         onReplace={async (sid, aid) => {
           const a = d.shifts.find((s) => s.id === sid)?.assignments.find((x) => x.id === aid);
-          if (a && a.status !== 'declined' && !confirm(`Take ${a.user_name} off this shift and pick someone else? They'll be told.`)) return;
+          if (a && a.status !== 'declined' && !(await askConfirm(`Take ${a.user_name} off this shift and pick someone else? They'll be told.`))) return;
           setError('');
           try {
             await api(`/api/assignments/${aid}`, { method: 'DELETE' });
@@ -1506,13 +1519,13 @@ function Body({ me }: { me: Me }) {
           { label: 'View profile', icon: 'link', hint: 'Skills, certificates, ratings', onClick: () => router.push(`/crew/${a.user_id}`) },
           ...(ended && a.status === 'accepted' ? [{ label: 'Rate their work', icon: 'rate', onClick: () => setSettings('rate') }] : []),
           'divider',
-          ...(live ? [{ label: 'Replace with someone else', icon: 'restore', hint: a.planned ? undefined : 'They’ll be told', onClick: () => {
-            if (!a.planned && !confirm(`Take ${a.user_name} off ${s.role_name} and pick someone else? They'll be told.`)) return;
+          ...(live ? [{ label: 'Replace with someone else', icon: 'restore', hint: a.planned ? undefined : 'They’ll be told', onClick: async () => {
+            if (!a.planned && !(await askConfirm(`Take ${a.user_name} off ${s.role_name} and pick someone else? They'll be told.`))) return;
             run(() => api(a.planned ? `/api/planned-picks/${a.id}` : `/api/assignments/${a.id}`, { method: 'DELETE' })).then((ok) => ok && openPicker(s.id));
           } }] : []),
           a.planned
-            ? { label: 'Take out of the plan', icon: 'trash', danger: true, onClick: () => { run(() => api(`/api/planned-picks/${a.id}`, { method: 'DELETE' }), `${a.user_name} taken out of the plan.`); } }
-            : { label: 'Remove from this shift', icon: 'trash', danger: true, onClick: () => { if (a.status === 'declined' || confirm(`Remove ${a.user_name} from ${s.role_name}? They'll be told.`)) run(() => api(`/api/assignments/${a.id}`, { method: 'DELETE' }), `${a.user_name} removed.`); } },
+            ? { label: 'Take out of the plan', icon: 'trash', danger: true, onClick: () => removeLater(`${a.user_name} taken out of the plan.`, `/api/planned-picks/${a.id}`, dropAssignment(a.id)) }
+            : { label: 'Remove from this shift', icon: 'trash', danger: true, onClick: () => removeLater(a.status === 'declined' ? `${a.user_name} cleared.` : `${a.user_name} removed from ${s.role_name}. They’ll be told.`, `/api/assignments/${a.id}`, dropAssignment(a.id)) },
         ];
         return (
           <CrewMenu
@@ -1648,7 +1661,7 @@ function Body({ me }: { me: Me }) {
           <button type="button" onClick={() => setQrOpen(true)} aria-haspopup="dialog">
             <ActIcon n="qr" size={20} /><span>QR clock-in</span>
           </button>
-          <button type="button" onClick={() => setSettings('update')} aria-haspopup="dialog">
+          <button type="button" onClick={() => { setMsgPeople(undefined); setSettings('update'); }} aria-haspopup="dialog">
             <ActIcon n="update" size={20} /><span>Message</span>
           </button>
         </nav>
@@ -1675,12 +1688,17 @@ function Body({ me }: { me: Me }) {
                 <ActIcon n="rentman" /> {rmBuilding ? 'Building the crew…' : 'Build from Rentman'}
               </button>
             )}
-            <button className="btn act-btn in-quick" onClick={() => setSettings('update')} aria-haspopup="dialog" title="Send an update to the crew scheduled on this event">
+            <button className="btn act-btn in-quick" onClick={() => { setMsgPeople(undefined); setSettings('update'); }} aria-haspopup="dialog" title="Send an update to the crew scheduled on this event">
               <ActIcon n="update" /> Send update
             </button>
             {(me.role === 'admin' || me.canAdjustRates) && (
               <button className="btn act-btn" onClick={() => setSettings('invoice')} aria-haspopup="dialog" title="Bill the customer for this event">
                 <ActIcon n="invoice" /> Invoice
+              </button>
+            )}
+            {d.shifts.some((x) => x.assignments.length) && (
+              <button className={`btn act-btn${sel ? ' on' : ''}`} aria-pressed={!!sel} onClick={() => setSel(sel ? null : new Set())} title="Tick several crew to message, confirm, move or remove them together">
+                <ActIcon n="check" /> {sel ? 'Done selecting' : 'Select crew'}
               </button>
             )}
             <ActionMenu
@@ -1705,7 +1723,7 @@ function Body({ me }: { me: Me }) {
                     ? { label: 'Restore to the pipeline', icon: 'restore', onClick: () => api(`/api/events/${id}/restore`, { body: {} }).then(() => { setNote('Back on the pipeline.'); load(); }).catch((e) => setError(e.message)) }
                     : { label: 'Archive', icon: 'archive', hint: 'Take it off the pipeline (kept in the Archive: 4 years, or 2 if canceled)', onClick: () => api(`/api/events/${id}/archive`, { body: {} }).then(() => { setNote(ev.pipeline_status === 'canceled' ? 'Archived. It stays on the Archive page for 2 years.' : 'Archived. It stays on the Archive page for 4 years.'); load(); }).catch((e) => setError(e.message)) }]
                   : []),
-                { label: 'Delete event', icon: 'trash', danger: true, onClick: () => { if (confirm(`Delete "${ev.name}" and all its shifts?`)) api(`/api/events/${id}`, { method: 'DELETE' }).then(() => router.replace('/events')); } },
+                { label: 'Delete event', icon: 'trash', danger: true, onClick: async () => { if ((await askConfirm(`Delete "${ev.name}" and all its shifts?`))) api(`/api/events/${id}`, { method: 'DELETE' }).then(() => router.replace('/events')); } },
               ]}
             />
             <CopyEvent eventId={id} name={ev.name} customerId={ev.customer_id ?? null} onError={setError} openSignal={copySignal} />
@@ -1789,6 +1807,52 @@ function Body({ me }: { me: Me }) {
         </>
       )}
       </div>
+      {sel && (() => {
+        const picked = d.shifts.flatMap((x) => x.assignments.filter((a) => sel.has(a.id)).map((a) => ({ a, s: x })));
+        const offered = picked.filter(({ a }) => !a.planned && (a.status === 'offered' || a.status === 'pending'));
+        const live = picked.filter(({ a }) => a.status !== 'declined' && !a.planned);
+        const bulk = async (label: string, list: typeof picked, fn: (p: (typeof picked)[number]) => Promise<unknown>) => {
+          setBulkBusy(true); setError(''); setNote('');
+          const fails: string[] = [];
+          for (const p of list) { try { await fn(p); } catch (e) { fails.push(`${p.a.user_name}: ${(e as Error).message}`); } }
+          setBulkBusy(false); await load();
+          if (fails.length) setError(`${label}: ${list.length - fails.length} done, ${fails.length} not. ${fails.join(' · ')}`);
+          else { setNote(`${label}: ${list.length} ${list.length === 1 ? 'person' : 'people'}.`); setSel(new Set()); }
+        };
+        const ids = new Set(picked.map((p) => p.a.id));
+        return (
+          <div className="bulk-bar" role="toolbar" aria-label="Selected crew">
+            <span className="bulk-n"><b>{picked.length}</b> selected</span>
+            <button type="button" className="btn small" disabled={!picked.length} onClick={() => setSel(new Set(d.shifts.flatMap((x) => x.assignments.map((a) => a.id))))}>All</button>
+            <button type="button" className="btn small" disabled={!live.length || bulkBusy} onClick={() => { setMsgPeople([...new Set(live.map((p) => p.a.user_id))]); setSettings('update'); }}>
+              <ActIcon n="update" /> Message
+            </button>
+            <button type="button" className="btn small" disabled={!offered.length || bulkBusy} title="Mark as confirmed for people who said yes another way" onClick={() => bulk('Confirmed', offered, ({ a }) => api(`/api/assignments/${a.id}/confirm`, { body: {} }))}>
+              <ActIcon n="check" /> Confirm{offered.length ? ` ${offered.length}` : ''}
+            </button>
+            <label className="bulk-move">
+              <span className="sr-only">Move to shift</span>
+              <select value="" disabled={!live.length || bulkBusy} onChange={(e) => {
+                const to = e.target.value; if (!to) return;
+                bulk('Moved', live.filter((p) => p.s.id !== to), ({ a }) => api(`/api/assignments/${a.id}/move`, { body: { shiftId: to } }));
+              }}>
+                <option value="">Move to…</option>
+                {d.shifts.map((x) => <option key={x.id} value={x.id}>{x.role_name} · {shortWhen(x.starts_at)}</option>)}
+              </select>
+            </label>
+            <button type="button" className="btn small danger" disabled={!picked.length || bulkBusy} onClick={() => {
+              const list = picked; setSel(new Set());
+              undoable(`${list.length} removed. They’ll be told.`, async () => {
+                for (const { a } of list) await api(a.planned ? `/api/planned-picks/${a.id}` : `/api/assignments/${a.id}`, { method: 'DELETE' }).catch(() => undefined);
+                await load();
+              }, { hide: () => setD((x) => (x ? { ...x, shifts: x.shifts.map((sh) => ({ ...sh, assignments: sh.assignments.filter((a) => !ids.has(a.id)) })) } : x)), restore: () => { load(); } });
+            }}>
+              <ActIcon n="trash" /> Remove
+            </button>
+            <button type="button" className="btn small ghost" onClick={() => setSel(null)}>Done</button>
+          </div>
+        );
+      })()}
       <aside className="split-aside ev-aside">
       {!narrow && attention}
       <EventDetails ev={ev} hasPhases={d.phases.length > 0} shiftCount={d.shifts.length} onSaved={load} onError={setError} />
@@ -1859,7 +1923,7 @@ function Body({ me }: { me: Me }) {
                 />
               </div>
             )}
-            {settings === 'update' && <div style={{ marginTop: 12 }}><EventUpdates eventId={id} eventName={ev.name} shifts={d.shifts} phases={d.phases} groups={d.groups ?? []} /></div>}
+            {settings === 'update' && <div style={{ marginTop: 12 }}><EventUpdates key={msgPeople?.join(',') ?? 'all'} eventId={id} eventName={ev.name} shifts={d.shifts} phases={d.phases} groups={d.groups ?? []} people={msgPeople} /></div>}
             {settings !== 'rentman' && settings !== 'invoice' && settings !== 'rate' && settings !== 'update' && settings !== 'autofill' && settings !== 'avail' && <div className="phase-tabs" role="tablist" aria-label="Settings section" style={{ margin: '12px 0' }}>
               {([['clock', 'Clock-in'], ['ot', 'Overtime & work rules'], ['tpl', 'Templates'], ...((me.role === 'admin' || me.canAdjustRates) ? [['pay', 'Crew pay']] as const : [])] as const).map(([k, label]) => (
                 <button key={k} type="button" role="tab" aria-selected={settings === k} className={settings === k ? 'tab on' : 'tab'} onClick={() => setSettings(k)}>
@@ -1934,7 +1998,7 @@ function Body({ me }: { me: Me }) {
             {tplId && (
               <button
                 className="btn ghost small danger"
-                onClick={() => confirm('Delete this template?') && run(() => api(`/api/templates/${tplId}`, { method: 'DELETE' })).then(() => (setTplId(''), loadTemplates()))}
+                onClick={() => askConfirm('Delete this template?').then((ok): unknown => ok && (run(() => api(`/api/templates/${tplId}`, { method: 'DELETE' })).then(() => (setTplId(''), loadTemplates()))))}
               >
                 Delete template
               </button>

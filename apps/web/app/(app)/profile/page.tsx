@@ -11,6 +11,7 @@ import { Banner } from '@/components/ui';
 import { api, ApiError, roleLabel, type Me } from '@/lib/api';
 import SkillPicker, { useSkillNames } from '@/components/SkillPicker';
 import Appearance from '@/components/Appearance';
+import { askConfirm, undoRemove, useGone } from '@/components/Toasts';
 
 type User = {
   id: string;
@@ -104,6 +105,7 @@ function Body({ me }: { me: Me }) {
   };
   useLoadEffect(load, []);
 
+  const gone = useGone();
   const act = async (key: string, msg: string, fn: () => Promise<unknown>) => {
     setError('');
     setOk('');
@@ -256,7 +258,7 @@ function Body({ me }: { me: Me }) {
             <p className="muted">No certificates yet.</p>
           ) : (
             <ul className="plain certs">
-              {certs.map((c) => {
+              {certs.filter((c) => !gone.has(`mycert:${c.id}`)).map((c) => {
                 const st = status(c);
                 return (
                   <li key={c.id} className="cert-row">
@@ -288,7 +290,7 @@ function Body({ me }: { me: Me }) {
                     <button
                       className="btn ghost small danger"
                       disabled={!!busy}
-                      onClick={() => confirm(`Remove ${c.name}?`) && act('del', 'Certificate removed.', () => api(`/api/my/certs/${c.id}`, { method: 'DELETE' }))}
+                      onClick={() => undoRemove(`${c.name} removed.`, `mycert:${c.id}`, () => api(`/api/my/certs/${c.id}`, { method: 'DELETE' }), load)}
                     >
                       Remove
                     </button>

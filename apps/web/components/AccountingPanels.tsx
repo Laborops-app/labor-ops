@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Panel from '@/components/Panel';
 import { Banner } from '@/components/ui';
 import { api, money } from '@/lib/api';
+import { askConfirm } from '@/components/Toasts';
 
 type Provider = 'adp' | 'gusto' | 'quickbooks';
 type AdpRun = { frequency: 'W' | 'B' | 'S' | 'M' | 'Q'; regCode: string; otCode: string; dtCode: string; dayCode: string; rateCodes: { code: string; label: string }[]; rateCode: string; roleRates: Record<string, string>; dept: string };
@@ -136,7 +137,7 @@ export default function AccountingPanels({ qbo, only }: { qbo: string | null; on
               {q.connected ? 'Reconnect' : 'Connect to QuickBooks'}
             </button>
             {q.connected && (
-              <button type="button" className="btn ghost" disabled={!!busy} onClick={() => confirm('Disconnect QuickBooks? Invoices already created stay in QuickBooks.') && run('disc', async () => { await api('/api/quickbooks/disconnect', { body: {} }); setLook(null); await load(); return 'QuickBooks disconnected.'; })}>
+              <button type="button" className="btn ghost" disabled={!!busy} onClick={() => askConfirm('Disconnect QuickBooks? Invoices already created stay in QuickBooks.').then((ok): unknown => ok && (run('disc', async () => { await api('/api/quickbooks/disconnect', { body: {} }); setLook(null); await load(); return 'QuickBooks disconnected.'; })))}>
                 Disconnect
               </button>
             )}

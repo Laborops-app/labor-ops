@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { api, fmtDateTime } from '@/lib/api';
 import { Banner } from '@/components/ui';
+import { askConfirm } from '@/components/Toasts';
 
 type Key = { id: string; name: string; created_at: string; last_used_at: string | null };
 
@@ -36,7 +37,7 @@ export default function Passkeys() {
     }
   };
   const remove = async (k: Key) => {
-    if (!confirm(`Remove the passkey "${k.name}"? You can add it again later.`)) return;
+    if (!(await askConfirm(`Remove the passkey "${k.name}"? You can add it again later.`))) return;
     await api(`/api/passkeys/${encodeURIComponent(k.id)}`, { method: 'DELETE' }).catch((e) => setError(e.message));
     load();
   };

@@ -8,6 +8,7 @@ import { Banner, Pill } from '@/components/ui';
 import CustomerSelect from '@/components/CustomerSelect';
 import { api, money } from '@/lib/api';
 import RentmanQuoteView from '@/components/RentmanQuoteView';
+import { askConfirm } from '@/components/Toasts';
 
 type Line = { section: string; description: string; day: string; start: string; end: string; qty: string; hours: string; rate: string };
 type Skill = { id: string; name: string; active: boolean; groupId: string | null; billRate?: number };
@@ -145,7 +146,7 @@ function Body() {
       <p className="small"><Link href="/quotes">← Quotes</Link></p>
       <div className="row space">
         <h1>Quote #{q.number} <Pill status={q.status} /></h1>
-        <button className="btn ghost small danger" onClick={() => confirm('Delete this quote?') && api(`/api/quotes/${id}`, { method: 'DELETE' }).then(() => router.replace('/quotes')).catch((e) => setError(e.message))}>Delete</button>
+        <button className="btn ghost small danger" onClick={() => askConfirm('Delete this quote?').then((ok): unknown => ok && (api(`/api/quotes/${id}`, { method: 'DELETE' }).then(() => router.replace('/quotes')).catch((e) => setError(e.message))))}>Delete</button>
       </div>
       {q.status === 'accepted' && <Banner kind="ok">Accepted by the customer{q.responded_at ? ` on ${new Date(q.responded_at).toLocaleDateString()}` : ''}.{q.response_note ? ` They wrote: "${q.response_note}"` : ''}</Banner>}
       {q.status === 'declined' && <Banner>Declined by the customer.{q.response_note ? ` They wrote: "${q.response_note}"` : ''}</Banner>}
@@ -159,7 +160,7 @@ function Body() {
           <CustomerSelect value={f.customerId} onPick={(c) => edit(setF)({ ...f, customerId: c?.id ?? null })} />
           <label>Valid until<input type="date" value={f.validUntil} onChange={(e) => edit(setF)({ ...f, validUntil: e.target.value })} /></label>
         </div>
-        {q.event_id && <p className="small muted">Built from <Link href={`/events/${q.event_id}`}>{q.event_name}</Link>. <button className="btn ghost small" onClick={() => confirm('Replace the lines with the event\'s current shifts?') && api<Detail>(`/api/quotes/${id}/refresh-lines`, { body: {} }).then(apply).catch((e) => setError(e.message))}>Rebuild lines from its shifts</button></p>}
+        {q.event_id && <p className="small muted">Built from <Link href={`/events/${q.event_id}`}>{q.event_name}</Link>. <button className="btn ghost small" onClick={() => askConfirm('Replace the lines with the event\'s current shifts?').then((ok): unknown => ok && (api<Detail>(`/api/quotes/${id}/refresh-lines`, { body: {} }).then(apply).catch((e) => setError(e.message))))}>Rebuild lines from its shifts</button></p>}
         <label>Message at the top<textarea rows={3} value={f.intro} onChange={(e) => edit(setF)({ ...f, intro: e.target.value })} maxLength={5000} placeholder="Thanks for the opportunity. Here is our labor estimate for …" /></label>
       </section>
 
@@ -260,7 +261,7 @@ function Body() {
                             <span className="row" style={{ gap: '.3rem' }}>
                               <button className="btn small" onClick={() => { setLines(lines.map((l) => (l.description.trim().toLowerCase() === r.name.toLowerCase() ? { ...l, rate: String(bill) } : l))); setDirty(true); }}>Use bill rate on this quote</button>
                               <button className="btn small primary" onClick={async () => {
-                                if (pay !== r.payRate && !confirm(`Change ${r.name} pay to ${money(pay)}/hr for everyone, from now on?`)) return;
+                                if (pay !== r.payRate && !(await askConfirm(`Change ${r.name} pay to ${money(pay)}/hr for everyone, from now on?`))) return;
                                 const sk = skillIds[r.name.toLowerCase()];
                                 try {
                                   await api(`/api/skills/${sk}`, { method: 'PATCH', body: { payRate: pay, billRate: bill } });

@@ -4,6 +4,7 @@ import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, money } from '@/lib/api';
 import PayAdjustments from '@/components/PayAdjustments';
+import { askConfirm } from '@/components/Toasts';
 
 type Provider = 'adp' | 'gusto' | 'quickbooks';
 type Entry = { id: string; date: string; event: string; role: string; hours: number; reg: number; ot: number; dt: number; pay: number | null; rate: number | null; day: boolean; exported: boolean; minCall?: number;
@@ -123,7 +124,7 @@ function Body() {
                       disabled={busy}
                       onClick={async () => {
                         const fresh = d.missingIds.quickbooks ?? [];
-                        if (!confirm(`Send ${d.totals.hours.toFixed(2)} hours to QuickBooks as time entries?${fresh.length ? `\n\nCrew not in QuickBooks yet are matched by email or name, or added as new employees: ${fresh.join(', ')}.` : ''}`)) return;
+                        if (!(await askConfirm(`Send ${d.totals.hours.toFixed(2)} hours to QuickBooks as time entries?${fresh.length ? `\n\nCrew not in QuickBooks yet are matched by email or name, or added as new employees: ${fresh.join(', ')}.` : ''}`))) return;
                         setBusy(true);
                         setError('');
                         try {
@@ -136,7 +137,7 @@ function Body() {
                           // Nothing new: these hours were exported before (an ADP or QuickBooks file, or an earlier send).
                           if (!r.activities && r.alreadyExported) {
                             await load();
-                            if (!confirm(`No new hours to send: all ${r.alreadyExported} entries in this period were already exported to payroll before (for example in a downloaded file).\n\nSend them to QuickBooks anyway? If they were already sent to QuickBooks, they will show there twice.`)) {
+                            if (!(await askConfirm(`No new hours to send: all ${r.alreadyExported} entries in this period were already exported to payroll before (for example in a downloaded file).\n\nSend them to QuickBooks anyway? If they were already sent to QuickBooks, they will show there twice.`))) {
                               setOk(`Nothing sent: the ${r.alreadyExported} entries in this period were already exported.${people}`);
                               return;
                             }
@@ -174,7 +175,7 @@ function Body() {
                       disabled={busy}
                       title="Delete extra copies of the same hours that were sent to QuickBooks more than once for this period"
                       onClick={async () => {
-                        if (!confirm('Remove hours that were sent to QuickBooks more than once for this period? One copy of each is kept.')) return;
+                        if (!(await askConfirm('Remove hours that were sent to QuickBooks more than once for this period? One copy of each is kept.'))) return;
                         setBusy(true);
                         setError('');
                         try {

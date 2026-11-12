@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Banner } from '@/components/ui';
 import { api, fmtDateTime } from '@/lib/api';
 import { RuleSetPicker } from '@/components/WorkRuleSets';
+import { askConfirm } from '@/components/Toasts';
 
 type PortalUser = { id: string; name: string; email: string; active: boolean; last_seen_at: string | null };
 type Portal = { enabled: boolean; requireApproval: boolean; ruleSetId: string | null; users: PortalUser[]; portalUrl: string };
@@ -51,7 +52,7 @@ export default function CustomerPortal({ customerId, customerName, canEdit }: { 
                 {canEdit && (
                   <div className="row" style={{ gap: 6 }}>
                     <button type="button" className="btn small" onClick={() => run(() => api(`/api/customers/${customerId}/portal-users/${u.id}/invite`, { body: {} }), `Invite sent again to ${u.email}.`)}>Resend invite</button>
-                    <button type="button" className="btn small ghost danger" onClick={() => { if (confirm(`Remove ${u.name}’s access?`)) run(() => api(`/api/customers/${customerId}/portal-users/${u.id}`, { method: 'DELETE' }), 'Access removed.'); }}>Remove</button>
+                    <button type="button" className="btn small ghost danger" onClick={async () => { if ((await askConfirm(`Remove ${u.name}’s access?`))) run(() => api(`/api/customers/${customerId}/portal-users/${u.id}`, { method: 'DELETE' }), 'Access removed.'); }}>Remove</button>
                   </div>
                 )}
               </li>

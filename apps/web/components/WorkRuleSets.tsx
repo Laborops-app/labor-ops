@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Banner, Empty } from '@/components/ui';
 import { api } from '@/lib/api';
+import { askConfirm } from '@/components/Toasts';
 
 export type WorkRules = {
   otAfter: number | null; dtAfter: number | null; otMult: number | null; dtMult: number | null;
@@ -198,7 +199,7 @@ export default function WorkRuleSets() {
                   <div className="row" style={{ gap: 6 }}>
                     <button type="button" className="btn small" onClick={() => setEdit({ id: s.id, name: s.name, isDefault: s.is_default, config: s.config })}>Edit</button>
                     <button type="button" className="btn small ghost danger" onClick={async () => {
-                      if (!confirm(`Delete “${s.name}”? Customers and events using it fall back to the default.`)) return;
+                      if (!(await askConfirm(`Delete “${s.name}”? Customers and events using it fall back to the default.`))) return;
                       try { await api(`/api/work-rule-sets/${s.id}`, { method: 'DELETE' }); load(); } catch (e) { setErr((e as Error).message); }
                     }}>Delete</button>
                   </div>

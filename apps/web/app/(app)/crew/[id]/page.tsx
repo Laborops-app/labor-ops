@@ -9,6 +9,7 @@ import { Banner } from '@/components/ui';
 import { api, ApiError, FIELD_ROLES, FieldRole, Me, roleLabel } from '@/lib/api';
 import { CrewReviews } from '@/components/Rating';
 import SkillPicker, { useSkillNames, useSkillSections } from '@/components/SkillPicker';
+import { askConfirm, undoRemove, useGone } from '@/components/Toasts';
 
 type Member = {
   id: string;
@@ -92,6 +93,7 @@ function Body({ me }: { me: Me }) {
   };
   useLoadEffect(load, [id]);
 
+  const gone = useGone();
   const act = async (key: string, msg: string, fn: () => Promise<unknown>) => {
     setError('');
     setOk('');
@@ -135,8 +137,8 @@ function Body({ me }: { me: Me }) {
       if (fileRef.current) fileRef.current.value = '';
     }
   };
-  const resetPw = () => {
-    if (!confirm(`Set a new temporary password for ${m.name}? Their current password will stop working.`)) return;
+  const resetPw = async () => {
+    if (!(await askConfirm(`Set a new temporary password for ${m.name}? Their current password will stop working.`))) return;
     act('pw', '', async () => {
       const r = await api<{ tempPassword: string }>(`/api/crew/${id}/password`, { body: {} });
       setOk(`New temporary password for ${m.name}: ${r.tempPassword} — share it with them now, it is not shown again.`);
@@ -259,12 +261,12 @@ function Body({ me }: { me: Me }) {
               <select
                 value={m.role}
                 disabled={busy === 'role'}
-                onChange={(e) => {
+                onChange={async (e) => {
                   const role = e.target.value;
                   const warn = role === 'admin'
                     ? `Make ${m.name} an admin? Admins can do everything, including billing, payroll, integrations and adding other admins.`
                     : m.role === 'admin' ? `Remove admin access from ${m.name}?` : '';
-                  if (warn && !confirm(warn)) return;
+                  if (warn && !(await askConfirm(warn))) return;
                   act('role', `${m.name} is now ${roleLabel(role) === 'Crew' ? 'crew' : `a ${roleLabel(role)}`}.`, () => api(`/api/crew/${id}/role`, { method: 'PUT', body: { role } }));
                 }}
               >
@@ -316,7 +318,7 @@ function Body({ me }: { me: Me }) {
               <p className="muted">None on file.</p>
             ) : (
               <ul className="plain certs">
-                {d.certs.map((c) => {
+                {d.certs.filter((c) => !gone.has(`cert:${c.id}`)).map((c) => {
                   const st = status(c);
                   return (
                     <li key={c.id} className="cert-row">
@@ -350,7 +352,7 @@ function Body({ me }: { me: Me }) {
                       >
                         {c.file_name ? 'Replace file' : 'Upload file'}
                       </button>
-                      <button className="btn ghost small danger" disabled={!!busy} onClick={() => confirm(`Remove ${c.name}?`) && act('del', 'Certificate removed.', () => api(`/api/certs/${c.id}`, { method: 'DELETE' }))}>
+                      <button className="btn ghost small danger" disabled={!!busy} onClick={() => undoRemove(`${c.name} removed.`, `cert:${c.id}`, () => api(`/api/certs/${c.id}`, { method: 'DELETE' }), load)}>
                         Remove
                       </button>
                     </li>

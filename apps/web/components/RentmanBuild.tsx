@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { api, fmtTime } from '@/lib/api';
+import { askConfirm } from '@/components/Toasts';
 
 type W = { key: string; role: string; start: string; end: string; headcount: number; group: string | null };
 type Conflict = {
@@ -69,7 +70,7 @@ export default function RentmanBuild({ eventId, onChanged, onError }: { eventId:
             </button>
           )}
           {b.built && (
-            <button type="button" className="btn ghost small" disabled={!!busy} title="Shifts stay; Rentman changes stop coming in" onClick={() => confirm('Stop keeping this event’s shifts in step with Rentman? The shifts stay as they are.') && run('off', async () => { await api(`/api/events/${eventId}/rentman/build`, { method: 'DELETE' }); return 'This event no longer follows Rentman’s crew and transport.'; })}>
+            <button type="button" className="btn ghost small" disabled={!!busy} title="Shifts stay; Rentman changes stop coming in" onClick={() => askConfirm('Stop keeping this event’s shifts in step with Rentman? The shifts stay as they are.').then((ok): unknown => ok && (run('off', async () => { await api(`/api/events/${eventId}/rentman/build`, { method: 'DELETE' }); return 'This event no longer follows Rentman’s crew and transport.'; })))}>
               Stop syncing
             </button>
           )}
@@ -123,7 +124,7 @@ export default function RentmanBuild({ eventId, onChanged, onError }: { eventId:
                           await api(`/api/events/${eventId}/rentman/build/keep`, { body: { key: x.key, hash: x.rentman.hash } });
                           return `${x.role} now matches Rentman.`;
                         }
-                        if (!confirm(`Delete the ${x.role} shift? Everyone on it is told.`)) return;
+                        if (!(await askConfirm(`Delete the ${x.role} shift? Everyone on it is told.`))) return;
                         await api(`/api/shifts/${x.shiftId}`, { method: 'DELETE' });
                         return `${x.role} shift deleted.`;
                       })

@@ -5,6 +5,7 @@ import Shell from '@/components/Shell';
 import CopyEvent from '@/components/CopyEvent';
 import { Banner, Empty } from '@/components/ui';
 import { api, fmtDate, money, type Me } from '@/lib/api';
+import { askConfirm } from '@/components/Toasts';
 
 type Ev = {
   id: string; name: string; venue: string | null; start_date: string; end_date: string; status: string; customer_id: string | null; customer_name: string | null;
@@ -30,8 +31,8 @@ function Body({ me }: { me: Me }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
   const restore = (e: Ev) => api(`/api/events/${e.id}/restore`, { body: {} }).then(() => { setNote(`${e.name} is back on the pipeline.`); load(); }).catch((x) => setError(x.message));
-  const remove = (e: Ev) => {
-    if (!confirm(`Delete ${e.name} for good? Its shifts, crew and time records are deleted too. This cannot be undone.`)) return;
+  const remove = async (e: Ev) => {
+    if (!(await askConfirm(`Delete ${e.name} for good? Its shifts, crew and time records are deleted too. This cannot be undone.`))) return;
     api(`/api/archive/${e.id}`, { method: 'DELETE' }).then(() => { setNote(`${e.name} was deleted.`); load(); }).catch((x) => setError(x.message));
   };
   const staff = me.role !== 'hr';

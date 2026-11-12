@@ -5,6 +5,7 @@ import Panel from '@/components/Panel';
 import Modal from '@/components/Modal';
 import { Banner, Empty } from '@/components/ui';
 import { api, fmtDate } from '@/lib/api';
+import { askConfirm } from '@/components/Toasts';
 
 type Course = { id: number; title: string; url: string };
 type Invite = { id: string; user_id: string; name: string; email: string; created_at: string; last_sent_at: string; send_count: number; completed_at: string | null; coursesDone: number; done: boolean };
@@ -203,7 +204,7 @@ function StaffView({ isAdmin }: { isAdmin: boolean }) {
                             {!i.done && (
                               <span className="row">
                                 <button className="btn ghost small" disabled={!!busy} onClick={() => run(i.id, async () => { await api(`/api/academy/invites/${i.id}/remind`, { body: {} }); return `Reminder sent to ${i.name}.`; })}>Remind</button>
-                                <button className="btn ghost small danger" disabled={!!busy} onClick={() => confirm(`Stop asking ${i.name} to complete ${g.name}?`) && run(i.id, async () => { await api(`/api/academy/invites/${i.id}`, { method: 'DELETE' }); return `${i.name} removed from ${g.name}.`; })}>Remove</button>
+                                <button className="btn ghost small danger" disabled={!!busy} onClick={() => askConfirm(`Stop asking ${i.name} to complete ${g.name}?`).then((ok): unknown => ok && (run(i.id, async () => { await api(`/api/academy/invites/${i.id}`, { method: 'DELETE' }); return `${i.name} removed from ${g.name}.`; })))}>Remove</button>
                               </span>
                             )}
                           </td>

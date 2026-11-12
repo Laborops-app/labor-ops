@@ -11,6 +11,7 @@ import CopyEvent from '@/components/CopyEvent';
 import TopbarAction, { PlusIcon, TrashIcon, avClass, initialsOf } from '@/components/TopbarAction';
 import { api, fmtDate, money } from '@/lib/api';
 import { ContactDetails, ContactGrid, type Contact } from '@/components/crm/ContactCards';
+import { askConfirm } from '@/components/Toasts';
 
 type Cust = { id: string; name: string; notes: string | null; rentman_contact_id: number | null; parent_id?: string | null; parent_name?: string | null };
 type Loc = { id: string; label: string; venue: string | null; address: string | null; notes: string | null; is_default: boolean };
@@ -84,7 +85,7 @@ function Body() {
               className="btn-round danger"
               aria-label={`Delete ${c.name}`}
               title="Delete customer"
-              onClick={() => confirm(`Delete ${c.name}? Their events and quotes are kept, just no longer linked.`) && api(`/api/customers/${id}`, { method: 'DELETE' }).then(() => router.replace('/customers')).catch((x) => setError(x.message))}
+              onClick={() => askConfirm(`Delete ${c.name}? Their events and quotes are kept, just no longer linked.`).then((ok): unknown => ok && (api(`/api/customers/${id}`, { method: 'DELETE' }).then(() => router.replace('/customers')).catch((x) => setError(x.message))))}
             >
               <TrashIcon />
             </button>
@@ -152,7 +153,7 @@ function Body() {
               onOpen={setOpen}
               onEdit={editContact}
               onMain={(p) => run(api(`/api/customer-contacts/${p.id}`, { method: 'PATCH', body: { primary: true } }), `${p.name} is now the main contact.`)}
-              onRemove={(p) => confirm(`Remove ${p.name}?`) && run(api(`/api/customer-contacts/${p.id}`, { method: 'DELETE' }))}
+              onRemove={(p) => askConfirm(`Remove ${p.name}?`).then((ok): unknown => ok && (run(api(`/api/customer-contacts/${p.id}`, { method: 'DELETE' }))))}
             />
           )}
         </section>
@@ -285,7 +286,7 @@ function Body() {
             <label>Notes<textarea rows={3} value={cf.notes} onChange={(e) => setCf({ ...cf, notes: e.target.value })} maxLength={2000} placeholder="Best time to call, who they report to…" /></label>
             <div className="acts">
               {cf.id && (
-                <button type="button" className="btn ghost danger" style={{ marginRight: 'auto' }} onClick={() => confirm(`Remove ${cf.name}?`) && run(api(`/api/customer-contacts/${cf.id}`, { method: 'DELETE' })).then(() => setCf(null))}>
+                <button type="button" className="btn ghost danger" style={{ marginRight: 'auto' }} onClick={() => askConfirm(`Remove ${cf.name}?`).then((ok): unknown => ok && (run(api(`/api/customer-contacts/${cf.id}`, { method: 'DELETE' })).then(() => setCf(null))))}>
                   Remove
                 </button>
               )}
@@ -312,7 +313,7 @@ function Body() {
             <label>Street address<input value={lf.address} onChange={(e) => setLf({ ...lf, address: e.target.value })} maxLength={300} /></label>
             <div className="acts">
               {lf.id && (
-                <button type="button" className="btn ghost danger" style={{ marginRight: 'auto' }} onClick={() => confirm(`Remove ${lf.label}?`) && run(api(`/api/customer-locations/${lf.id}`, { method: 'DELETE' })).then(() => setLf(null))}>
+                <button type="button" className="btn ghost danger" style={{ marginRight: 'auto' }} onClick={() => askConfirm(`Remove ${lf.label}?`).then((ok): unknown => ok && (run(api(`/api/customer-locations/${lf.id}`, { method: 'DELETE' })).then(() => setLf(null))))}>
                   Remove
                 </button>
               )}

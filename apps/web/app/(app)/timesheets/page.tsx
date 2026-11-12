@@ -6,6 +6,7 @@ import { usePageActive } from '@/components/KeepAlive';
 import { useSearchParams } from 'next/navigation';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { api, ApiError, fmtDateTime, fmtTime, type Me } from '@/lib/api';
+import { askConfirm } from '@/components/Toasts';
 
 type Entry = {
   id: string;
@@ -50,7 +51,7 @@ function Body({ me }: { me: Me }) {
       load();
     } catch (e) {
       if (e instanceof ApiError && e.reason === 'exported' && !force) {
-        if (confirm(e.message)) return saveTime(id, t, true);
+        if ((await askConfirm(e.message))) return saveTime(id, t, true);
         return;
       }
       throw e;

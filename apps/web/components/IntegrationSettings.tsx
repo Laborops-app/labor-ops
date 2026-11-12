@@ -5,6 +5,7 @@ import Panel from '@/components/Panel';
 import { Banner } from '@/components/ui';
 import { api } from '@/lib/api';
 import RentmanOptions from '@/components/RentmanOptions';
+import { askConfirm } from '@/components/Toasts';
 
 type RunResult = { created: number; moved: number; datesUpdated: number; flagged: number; skipped: number; built?: number; shiftChanges?: number; errors?: string };
 type St = {
@@ -269,7 +270,7 @@ export function AcademySettings() {
         <button
           className="btn primary"
           onClick={async () => {
-            if (a.secretSet && !confirm('Create a new secret? The academy stops syncing until you paste the new one there.')) return;
+            if (a.secretSet && !(await askConfirm('Create a new secret? The academy stops syncing until you paste the new one there.'))) return;
             setError('');
             try {
               const r = await api<{ secret: string }>('/api/integrations/academy/secret', { body: {} });
@@ -393,7 +394,7 @@ export function RentmanSettings({ tab, setTab }: { tab: RentmanTab; setTab: (t: 
               <div className="row">
                 <button className="btn primary" disabled={!!busy}>{s.connected ? 'Replace token' : 'Connect Rentman'}</button>
                 {s.connected && (
-                  <button type="button" className="btn ghost" disabled={!!busy} onClick={() => confirm('Disconnect Rentman? Linked events keep their last synced details.') && act('clear', 'Rentman disconnected.', () => api('/api/rentman/settings', { method: 'DELETE' }))}>
+                  <button type="button" className="btn ghost" disabled={!!busy} onClick={() => askConfirm('Disconnect Rentman? Linked events keep their last synced details.').then((ok): unknown => ok && (act('clear', 'Rentman disconnected.', () => api('/api/rentman/settings', { method: 'DELETE' }))))}>
                     Disconnect
                   </button>
                 )}

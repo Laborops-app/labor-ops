@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, Me } from '@/lib/api';
 import { avClass, initialsOf } from '@/components/TopbarAction';
 import { Banner } from '@/components/ui';
+import { askConfirm } from '@/components/Toasts';
 
 /* Crew ratings: big tap-friendly stars, quick tags, private notes. Internal to admins and labor coordinators. */
 
@@ -262,7 +263,7 @@ export function CrewReviews({ me, memberId, onChange, startAdding }: { me: Me; m
                 {canEdit(r) && (
                   <span className="rt-item-acts">
                     <button type="button" className="btn ghost small" onClick={() => setEditing(r.id)}>Edit</button>
-                    <button type="button" className="btn ghost small danger" onClick={async () => { if (confirm('Delete this review?')) { try { await changed(await api(`/api/reviews/${r.id}`, { method: 'DELETE' })); } catch (e: any) { setErr(e.message); } } }}>Delete</button>
+                    <button type="button" className="btn ghost small danger" onClick={async () => { if ((await askConfirm('Delete this review?'))) { try { await changed(await api(`/api/reviews/${r.id}`, { method: 'DELETE' })); } catch (e: any) { setErr(e.message); } } }}>Delete</button>
                   </span>
                 )}
               </div>

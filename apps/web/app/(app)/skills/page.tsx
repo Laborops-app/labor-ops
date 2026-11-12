@@ -4,6 +4,7 @@ import { Fragment, useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, Me } from '@/lib/api';
+import { askConfirm } from '@/components/Toasts';
 
 type Skill = { id: string; name: string; payRate: number; dayRate?: number; billRate?: number; dayBillRate?: number; active: boolean; groupId: string | null; isLead?: boolean; ratesFromRentman?: boolean };
 type Group = { id: string; name: string };
@@ -215,7 +216,7 @@ function Body() {
                   {g.name}
                 </button>
               )}
-              <button type="button" className="chip-x" aria-label={`Delete ${g.name}`} onClick={() => confirm(`Delete the ${g.name} group? Its roles are kept.`) && act(g.id, `Deleted ${g.name}.`, () => api(`/api/skill-groups/${g.id}`, { method: 'DELETE' }))}>
+              <button type="button" className="chip-x" aria-label={`Delete ${g.name}`} onClick={() => askConfirm(`Delete the ${g.name} group? Its roles are kept.`).then((ok): unknown => ok && (act(g.id, `Deleted ${g.name}.`, () => api(`/api/skill-groups/${g.id}`, { method: 'DELETE' }))))}>
                 ✕
               </button>
             </span>
@@ -405,7 +406,7 @@ function Body() {
                           <button
                             className="btn ghost small danger"
                             disabled={!!busy}
-                            onClick={() => confirm(`Delete ${s.name}? People who already have it keep it on their profile.`) && act(s.id, `Deleted ${s.name}.`, () => api(`/api/skills/${s.id}`, { method: 'DELETE' }))}
+                            onClick={() => askConfirm(`Delete ${s.name}? People who already have it keep it on their profile.`).then((ok): unknown => ok && (act(s.id, `Deleted ${s.name}.`, () => api(`/api/skills/${s.id}`, { method: 'DELETE' }))))}
                           >
                             Delete
                           </button>
