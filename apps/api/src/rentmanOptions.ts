@@ -15,7 +15,8 @@ export type Options = Record<OptionKey, boolean> & {
 
 export async function loadOptions(c: PoolClient): Promise<Options> {
   const r = (await c.query('SELECT * FROM rentman_settings LIMIT 1')).rows[0] ?? {};
-  const o = Object.fromEntries(OPTION_KEYS.map((k) => [k, !!r[k]])) as Record<OptionKey, boolean>;
+  // Billing at Rentman's quoted prices is on unless a company switches it off; everything else starts off.
+  const o = Object.fromEntries(OPTION_KEYS.map((k) => [k, k in r ? !!r[k] : k === 'quoted_bill_rates'])) as Record<OptionKey, boolean>;
   return {
     ...o, filesFolder: r.files_folder ?? null, webhookKey: r.webhook_key ?? null, hasWebhookToken: !!r.webhook_token_enc,
     webhookLastAt: r.webhook_last_at ?? null, ratesLastAt: r.rates_last_at ?? null, ratesLastResult: r.rates_last_result ?? null, accountName: r.account_name ?? null,

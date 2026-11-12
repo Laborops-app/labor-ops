@@ -11,6 +11,7 @@ import { canBill } from '../rates';
 import { acctSchema, loadAcct, saveAcct, eventBilling, invoiceIif, PAYROLL_PROVIDERS, baseRole, localDate } from '../accounting';
 import { payrollSummary, payrollFile } from '../payroll';
 import { compareQuote, overQuote, quotesForEvent } from '../quoteCompare';
+import { DEFAULT_LAYOUT, layoutSchema, renderQuotePdf, type Layout } from '../quotePdf';
 import { loadQbo, saveQbo, qboConnected, authorizeUrl, exchangeCode, Qbo, qboSession, appLink, QboError, QBO_REVOKE } from '../quickbooks';
 
 const adm = guard('admin');
@@ -289,6 +290,54 @@ export async function accountingRoutes(app: FastifyInstance) {
     if (out.code === 409) return reply.code(409).send({ error: 'The client has to approve this event’s timesheets before it can be invoiced.', reason: 'client_approval' });
     if (out.code === 412) return reply.code(409).send({ error: `${(out as any).msg} Confirm it on the event’s Invoice tab first.`, reason: 'over_quote' });
     return download(reply, out.name!, 'text/plain', out.body!);
+  });
+
+  // The invoice as a PDF to send to the client: the company's quote look (logo, colours), grouped by day and phase.
+  app.get('/api/events/:id/billing/pdf', { preHandler: billers }, async (req, reply) => {
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const q = sourceQ.extend({ docNumber: z.string().trim().max(21).regex(/^[\w-]*$/).optional() }).parse(req.query);
+    const out = await withTenant(req.user.tid, async (c) => {
+      if (!(await canBill(c, req.user))) return { code: 403 as const };
+      const bill = await eventBilling(c, id, q.source);
+      if (!bill) return { code: 404 as const };
+      if (!bill.lines.length) return { code: 400 as const };
+      const row = (await c.query('SELECT config FROM quote_layouts WHERE is_default')).rows[0];
+      const parsed = row ? layoutSchema.safeParse(row.config) : null;
+      const base: Layout = parsed?.success ? parsed.data : DEFAULT_LAYOUT;
+      const header = base.blocks.find((x) => x.type === 'header') ?? DEFAULT_LAYOUT.blocks[0]!;
+      const layout: Layout = {
+        ...base,
+        blocks: [
+          header,
+          { id: 'title', type: 'title', label: 'Invoice', showNumber: true, showDates: true, align: 'left' },
+          { id: 'billto', type: 'billto', heading: 'Bill to', showEvent: true },
+          { id: 'lines', type: 'lines', groupBySection: true, showDate: false, showPeople: false, showHours: true, showRate: true, zebra: true },
+          { id: 'totals', type: 'totals' },
+        ],
+      };
+      const company = (await c.query('SELECT name FROM tenants WHERE id = $1', [req.user.tid])).rows[0]?.name ?? 'LaborOps';
+      const day = (d: string) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+      const KIND: Record<string, string> = { regular: 'hours', overtime: 'overtime hours', double: 'double-time hours', day: 'day rate', fee: 'fixed fee per person' };
+      const first = bill.lines[0]!.date, last = bill.lines[bill.lines.length - 1]!.date;
+      const today = localDate(bill.event.timezone, new Date());
+      const pdf = await renderQuotePdf(layout, {
+        company, number: 0, title: bill.event.name, status: 'invoice', customer: bill.customer?.name ?? bill.event.client ?? null, contact: null, event: null,
+        createdAt: new Date().toISOString(), validUntil: null, intro: null, terms: null, taxPct: 0,
+        lines: bill.lines.map((l) => ({
+          section: `${day(l.date)}${l.phase ? ` · ${l.phase}` : ''}`, description: `${l.role} ${KIND[l.kind] ?? ''}`.trim(), day: l.date, start: null, end: null,
+          qty: l.qty, hours: l.qty, rate: l.rate, amount: l.amount,
+          qtyText: l.unit === 'day' ? `${l.qty} ${l.qty === 1 ? 'day' : 'days'}` : l.unit === 'person' ? `${l.qty} ${l.qty === 1 ? 'person' : 'people'}` : `${l.qty} h`,
+        })),
+        totals: { subtotal: bill.total, discount: 0, tax: 0, total: bill.total },
+        invoice: { docNumber: q.docNumber || null, dateText: `Date: ${day(today)}    Work: ${day(first)}${last !== first ? ` to ${day(last)}` : ''}` },
+      });
+      await audit(c, req.user.tid, req.user.sub, 'billing.pdf', 'event', id, { total: bill.total, source: q.source });
+      return { code: 200 as const, pdf, name: `${slug(bill.event.name)}-invoice${q.docNumber ? `-${q.docNumber}` : ''}.pdf` };
+    });
+    if (out.code === 403) return reply.code(403).send({ error: 'Only admins and coordinators allowed to adjust rates can export invoices.' });
+    if (out.code === 404) return reply.code(404).send({ error: 'Event not found' });
+    if (out.code === 400) return reply.code(400).send({ error: 'Nothing to bill yet.' });
+    return reply.header('content-type', 'application/pdf').header('content-disposition', `attachment; filename="${out.name}"`).send(out.pdf);
   });
 
   // ---------- payroll ----------

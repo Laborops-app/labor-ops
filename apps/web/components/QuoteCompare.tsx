@@ -5,7 +5,7 @@ import { api, money, fmtDate } from '@/lib/api';
 import { Empty } from '@/components/ui';
 
 export type QuoteChoice = { id: string; number: number; title: string; status: string; source: string; rentman_number: string | null; rentman_version: number | null; updated_at: string };
-type Row = { role: string; quotedHours: number; quotedAmount: number; invoicedHours: number; invoicedDays: number; invoicedAmount: number; diff: number; pct: number | null; status: 'match' | 'over' | 'under' | 'not_quoted' | 'not_invoiced' };
+type Row = { role: string; fee?: boolean; quotedHours: number; quotedAmount: number; invoicedHours: number; invoicedDays: number; invoicedAmount: number; diff: number; pct: number | null; status: 'match' | 'over' | 'under' | 'not_quoted' | 'not_invoiced' };
 export type Comparison = {
   quote: { id: string; number: number; title: string; status: string; source: string; rentman: { number: string; version: number; total: number; crew: number; transport: number; importedAt: string } | null };
   rows: Row[]; quotedLines: number; discount: number; quoted: number; invoiced: number; diff: number; pct: number | null; status: 'match' | 'over' | 'under' | 'not_quoted';
@@ -15,6 +15,7 @@ type RmQuote = { id: number; number: string; version: number; subject: string | 
 const STATUS: Record<Row['status'], string> = { match: 'Matches', over: 'Over', under: 'Under', not_quoted: 'Not on the quote', not_invoiced: 'Not on the invoice' };
 const signed = (n: number) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${money(Math.abs(n))}`;
 const hrs = (h: number) => `${Math.round(h * 100) / 100} h`;
+const ppl = (n: number) => `${n} ${n === 1 ? 'person' : 'people'}`;
 const quoteLabel = (q: QuoteChoice) =>
   `#${q.number} ${q.title}${q.source === 'rentman' ? ` · Rentman ${q.rentman_number ?? ''}${q.rentman_version ? ` v${q.rentman_version}` : ''}` : ''} · ${q.status}`;
 
@@ -149,12 +150,12 @@ export default function QuoteCompare({
                 {c.rows.map((r) => (
                   <tr key={r.role}>
                     <td>{r.role}</td>
-                    <td>{r.quotedAmount ? <>{money(r.quotedAmount)}<span className="sub">{hrs(r.quotedHours)}</span></> : <span className="muted">—</span>}</td>
+                    <td>{r.quotedAmount ? <>{money(r.quotedAmount)}<span className="sub">{r.fee ? ppl(r.quotedHours) : hrs(r.quotedHours)}</span></> : <span className="muted">—</span>}</td>
                     <td>
                       {r.invoicedAmount ? (
                         <>
                           {money(r.invoicedAmount)}
-                          <span className="sub">{[r.invoicedHours ? hrs(r.invoicedHours) : '', r.invoicedDays ? `${r.invoicedDays} day${r.invoicedDays === 1 ? '' : 's'}` : ''].filter(Boolean).join(' + ')}</span>
+                          <span className="sub">{[r.invoicedHours ? (r.fee ? ppl(r.invoicedHours) : hrs(r.invoicedHours)) : '', r.invoicedDays ? `${r.invoicedDays} day${r.invoicedDays === 1 ? '' : 's'}` : ''].filter(Boolean).join(' + ')}</span>
                         </>
                       ) : <span className="muted">—</span>}
                     </td>

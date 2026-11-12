@@ -2,10 +2,13 @@ import type { PoolClient } from 'pg';
 import { roleKeyOf } from './pay';
 import { baseRole, type BillLine } from './accounting';
 import { functionLabor, projectCrewFunctions, rentmanQuote, RentmanError } from './rentman';
+import { roleResolver } from './rentmanBuild';
 import { onQuote } from './pipeline';
 import { audit } from './db';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
+/** How a fixed-fee line is named, on quotes and invoices alike. */
+export const FEE = ' · fixed fee';
 
 // ---------- pulling a Rentman quote in ----------
 
@@ -28,6 +31,8 @@ export async function importRentmanQuote(c: PoolClient, tid: string, by: string,
   const q = await rentmanQuote(token, rentmanQuoteId);
   if (q.project !== null && q.project !== Number(ev.rentman_project_id)) throw new RentmanError('That quote belongs to another Rentman project.', 400);
   const fns = await projectCrewFunctions(token, Number(ev.rentman_project_id));
+  // Lines take this company's role names ("Audio A1" in Rentman is "A1" here), so they line up with the invoice.
+  const roles = await roleResolver(c, tid);
 
   type L = { section: string | null; description: string; day: string | null; start: string | null; end: string | null; qty: number; hours: number; rate: number; amount: number };
   const lines: L[] = [];
@@ -36,18 +41,20 @@ export async function importRentmanQuote(c: PoolClient, tid: string, by: string,
     const e = f.end ? new Date(f.end) : null;
     const span = s && e ? Math.max(0, (+e - +s) / 3600_000) : 0;
     const hours = span > 0 ? r2(span) : 1;
-    const lab = functionLabor(f, f.people * hours);
+    const lab = functionLabor(f, hours, f.people);
+    const role = roles.resolve(f.name);
     const a = s ? local(ev.timezone, f.start!) : null;
     const b = e ? local(ev.timezone, f.end!) : null;
     // Clock times only for a call inside one day; a function running for days keeps just its first day.
     const timed = a && b && span > 0 && span < 24;
-    if (lab.amount > 0 || !f.fixed)
+    if (lab.amount > 0 || !lab.fixed)
       lines.push({
-        section: f.group, description: f.name, day: a?.day ?? null, start: timed ? a!.time : null, end: timed ? b!.time : null,
+        section: f.group, description: role, day: a?.day ?? null, start: timed ? a!.time : null, end: timed ? b!.time : null,
         qty: f.people, hours, rate: r2(lab.hourly), amount: r2(lab.amount),
       });
-    if (f.fixed > 0)
-      lines.push({ section: f.group, description: `${f.name} · travel and other costs`, day: a?.day ?? null, start: null, end: null, qty: 1, hours: 1, rate: r2(f.fixed), amount: r2(f.fixed) });
+    // Rentman's fixed fee is per person on the function.
+    if (lab.fixed > 0)
+      lines.push({ section: f.group, description: `${role}${FEE}`, day: a?.day ?? null, start: null, end: null, qty: f.people, hours: 1, rate: r2(lab.fixed), amount: r2(lab.fixedAmount) });
   }
   const linesTotal = r2(lines.reduce((n, l) => n + l.amount, 0));
   const warnings: string[] = [];
@@ -108,7 +115,7 @@ export async function quotesForEvent(c: PoolClient, eventId: string, wanted?: st
 }
 
 export type CompareRow = {
-  role: string; quotedHours: number; quotedAmount: number; invoicedHours: number; invoicedDays: number; invoicedAmount: number;
+  role: string; fee: boolean; quotedHours: number; quotedAmount: number; invoicedHours: number; invoicedDays: number; invoicedAmount: number;
   diff: number; pct: number | null; status: 'match' | 'over' | 'under' | 'not_quoted' | 'not_invoiced';
 };
 /** Close enough to call it the same: within $1, or 2% of what was quoted. */
@@ -121,24 +128,32 @@ const near = (quoted: number, invoiced: number) => Math.abs(invoiced - quoted) <
 export async function compareQuote(c: PoolClient, quoteId: string, bill: BillLine[]) {
   const q = (await c.query('SELECT id, number, title, status, source, discount, tax_pct, rentman_number, rentman_version, rentman_total, rentman_crew_total, rentman_transport_total, imported_at FROM quotes WHERE id = $1', [quoteId])).rows[0];
   if (!q) return null;
-  const qlines = (await c.query('SELECT description, qty, hours, rate, amount FROM quote_lines WHERE quote_id = $1 ORDER BY sort', [quoteId])).rows.map((l) => ({
-    role: baseRole(String(l.description)), hours: r2(Number(l.qty) * Number(l.hours)), amount: l.amount === null ? r2(Number(l.qty) * Number(l.hours) * Number(l.rate)) : Number(l.amount),
-  }));
+  // Fixed fees ("Stage hand · fixed fee", older pulls "… · travel and other costs") get rows of their own, counted in people.
+  const feeOf = (d: string) => { const m = /^(.*?)\s·\s(fixed fee|travel and other costs)$/.exec(d); return m ? m[1]! : null; };
+  const qlines = (await c.query('SELECT description, qty, hours, rate, amount FROM quote_lines WHERE quote_id = $1 ORDER BY sort', [quoteId])).rows.map((l) => {
+    const feeRole = feeOf(String(l.description));
+    return {
+      role: baseRole(feeRole ?? String(l.description)), fee: feeRole !== null,
+      hours: feeRole !== null ? Number(l.qty) : r2(Number(l.qty) * Number(l.hours)),
+      amount: l.amount === null ? r2(Number(l.qty) * Number(l.hours) * Number(l.rate)) : Number(l.amount),
+    };
+  });
   const rows = new Map<string, CompareRow>();
-  const row = (role: string) => {
-    const k = roleKeyOf(role);
+  const row = (role: string, fee: boolean) => {
+    const k = roleKeyOf(role) + (fee ? '|fee' : '');
     let r = rows.get(k);
-    if (!r) rows.set(k, (r = { role, quotedHours: 0, quotedAmount: 0, invoicedHours: 0, invoicedDays: 0, invoicedAmount: 0, diff: 0, pct: null, status: 'match' }));
+    if (!r) rows.set(k, (r = { role: fee ? `${role}${FEE}` : role, fee, quotedHours: 0, quotedAmount: 0, invoicedHours: 0, invoicedDays: 0, invoicedAmount: 0, diff: 0, pct: null, status: 'match' }));
     return r;
   };
   for (const l of qlines) {
-    const r = row(l.role);
+    const r = row(l.role, l.fee);
     r.quotedHours = r2(r.quotedHours + l.hours);
     r.quotedAmount = r2(r.quotedAmount + l.amount);
   }
   for (const l of bill) {
-    const r = row(l.role);
-    if (r.quotedAmount === 0 && r.invoicedAmount === 0) r.role = l.role; // the invoice's spelling when the quote didn't have it
+    const fee = l.kind === 'fee';
+    const r = row(l.role, fee);
+    if (r.quotedAmount === 0 && r.invoicedAmount === 0) r.role = fee ? `${l.role}${FEE}` : l.role; // the invoice's spelling when the quote didn't have it
     if (l.unit === 'day') r.invoicedDays = r2(r.invoicedDays + l.qty);
     else r.invoicedHours = r2(r.invoicedHours + l.qty);
     r.invoicedAmount = r2(r.invoicedAmount + l.amount);

@@ -4255,7 +4255,7 @@ test('Rentman quotes: pull a quote onto an event and hold the invoice against it
   const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: { 'content-type': 'application/json' } });
   const quote = (id: number, version: number) => ({ id, number: 'Q-2031', version, subject: 'Arena labor', project: '/projects/400', price: 9000, project_crew_price: 1600, project_transport_price: 200, date: '2031-04-01', expiration_date: '2031-04-30' });
   let functions: any[] = [
-    { id: 1, type: 'crew_function', in_financial: true, name: 'Stage hand', name_external: 'Stagehands', amount: 4, usageperiod_start: '2031-05-01T15:00:00Z', usageperiod_end: '2031-05-01T23:00:00Z', price_variable: 1280, price_fixed: 0, price_total: 1280, group: '/projectfunctiongroups/9' },
+    { id: 1, type: 'crew_function', in_financial: true, name: 'Stage hand', name_external: 'Stagehands', amount: 4, usageperiod_start: '2031-05-01T15:00:00Z', usageperiod_end: '2031-05-01T23:00:00Z', price_variable: 40, price_fixed: 0, price_total: 320, group: '/projectfunctiongroups/9' },
     { id: 2, type: 'crew_function', in_financial: true, name: 'Truck driver', amount: 1, planperiod_start: '2031-05-01T14:00:00Z', planperiod_end: '2031-05-01T22:00:00Z', price_variable: 0, price_fixed: 320, price_total: 320, group: '/projectfunctiongroups/9' },
     { id: 3, type: 'transport_function', in_financial: true, name: 'Truck', amount: 1, price_total: 200 },
     { id: 4, type: 'crew_function', in_financial: false, name: 'Internal planner', amount: 1, price_total: 999 },
@@ -4290,7 +4290,7 @@ test('Rentman quotes: pull a quote onto an event and hold the invoice against it
     assert.equal(q.quote.source, 'rentman');
     assert.equal(q.quote.status, 'accepted');
     assert.equal(q.quote.rentman_version, 2);
-    assert.deepEqual(q.lines.map((l: any) => [l.section, l.description, l.qty, l.hours, l.amount]), [['Load in', 'Truck driver · travel and other costs', 1, 1, 320], ['Load in', 'Stagehands', 4, 8, 1280]]);
+    assert.deepEqual(q.lines.map((l: any) => [l.section, l.description, l.qty, l.hours, l.amount]), [['Load in', 'Truck driver · fixed fee', 1, 1, 320], ['Load in', 'Stagehand', 4, 8, 1280]]);
     assert.equal(q.totals.subtotal, 1600);
     // the event moved to Confirmed with an accepted quote
     assert.equal((await withTenant(tid, (c) => c.query('SELECT pipeline_status FROM events WHERE id = $1', [ev]))).rows[0].pipeline_status, 'confirmed');
@@ -4324,7 +4324,7 @@ test('Rentman quotes: pull a quote onto an event and hold the invoice against it
     assert.equal(Number(inv.quoted_total), 1600);
 
     // Pulling again (crew changed in Rentman) replaces the copy, keeps the same quote, and warns about the mismatch.
-    functions = functions.map((f) => (f.id === 1 ? { ...f, amount: 5, price_variable: 1600, price_total: 1600 } : f));
+    functions = functions.map((f) => (f.id === 1 ? { ...f, amount: 5 } : f));
     const again = await call(a, 'POST', `/api/events/${ev}/rentman/quotes/77/import`, { accepted: true });
     assert.equal(again.status, 200);
     assert.equal(again.json.id, q.quote.id);
@@ -5462,56 +5462,84 @@ test('event time zone: shifts keep their clock time at the venue, and messages u
   assert.equal(new Date((await call(a, 'GET', `/api/events/${ev}`)).json.shifts[0].starts_at).toISOString(), '2031-01-20T15:00:00.000Z');
 });
 
-test('Rentman quoted rates: hourly price read as a rate, a total read as a total, and switching off goes back to role rates', async () => {
+test('Rentman prices: an invoice from the schedule matches the Rentman quote 1:1 (rates, fixed fees, days and phases)', async () => {
   const { functionLabor } = await import('../src/rentman');
-  // Hourly reading (Rentman total = rate × people-hours), total reading (total = price), no total → hourly.
-  assert.deepEqual(functionLabor({ variable: 35, fixed: 0, total: 560 }, 16), { hourly: 35, amount: 560 });
-  assert.deepEqual(functionLabor({ variable: 1280, fixed: 0, total: 1280 }, 32), { hourly: 40, amount: 1280 });
-  assert.deepEqual(functionLabor({ variable: 25 }, 120), { hourly: 25, amount: 3000 });
-  assert.deepEqual(functionLabor({ variable: 0, fixed: 320, total: 320 }, 8), { hourly: 0, amount: 0 });
-  assert.deepEqual(functionLabor({ total: 400 }, 8), { hourly: 50, amount: 400 });
+  // Rentman: price_total is for one person = fixed fee + rate x hours.
+  assert.deepEqual(functionLabor({ variable: 25, fixed: 250, total: 450 }, 8, 15), { hourly: 25, perPerson: 200, amount: 3000, fixed: 250, fixedAmount: 3750 });
+  assert.deepEqual(functionLabor({ variable: 40 }, 8, 4), { hourly: 40, perPerson: 320, amount: 1280, fixed: 0, fixedAmount: 0 });
+  assert.deepEqual(functionLabor({ variable: 0, fixed: 320, total: 320 }, 8, 1), { hourly: 0, perPerson: 0, amount: 0, fixed: 320, fixedAmount: 320 });
 
   const a = await register('rmqr');
   const tid = await tenantOf(a);
   await call(a, 'POST', '/api/skills', { name: 'A1', payRate: 30, billRate: 60 });
-  await call(a, 'POST', '/api/skills', { name: 'Stagehand', payRate: 20, billRate: 45 });
   await call(a, 'POST', '/api/skills', { name: 'Audio SE', payRate: 40, billRate: 80 });
-  const ev = (await call(a, 'POST', '/api/events', { name: 'Ball Arena', startDate: '2031-07-01', endDate: '2031-07-01' })).json.event.id;
+  await call(a, 'POST', '/api/skills', { name: 'Stage Hand General', payRate: 20, billRate: 45 });
+  await withTenant(tid, (c) => c.query("INSERT INTO rentman_role_map (tenant_id, rentman_name, role_name) VALUES ($1, 'audio a1', 'A1')", [tid]));
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Ball Arena', startDate: '2031-11-13', endDate: '2031-11-14' })).json.event.id;
   await withTenant(tid, (c) => c.query('UPDATE events SET rentman_project_id = 700 WHERE id = $1', [ev]));
   const real = globalThis.fetch;
   const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: { 'content-type': 'application/json' } });
+  // Quote 23: Load in (8 h) and Load out (5 h); each person costs a fixed fee plus the hourly rate.
+  const fn = (id: number, name: string, amount: number, day: 'in' | 'out', rate: number, fee: number) => {
+    const [s, e, h] = day === 'in' ? ['2031-11-13T15:00:00Z', '2031-11-13T23:00:00Z', 8] : ['2031-11-14T16:00:00Z', '2031-11-14T21:00:00Z', 5];
+    return { id, type: 'crew_function', in_financial: true, name, amount, planperiod_start: s, planperiod_end: e, price_variable: rate, price_fixed: fee, price_total: fee + rate * h, group: `/projectfunctiongroups/${day === 'in' ? 1 : 2}` };
+  };
   const fns = [
-    { id: 21, type: 'crew_function', name: 'A1', amount: 1, planperiod_start: '2031-07-01T06:00:00Z', planperiod_end: '2031-07-01T22:00:00Z', price_variable: 35, price_fixed: 0, price_total: 560 },
-    { id: 22, type: 'crew_function', name: 'Stage hand', amount: 15, planperiod_start: '2031-07-01T14:00:00Z', planperiod_end: '2031-07-01T22:00:00Z', price_variable: 25 },
-    { id: 23, type: 'crew_function', name: 'Audio SE', amount: 1, planperiod_start: '2031-07-01T14:00:00Z', planperiod_end: '2031-07-01T22:00:00Z', price_variable: 440, price_fixed: 0, price_total: 440 },
+    fn(31, 'Audio A1', 2, 'in', 35, 350), fn(32, 'Audio SE', 1, 'in', 55, 550), fn(33, 'Stage Hand General', 15, 'in', 25, 250),
+    fn(34, 'Audio A1', 2, 'out', 35, 350), fn(35, 'Audio SE', 1, 'out', 55, 550), fn(36, 'Stage Hand General', 25, 'out', 25, 250),
   ];
+  const quote = { id: 23, number: '23', version: 1, subject: 'Ball Arena', project: '/projects/700', price: 35250, project_crew_price: 20250, project_transport_price: 0, date: '2031-11-11', expiration_date: '2031-11-25' };
   globalThis.fetch = (async (input: any, init?: any) => {
     const url = String(input);
     if (!url.startsWith('https://api.rentman.net')) return real(input, init);
-    if (url.includes('/projects/700/projectfunctiongroups')) return json({ data: [] });
+    if (url.includes('/projects/700/quotes')) return json({ data: [quote] });
+    if (url.includes('/quotes/23')) return json({ data: quote });
+    if (url.includes('/projects/700/projectfunctiongroups')) return json({ data: [{ id: 1, displayname: 'Load In', order: 1 }, { id: 2, displayname: 'Load Out', order: 2 }] });
     if (url.includes('/projects/700/projectfunctions')) return json({ data: fns });
     if (url.includes('/projects')) return json({ data: [] });
     return json({ error: 'unexpected' }, 404);
   }) as typeof fetch;
-  const rates = async () => {
-    const b = (await call(a, 'GET', `/api/events/${ev}/billing?source=schedule`)).json;
-    return Object.fromEntries(b.lines.filter((l: any) => l.kind === 'regular').map((l: any) => [l.role, [l.rate, l.rateFrom]]));
-  };
+  const bill = async () => (await call(a, 'GET', `/api/events/${ev}/billing?source=schedule`)).json;
   try {
     assert.equal((await call(a, 'PUT', '/api/rentman/settings', { token: 'good-token-123456' })).status, 200);
-    assert.equal((await call(a, 'PUT', '/api/rentman/options', { quoted_bill_rates: true })).status, 200);
+    assert.equal((await call(a, 'GET', '/api/rentman/options')).json.options.quoted_bill_rates, true); // on unless switched off
     assert.equal((await call(a, 'POST', `/api/events/${ev}/rentman/build`)).status, 200);
-    assert.deepEqual(await rates(), { A1: [35, 'rentman'], Stagehand: [25, 'rentman'], 'Audio SE': [55, 'rentman'] });
 
-    // Off: the shifts go back to the rates list
+    // The quote, pulled in with this company's role names and fixed fees per person
+    const imp = await call(a, 'POST', `/api/events/${ev}/rentman/quotes/23/import`, { accepted: true });
+    assert.equal(imp.status, 201, imp.text);
+    assert.deepEqual([imp.json.crewTotal, imp.json.warnings.length], [20250, 0]);
+
+    let b = await bill();
+    assert.equal(b.total, 20250);
+    const row = (date: string, role: string, kind: string) => b.lines.find((l: any) => l.date === date && l.role === role && l.kind === kind);
+    assert.deepEqual(['qty', 'rate', 'amount', 'phase', 'rateFrom'].map((k) => row('2031-11-13', 'Stage Hand General', 'regular')[k]), [120, 25, 3000, 'Load In', 'rentman']);
+    assert.deepEqual(['qty', 'unit', 'rate', 'amount'].map((k) => row('2031-11-13', 'Stage Hand General', 'fee')[k]), [15, 'person', 250, 3750]);
+    assert.deepEqual(['qty', 'rate', 'amount', 'phase'].map((k) => row('2031-11-14', 'A1', 'regular')[k]), [10, 35, 350, 'Load Out']);
+    assert.equal(row('2031-11-14', 'Audio SE', 'fee').amount, 550);
+    // Position by position, the quote and the invoice agree
+    assert.equal(b.comparison.status, 'match');
+    assert.equal(b.comparison.quoted, 20250);
+    assert.ok(b.comparison.rows.every((r: any) => r.status === 'match'), JSON.stringify(b.comparison.rows));
+    assert.deepEqual(b.comparison.rows.filter((r: any) => r.fee).map((r: any) => [r.role, r.quotedHours, r.invoicedHours]).sort(), [['A1 · fixed fee', 4, 4], ['Audio SE · fixed fee', 2, 2], ['Stage Hand General · fixed fee', 40, 40]]);
+
+    // The PDF
+    const pdf = await app.inject({ method: 'GET', url: `/api/events/${ev}/billing/pdf?source=schedule&docNumber=INV-23`, headers: { cookie: a.cookie } });
+    assert.equal(pdf.statusCode, 200, pdf.body);
+    assert.equal(pdf.headers['content-type'], 'application/pdf');
+    assert.match(String(pdf.headers['content-disposition']), /ball-arena-invoice-INV-23\.pdf/);
+    assert.equal(pdf.rawPayload.subarray(0, 5).toString(), '%PDF-');
+
+    // Off: back to the rates list, no fixed fees
     const off = (await call(a, 'PUT', '/api/rentman/options', { quoted_bill_rates: false })).json;
-    assert.equal(off.ran.quotedRates.cleared, 3);
-    assert.deepEqual(await rates(), { A1: [60, 'role'], Stagehand: [45, 'role'], 'Audio SE': [80, 'role'] });
-
-    // On again: the quoted rates come straight back without rebuilding
+    assert.equal(off.ran.quotedRates.cleared, 6);
+    b = await bill();
+    assert.equal(b.lines.some((l: any) => l.kind === 'fee' || l.rateFrom === 'rentman'), false);
+    assert.equal(row('2031-11-13', 'Stage Hand General', 'regular').rate, 45);
+    // On again: straight back to the quote
     const on = (await call(a, 'PUT', '/api/rentman/options', { quoted_bill_rates: true })).json;
     assert.equal(on.ran.quotedRates.events, 1);
-    assert.deepEqual(await rates(), { A1: [35, 'rentman'], Stagehand: [25, 'rentman'], 'Audio SE': [55, 'rentman'] });
+    assert.equal((await bill()).total, 20250);
   } finally {
     globalThis.fetch = real;
   }

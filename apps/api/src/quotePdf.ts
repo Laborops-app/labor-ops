@@ -53,10 +53,13 @@ export const DEFAULT_LAYOUT: Layout = {
 export type QuoteData = {
   company: string; number: number; title: string; status: string; customer: string | null; contact: string | null; event: string | null;
   createdAt: string; validUntil: string | null; intro: string | null; terms: string | null; taxPct: number;
-  lines: { section: string | null; description: string; day: string | null; start: string | null; end: string | null; qty: number; hours: number; rate: number; amount: number }[];
+  lines: { section: string | null; description: string; day: string | null; start: string | null; end: string | null; qty: number; hours: number; rate: number; amount: number; qtyText?: string }[];
   totals: { subtotal: number; discount: number; tax: number; total: number };
+  /** An invoice instead of a quote: titled "Invoice", no valid-until date, and a subtotal under each group. */
+  invoice?: { docNumber: string | null; dateText: string };
 };
 
+const r2p = (n: number) => Math.round(n * 100) / 100;
 const money = (v: number) => '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtDay = (d: string | null) => (d ? new Date(d.slice(0, 10) + 'T12:00:00Z').toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }) : '');
 const fmtT = (t: string | null) => {
@@ -77,7 +80,7 @@ export function fillTokens(text: string, d: QuoteData): string {
 }
 
 export function renderQuotePdf(layout: Layout, d: QuoteData): Promise<Buffer> {
-  const doc = new PDFDocument({ size: layout.page === 'a4' ? 'A4' : 'LETTER', margin: layout.margin, bufferPages: true, info: { Title: `Quote ${d.number} - ${clean(d.title)}`, Author: clean(d.company) } });
+  const doc = new PDFDocument({ size: layout.page === 'a4' ? 'A4' : 'LETTER', margin: layout.margin, bufferPages: true, info: { Title: `${d.invoice ? 'Invoice' : 'Quote'} ${d.invoice ? d.invoice.docNumber ?? '' : d.number} - ${clean(d.title)}`, Author: clean(d.company) } });
   const chunks: Buffer[] = [];
   doc.on('data', (c) => chunks.push(c));
   const done = new Promise<Buffer>((res, rej) => { doc.on('end', () => res(Buffer.concat(chunks))); doc.on('error', rej); });
@@ -120,6 +123,13 @@ export function renderQuotePdf(layout: Layout, d: QuoteData): Promise<Buffer> {
       }
       case 'title': {
         ensure(60);
+        if (d.invoice) {
+          txt(`Invoice${d.invoice.docNumber ? ` #${d.invoice.docNumber}` : ''}`, { font: bold, size: fs + 12, align: b.align, color: layout.accent });
+          txt(d.title, { font: bold, size: fs + 2, align: b.align });
+          txt(d.invoice.dateText, { align: b.align, size: fs - 1, color: '#555555' });
+          doc.moveDown(0.6);
+          break;
+        }
         txt(`${b.label}${b.showNumber ? ` #${d.number}` : ''}`, { font: bold, size: fs + 12, align: b.align, color: layout.accent });
         txt(d.title, { font: bold, size: fs + 2, align: b.align });
         if (b.showDates) txt(`Date: ${new Date(d.createdAt).toLocaleDateString('en-US')}${d.validUntil ? `    Valid until: ${d.validUntil}` : ''}`, { align: b.align, size: fs - 1, color: '#555555' });
@@ -146,7 +156,7 @@ export function renderQuotePdf(layout: Layout, d: QuoteData): Promise<Buffer> {
         const cols: { key: string; label: string; w: number; right?: boolean }[] = [{ key: 'desc', label: 'Description', w: 0 }];
         if (b.showDate) cols.push({ key: 'when', label: 'Date / time', w: 118 });
         if (b.showPeople) cols.push({ key: 'qty', label: 'People', w: 44, right: true });
-        if (b.showHours) cols.push({ key: 'hours', label: 'Hours', w: 42, right: true });
+        if (b.showHours) cols.push({ key: 'hours', label: d.invoice ? 'Qty' : 'Hours', w: d.invoice ? 62 : 42, right: true });
         if (b.showRate) cols.push({ key: 'rate', label: 'Rate', w: 56, right: true });
         cols.push({ key: 'amt', label: 'Amount', w: 66, right: true });
         cols[0].w = W - cols.slice(1).reduce((a, c) => a + c.w, 0);
@@ -160,7 +170,7 @@ export function renderQuotePdf(layout: Layout, d: QuoteData): Promise<Buffer> {
           doc.y = y + fs + 8;
         };
         const val = (c: { key: string }, l: QuoteData['lines'][number]) =>
-          c.key === 'desc' ? l.description : c.key === 'when' ? [fmtDay(l.day), l.start && l.end ? `${fmtT(l.start)}-${fmtT(l.end)}` : ''].filter(Boolean).join('\n') : c.key === 'qty' ? String(l.qty) : c.key === 'hours' ? String(l.hours) : c.key === 'rate' ? money(l.rate) : money(l.amount);
+          c.key === 'desc' ? l.description : c.key === 'when' ? [fmtDay(l.day), l.start && l.end ? `${fmtT(l.start)}-${fmtT(l.end)}` : ''].filter(Boolean).join('\n') : c.key === 'qty' ? String(l.qty) : c.key === 'hours' ? (l.qtyText ?? String(l.hours)) : c.key === 'rate' ? money(l.rate) : money(l.amount);
         const groups: { name: string | null; rows: QuoteData['lines'] }[] = [];
         for (const l of d.lines) {
           const name = b.groupBySection ? l.section : null;
@@ -185,6 +195,14 @@ export function renderQuotePdf(layout: Layout, d: QuoteData): Promise<Buffer> {
             for (const c of cols) { doc.font(c.key === 'amt' ? bold : reg).fontSize(fs).fillColor(layout.textColor).text(clean(val(c, l)), x + pad, y + pad, { width: c.w - pad * 2, align: c.right ? 'right' : 'left' }); x += c.w; }
             doc.y = y + h;
             i++;
+          }
+          if (d.invoice && g.name) {
+            const sub = r2p(g.rows.reduce((n, l) => n + l.amount, 0));
+            ensure(fs + 10);
+            const y = doc.y + 2;
+            doc.font(bold).fontSize(fs).fillColor(layout.textColor).text(`${clean(g.name)} subtotal`, L + pad, y, { width: W - 120 - pad * 2, align: 'right', lineBreak: false });
+            doc.text(money(sub), L + W - 120, y, { width: 120 - pad, align: 'right' });
+            doc.y = y + fs + 8;
           }
         }
         doc.moveTo(L, doc.y).lineTo(L + W, doc.y).strokeColor('#cfd5df').lineWidth(0.5).stroke();

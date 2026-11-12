@@ -488,24 +488,16 @@ export type RentmanQuote = {
 const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
 /**
- * The labor price on a Rentman crew function: its hourly rate per person and its labor amount.
- * Rentman's variable price is a rate per person-hour (as on its crew rates). Some accounts' data carries the whole
- * labor amount there instead, so Rentman's own total decides: whichever reading lands closer to total minus fixed
- * costs wins. With no total to compare, it is read as the hourly rate.
+ * The price of a Rentman crew function, the way Rentman works it out: for each person, a fixed fee (price_fixed: call
+ * fee, travel) plus the hourly rate (price_variable) times the hours; price_total is that for ONE person. Everyone on the
+ * function costs the same, so the function costs (fixed + rate x hours) x people.
  */
-export function functionLabor(f: { variable?: unknown; fixed?: unknown; total?: unknown }, peopleHours: number): { hourly: number; amount: number } {
-  const v = num(f.variable), fixed = num(f.fixed), total = num(f.total);
-  const ph = peopleHours > 0 ? peopleHours : 1;
-  const labor = total > 0 ? Math.max(0, total - fixed) : 0;
-  if (v > 0) {
-    if (labor > 0) {
-      const off = (x: number) => Math.abs(Math.log(x / labor));
-      return off(v * ph) <= off(v) ? { hourly: v, amount: labor } : { hourly: v / ph, amount: v };
-    }
-    return { hourly: v, amount: v * ph };
-  }
-  if (labor > 0 && !fixed) return { hourly: labor / ph, amount: labor };
-  return { hourly: 0, amount: 0 };
+export function functionLabor(f: { variable?: unknown; fixed?: unknown; total?: unknown }, hours: number, people: number) {
+  const v = num(f.variable), fixed = Math.max(0, num(f.fixed)), total = num(f.total);
+  const n = people > 0 ? people : 1;
+  const perPerson = total > 0 ? Math.max(0, total - fixed) : v * Math.max(0, hours);
+  const hourly = v > 0 ? v : hours > 0 ? perPerson / hours : 0;
+  return { hourly, perPerson, amount: perPerson * n, fixed, fixedAmount: fixed * n };
 }
 const quoteRow = (q: any): RentmanQuote => ({
   id: Number(q.id), number: String(q.number ?? q.displayname ?? q.id), version: Number(q.version) || 1, subject: text(q.subject, q.displayname),

@@ -14,7 +14,7 @@ import { loadOptions } from './rentmanOptions';
  *   name (listed so it can be mapped once).
  * - Later changes in Rentman are applied to shifts nobody has changed or staffed; the rest are listed for a coordinator.
  */
-export type Want = { key: string; role: string; start: string; end: string; headcount: number; date: string; group: string | null; groupSort: number; hash: string; billRate: number | null };
+export type Want = { key: string; role: string; start: string; end: string; headcount: number; date: string; group: string | null; groupSort: number; hash: string; billRate: number | null; fixedFee: number | null };
 export type Conflict = { key: string; kind: 'changed' | 'removed'; shiftId: string; role: string; current: { role: string; start: string; end: string; headcount: number }; rentman: Want | null; why: string };
 
 const iso = (v: unknown) => new Date(String(v)).toISOString();
@@ -23,7 +23,7 @@ const txt = (...v: unknown[]) => v.map((x) => String(x ?? '').trim()).find(Boole
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
 
 /** The role to use for a Rentman name, and whether it matched. */
-async function roleResolver(c: PoolClient, tid: string) {
+export async function roleResolver(c: PoolClient, tid: string) {
   const skills = (await c.query('SELECT name FROM skills WHERE active')).rows.map((r) => r.name as string);
   const byKey = new Map(skills.map((n) => [roleKeyOf(n), n]));
   const map = new Map((await c.query('SELECT rentman_name, role_name FROM rentman_role_map')).rows.map((r) => [r.rentman_name as string, r.role_name as string | null]));
@@ -83,14 +83,15 @@ export async function wantedShifts(c: PoolClient, tid: string, token: string, pr
               [s, e, tz],
             )
           ).rows;
-    // The hourly price quoted in Rentman for one person (crew only; transport is priced by distance).
-    const peopleHours = days.reduce((n: number, d: any) => n + ((+new Date(d.e) - +new Date(d.s)) / 3600_000) * headcount, 0);
-    const hourly = transport ? 0 : functionLabor({ variable: f.price_variable, fixed: f.price_fixed, total: f.price_total }, peopleHours).hourly;
-    const billRate = hourly > 0 ? Math.round(hourly * 100) / 100 : null;
+    // Rentman's price for one person: the hourly rate, plus a fixed fee once per function (crew only; transport is priced by distance).
+    const hoursEach = days.reduce((n: number, d: any) => n + (+new Date(d.e) - +new Date(d.s)) / 3600_000, 0);
+    const price = transport ? null : functionLabor({ variable: f.price_variable, fixed: f.price_fixed, total: f.price_total }, hoursEach, headcount);
+    const billRate = price && price.hourly > 0 ? Math.round(price.hourly * 100) / 100 : null;
+    const fixedFee = price && price.fixed > 0 ? Math.round(price.fixed * 100) / 100 : null;
     days.forEach((d: any, i: number) =>
       out.push({
         key: days.length > 1 ? `${f.id}:${i}` : String(f.id), role, start: iso(d.s), end: iso(d.e), headcount, date: d.d,
-        group: g?.name ?? null, groupSort: g?.sort ?? 0, hash: hashOf(role, d.s, d.e, headcount), billRate,
+        group: g?.name ?? null, groupSort: g?.sort ?? 0, hash: hashOf(role, d.s, d.e, headcount), billRate, fixedFee: i === 0 ? fixedFee : null,
       }),
     );
   }
@@ -181,7 +182,7 @@ export async function applyBuild(c: PoolClient, tid: string, by: string | null, 
   for (const r of plan.removes) await c.query('DELETE FROM shifts WHERE id = $1', [r.shiftId]);
   // Billing at the rate quoted in Rentman (an option): every Rentman-built shift takes its function's quoted rate.
   if ((await loadOptions(c)).quoted_bill_rates)
-    for (const w of want) await c.query('UPDATE shifts SET bill_rate_override = $3 WHERE event_id = $1 AND rentman_key = $2 AND bill_rate_override IS DISTINCT FROM $3', [eventId, w.key, w.billRate]);
+    for (const w of want) await c.query('UPDATE shifts SET bill_rate_override = $3, fixed_fee_override = $4 WHERE event_id = $1 AND rentman_key = $2 AND (bill_rate_override IS DISTINCT FROM $3 OR fixed_fee_override IS DISTINCT FROM $4)', [eventId, w.key, w.billRate, w.fixedFee]);
   // The event's dates stretch to cover its days.
   await c.query(
     `UPDATE events SET rentman_build = true,
@@ -197,11 +198,11 @@ export async function applyBuild(c: PoolClient, tid: string, by: string | null, 
 /** Plan and apply for one event (used by the button, new pipeline events and the 30-minute run). */
 /**
  * Quoted rates on or off for Rentman-built shifts on recent and upcoming events: on, each shift takes its function's
- * quoted hourly rate again; off, the shifts go back to the role bill rates.
+ * quoted hourly rate and fixed fee again; off, the shifts go back to the role bill rates and no fixed fees.
  */
 export async function refreshQuotedRates(c: PoolClient, tid: string, token: string | null, on: boolean) {
   if (!on) {
-    const r = await c.query('UPDATE shifts SET bill_rate_override = NULL WHERE rentman_key IS NOT NULL AND bill_rate_override IS NOT NULL');
+    const r = await c.query('UPDATE shifts SET bill_rate_override = NULL, fixed_fee_override = NULL WHERE rentman_key IS NOT NULL AND (bill_rate_override IS NOT NULL OR fixed_fee_override IS NOT NULL)');
     return { events: 0, cleared: r.rowCount ?? 0 };
   }
   if (!token) return { events: 0, cleared: 0 };
@@ -212,7 +213,7 @@ export async function refreshQuotedRates(c: PoolClient, tid: string, token: stri
   for (const e of evs) {
     try {
       const w = await wantedShifts(c, tid, token, Number(e.rentman_project_id));
-      for (const x of w.want) await c.query('UPDATE shifts SET bill_rate_override = $3 WHERE event_id = $1 AND rentman_key = $2 AND bill_rate_override IS DISTINCT FROM $3', [e.id, x.key, x.billRate]);
+      for (const x of w.want) await c.query('UPDATE shifts SET bill_rate_override = $3, fixed_fee_override = $4 WHERE event_id = $1 AND rentman_key = $2 AND (bill_rate_override IS DISTINCT FROM $3 OR fixed_fee_override IS DISTINCT FROM $4)', [e.id, x.key, x.billRate, x.fixedFee]);
       events++;
     } catch { /* that project can't be read now; the 30-minute run tries again */ }
   }

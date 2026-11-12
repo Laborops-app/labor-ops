@@ -2928,3 +2928,7 @@ details.card.profile-fold > summary::before { content: none; }
 
 /* Where an invoice line's rate came from */
 .rate-src { display: inline-block; font-size: .7rem; font-weight: 600; line-height: 1; padding: 3px 6px; border-radius: 999px; background: var(--primary-soft); color: var(--primary); vertical-align: middle; }
+
+/* Invoice lines grouped by day and phase */
+.table .inv-day th { background: var(--surface-2); font-weight: 600; text-align: left; border-top: 1px solid var(--ev-card-border, var(--border)); }
+.table tbody.inv-group + tbody.inv-group .inv-day th { border-top-width: 6px; border-top-color: transparent; background-clip: padding-box; }
