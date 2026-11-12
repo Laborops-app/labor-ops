@@ -15,8 +15,11 @@ type Item =
   | { bullets: string[] }
   | { check: string; id: string }                  // a box the person ticks
   | { fields: { id: string; label: string; w?: number; required?: boolean }[] }  // a row of fill-in lines
+  | { checks: { id: string; label: string }[]; label?: string }                  // optional tick boxes on one row
+  | { area: { id: string; label: string; lines: number; required?: boolean } }   // a box for a few sentences
+  | { signer: { id: string; label: string; required?: boolean; phone?: boolean } } // another person: name, (phone,) signature
   | { gap: number };
-type Spec = { name: string; kicker: string; intro: string; items: Item[]; signLabel?: string };
+type Spec = { name: string; kicker: string; intro: string; items: Item[]; signLabel?: string; signTitle?: string };
 
 const W = 612, H = 792, M = 54, CW = W - M * 2;
 const INK = '#16202E', MUTED = '#5A6B82', RULE = '#9AA7B8';
@@ -72,6 +75,42 @@ function build(spec: Spec, company: string): Promise<Built> {
       add({ id: it.id, type: 'checkbox', x: M, y, w: 13, h: 13, label: t.length > 78 ? t.slice(0, 75) + '...' : t, required: true });
       doc.font('Helvetica').fontSize(10.5).fillColor(INK).text(t, M + 26, y + 1, { width: CW - 26, lineGap: 2 });
       y = Math.max(doc.y, y + 13) + 9;
+    } else if ('checks' in it) {
+      room(40);
+      if (it.label) { doc.font('Helvetica-Bold').fontSize(7.5).fillColor(MUTED).text(it.label.toUpperCase(), M, y, { width: CW, characterSpacing: 0.5 }); y += 13; }
+      let x = M;
+      for (const k of it.checks) {
+        const tw = doc.font('Helvetica').fontSize(10.5).widthOfString(k.label);
+        if (x + 20 + tw > M + CW) { x = M; y += 20; }
+        doc.rect(x, y, 12, 12).lineWidth(1).strokeColor(INK).stroke();
+        add({ id: k.id, type: 'checkbox', x, y, w: 12, h: 12, label: k.label, required: false });
+        doc.font('Helvetica').fontSize(10.5).fillColor(INK).text(k.label, x + 18, y + 1, { lineBreak: false });
+        x += 18 + tw + 22;
+      }
+      y += 24;
+    } else if ('area' in it) {
+      const h = it.area.lines * 14 + 8;
+      room(h + 22);
+      doc.font('Helvetica-Bold').fontSize(7.5).fillColor(MUTED).text(it.area.label.toUpperCase(), M, y, { width: CW, characterSpacing: 0.5, lineBreak: false });
+      doc.rect(M, y + 12, CW, h).lineWidth(0.8).strokeColor(RULE).stroke();
+      add({ id: it.area.id, type: 'text', x: M + 1, y: y + 13, w: CW - 2, h: h - 2, label: it.area.label, required: it.area.required ?? true });
+      y += h + 22;
+    } else if ('signer' in it) {
+      room(64);
+      const g = it.signer;
+      const nw = CW * (g.phone ? 0.3 : 0.4), pw = g.phone ? CW * 0.2 : 0, sw = CW - nw - pw - (g.phone ? 32 : 16);
+      doc.font('Helvetica-Bold').fontSize(7.5).fillColor(MUTED);
+      doc.text(`${g.label} name`.toUpperCase(), M, y, { width: nw, characterSpacing: 0.5, lineBreak: false });
+      if (g.phone) doc.text('PHONE', M + nw + 16, y, { width: pw, characterSpacing: 0.5, lineBreak: false });
+      const sx = M + nw + 16 + (g.phone ? pw + 16 : 0);
+      doc.text(`${g.label} signature`.toUpperCase(), sx, y, { width: sw, characterSpacing: 0.5, lineBreak: false });
+      add({ id: `${g.id}_name`, type: 'text', x: M, y: y + 22, w: nw, h: 17, label: `${g.label} name`, required: g.required ?? false });
+      if (g.phone) add({ id: `${g.id}_phone`, type: 'text', x: M + nw + 16, y: y + 22, w: pw, h: 17, label: `${g.label} phone`, required: false });
+      add({ id: `${g.id}_sig`, type: 'sign_other', x: sx, y: y + 10, w: sw, h: 30, label: `${g.label} signature`, required: g.required ?? false });
+      doc.moveTo(M, y + 40).lineTo(M + nw, y + 40).lineWidth(0.8).strokeColor(RULE).stroke();
+      if (g.phone) doc.moveTo(M + nw + 16, y + 40).lineTo(M + nw + 16 + pw, y + 40).stroke();
+      doc.moveTo(sx, y + 40).lineTo(sx + sw, y + 40).stroke();
+      y += 52;
     } else if ('fields' in it) {
       room(44);
       const gap = 16;
@@ -92,6 +131,7 @@ function build(spec: Spec, company: string): Promise<Built> {
   // Signature block: printed name, signature and date.
   room(120);
   y += 10;
+  if (spec.signTitle) { doc.font('Helvetica-Bold').fontSize(12).fillColor(INK).text(spec.signTitle, M, y, { width: CW }); y = doc.y + 6; }
   doc.font('Helvetica').fontSize(10.5).fillColor(INK).text(fill(spec.signLabel ?? 'By signing, I confirm that I have read this document and that what I entered is true and complete.'), M, y, { width: CW, lineGap: 2 });
   y = doc.y + 14;
   const sw = CW * 0.46, nw = CW * 0.3, dw = CW - sw - nw - 32;
@@ -222,3 +262,38 @@ const SPECS: Spec[] = [
 
 export const STARTER_NAMES = SPECS.map((s) => s.name);
 export const starterPacket = (company: string): Promise<Built[]> => Promise.all(SPECS.map((s) => build(s, company)));
+
+const INCIDENT: Spec = {
+  name: 'Incident report',
+  kicker: 'Fill in the same day',
+  intro: 'Use this for any injury, near miss, damage or other incident on a job for {company}. Write what you saw and did, in your own words. If someone needs urgent help, call 911 first and fill this in afterwards.',
+  items: [
+    { h: 'When and where' },
+    { fields: [{ id: 'inc_date', label: 'Date of incident' }, { id: 'inc_time', label: 'Time' }, { id: 'inc_event', label: 'Event or job', w: 1.6 }] },
+    { fields: [{ id: 'inc_place', label: 'Exact place (venue, dock, stage, truck)', w: 2 }, { id: 'reporter_role', label: 'Your position that day' }] },
+    { h: 'What happened' },
+    { checks: [{ id: 't_injury', label: 'Injury' }, { id: 't_near', label: 'Near miss' }, { id: 't_damage', label: 'Property or equipment damage' }, { id: 't_vehicle', label: 'Vehicle' }, { id: 't_other', label: 'Other' }], label: 'Type of incident (tick all that apply)' },
+    { area: { id: 'what', label: 'Describe what happened, in order', lines: 6 } },
+    { area: { id: 'cause', label: 'What do you think caused it?', lines: 2, required: false } },
+    { h: 'People hurt (leave blank if nobody was)' },
+    { fields: [{ id: 'hurt_name', label: 'Name of the person hurt', w: 1.4, required: false }, { id: 'hurt_employer', label: 'Works for', required: false }, { id: 'hurt_phone', label: 'Phone', required: false }] },
+    { fields: [{ id: 'hurt_what', label: 'Injury and part of the body', required: false }] },
+    { checks: [{ id: 'c_none', label: 'No treatment' }, { id: 'c_firstaid', label: 'First aid on site' }, { id: 'c_clinic', label: 'Clinic or doctor' }, { id: 'c_er', label: 'Emergency room' }, { id: 'c_911', label: '911 called' }], label: 'Care given' },
+    { fields: [{ id: 'care_by', label: 'Who gave first aid, and where they were taken', required: false }] },
+    { h: 'Damage (leave blank if there was none)' },
+    { area: { id: 'damage', label: 'What was damaged, and who owns it', lines: 2, required: false } },
+    { h: 'What was done about it' },
+    { area: { id: 'action', label: 'Steps taken right away (area closed off, equipment tagged out, cleaned up)', lines: 2, required: false } },
+    { fields: [{ id: 'told_who', label: 'Lead or supervisor told', w: 1.4 }, { id: 'told_when', label: 'Time they were told' }, { id: 'photos', label: 'Photos taken? Who has them', w: 1.4, required: false }] },
+    { h: 'Witnesses' },
+    { p: 'Anyone who saw it. Each witness writes their name and signs here, on this device. A witness signs only to say they saw the incident, not that they agree with every word above.' },
+    { signer: { id: 'w1', label: 'Witness 1', phone: true } },
+    { signer: { id: 'w2', label: 'Witness 2', phone: true } },
+    { area: { id: 'w_notes', label: 'Anything a witness wants to add', lines: 2, required: false } },
+    { h: 'Lead or supervisor' },
+    { signer: { id: 'sup', label: 'Lead or supervisor' } },
+  ],
+  signTitle: 'Person making this report',
+  signLabel: 'By signing, I confirm that this report is true and complete to the best of my knowledge.',
+};
+export const incidentReport = (company: string): Promise<Built> => build(INCIDENT, company);

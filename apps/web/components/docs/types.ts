@@ -1,4 +1,4 @@
-export type PdfFieldType = 'signature' | 'date' | 'name' | 'text' | 'checkbox';
+export type PdfFieldType = 'signature' | 'date' | 'name' | 'text' | 'checkbox' | 'sign_other';
 export type PdfField = { id: string; type: PdfFieldType; page: number; x: number; y: number; w: number; h: number; label: string; required: boolean };
 export type FormFieldType = 'checkbox' | 'yesno' | 'text' | 'number' | 'photo' | 'person' | 'signature';
 export type FormField = { id: string; type: FormFieldType; label: string; required: boolean };
@@ -11,6 +11,7 @@ export const PDF_FIELD: Record<PdfFieldType, { label: string; w: number; h: numb
   name: { label: 'Signer’s name', w: 0.3, h: 0.028 },
   text: { label: 'Text to fill in', w: 0.3, h: 0.028 },
   checkbox: { label: 'Checkbox', w: 0.025, h: 0.02 },
+  sign_other: { label: 'Another person’s signature', w: 0.28, h: 0.045 },
 };
 export const FORM_FIELD: Record<FormFieldType, string> = { checkbox: 'Checkbox', yesno: 'Yes / No', text: 'Text', number: 'Number', photo: 'Photo', person: 'Pick a person', signature: 'Signature' };
 export const newId = () => Math.random().toString(36).slice(2, 10);

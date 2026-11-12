@@ -31,6 +31,7 @@ export default function DocFill({ template, shiftId, people, signerName, onDone 
   const [err, setErr] = useState('');
   const fields = template.fields;
   const needsSig = fields.some((f) => f.type === 'signature');
+  const others = template.kind === 'pdf' ? (fields as PdfField[]).filter((f) => f.type === 'sign_other') : [];
   const set = (id: string, v: Value) => setAnswers((a) => ({ ...a, [id]: v }));
   const today = useMemo(() => new Date().toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }), []);
   const submit = async () => {
@@ -60,11 +61,22 @@ export default function DocFill({ template, shiftId, people, signerName, onDone 
                     {signature ? <img src={signature} alt="" /> : 'Tap to sign'}
                   </button>
                 );
+              if (f.type === 'sign_other') {
+                const v = answers[f.id];
+                return (
+                  <button key={f.id} type="button" className={`pf pf-sign${v ? ' done' : ''}`} style={{ ...style, fontSize: 11 }} onClick={() => document.getElementById(`other-${f.id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })} aria-label={`${f.label || 'Another person’s signature'}: ${v ? 'signed' : 'opens the signature box below'}`}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    {typeof v === 'string' ? <img src={v} alt="" /> : f.required ? 'Tap to sign' : 'Sign (if any)'}
+                  </button>
+                );
+              }
+              if (f.type === 'text' && f.h > 0.037)
+                return <textarea key={f.id} className="pf pf-text pf-area" style={style} value={String(answers[f.id] ?? '')} onChange={(e) => set(f.id, e.target.value)} placeholder={f.required ? 'Type here' : 'Type here (optional)'} aria-label={f.label || 'Text'} aria-required={f.required} maxLength={1500} />;
               if (f.type === 'date') return <span key={f.id} className="pf pf-auto" style={{ ...style, fontSize: Math.max(9, f.h * p.height * 0.6) }}>{today}</span>;
               if (f.type === 'name') return <span key={f.id} className="pf pf-auto" style={{ ...style, fontSize: Math.max(9, f.h * p.height * 0.6) }}>{signerName}</span>;
               if (f.type === 'checkbox')
                 return <input key={f.id} type="checkbox" className="pf pf-check" style={style} checked={answers[f.id] === true} onChange={(e) => set(f.id, e.target.checked)} aria-label={f.label || 'Checkbox'} aria-required={f.required} />;
-              return <input key={f.id} type="text" className="pf pf-text" style={{ ...style, fontSize: Math.max(10, f.h * p.height * 0.6) }} value={String(answers[f.id] ?? '')} onChange={(e) => set(f.id, e.target.value)} placeholder={f.label || 'Type here'} aria-label={f.label || 'Text'} aria-required={f.required} />;
+              return <input key={f.id} type="text" className="pf pf-text" style={{ ...style, fontSize: Math.min(15, Math.max(10, f.h * p.height * 0.6)) }} value={String(answers[f.id] ?? '')} onChange={(e) => set(f.id, e.target.value)} placeholder={f.label || 'Type here'} aria-label={f.label || 'Text'} aria-required={f.required} />;
             })
           }
         />
@@ -104,6 +116,18 @@ export default function DocFill({ template, shiftId, people, signerName, onDone 
                   )}
                 </>
               )}
+            </div>
+          ))}
+        </div>
+      )}
+      {others.length > 0 && (
+        <div className="docfill-foot">
+          <h2>Other people signing</h2>
+          <p className="muted small" style={{ margin: 0 }}>Hand them this device to sign. Each person signs only for themselves.</p>
+          {others.map((f) => (
+            <div key={f.id} id={`other-${f.id}`} className="docfill-other">
+              <b>{f.label || 'Another person’s signature'}{!f.required && <span className="muted small"> (leave empty if there is none)</span>}</b>
+              <SignaturePad name="" onChange={(png) => set(f.id, png)} />
             </div>
           ))}
         </div>

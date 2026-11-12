@@ -14,7 +14,7 @@ type Draft = { id: string | null; name: string; kind: 'pdf' | 'form'; purpose: '
 const day = (iso: string) => new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' });
 const toBase64 = (f: File) => new Promise<string>((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] ?? ''); r.onerror = () => rej(new Error('That file couldn’t be read.')); r.readAsDataURL(f); });
 const summary = (s: DocSettings) =>
-  [s.who === 'lead' ? 'The lead' : s.who === 'everyone' ? 'Everyone on the shift' : 'A coordinator', s.when === 'clock_in' ? 'at clock-in' : s.when === 'clock_out' ? 'before clock-out' : 'any time',
+  [...(s.required ? [] : ['only when needed']), s.who === 'lead' ? 'The lead' : s.who === 'everyone' ? 'Everyone on the shift' : 'A coordinator', s.when === 'clock_in' ? 'at clock-in' : s.when === 'clock_out' ? 'before clock-out' : 'any time',
     s.useOn === 'all' ? 'every shift' : s.useOn === 'days' ? `days named “${s.dayContains}”` : `roles: ${s.roles.join(', ')}`].join(' · ');
 
 function Body({ me }: { me: Me }) {
@@ -123,7 +123,8 @@ function Body({ me }: { me: Me }) {
           {draft.purpose === 'shift' && (
             <div className="row" style={{ gap: 18, flexWrap: 'wrap', marginTop: 8 }}>
               {draft.kind === 'form' && <label className="check"><input type="checkbox" checked={s.alertOnNo} onChange={(e) => setS({ alertOnNo: e.target.checked })} /> A “No” answer alerts the coordinators</label>}
-              {s.when === 'clock_in' && s.who !== 'coordinator' && <label className="check"><input type="checkbox" checked={s.blockClockIn} onChange={(e) => setS({ blockClockIn: e.target.checked })} /> Can’t clock in until it’s done</label>}
+              <label className="check"><input type="checkbox" checked={!s.required} onChange={(e) => setS({ required: !e.target.checked, blockClockIn: e.target.checked ? false : s.blockClockIn })} /> Only when needed (like an incident report)</label>
+              {s.required && s.when === 'clock_in' && s.who !== 'coordinator' && <label className="check"><input type="checkbox" checked={s.blockClockIn} onChange={(e) => setS({ blockClockIn: e.target.checked })} /> Can’t clock in until it’s done</label>}
             </div>
           )}
         </section>
@@ -195,6 +196,12 @@ function Body({ me }: { me: Me }) {
         {tab === 'onboarding' && (
           <p className="muted small" style={{ margin: '10px 0 0' }}>
             The starter packet is general wording, not legal advice: have whoever handles your HR or legal matters read it before you use it. It leaves out tax forms (W-4, W-9, I-9) and bank details; upload the official forms yourself, and collect bank details through your payroll provider.
+          </p>
+        )}
+        {tab === 'shift' && !list.some((t) => t.purpose === 'shift' && t.name.toLowerCase() === 'incident report') && (
+          <p className="small" style={{ margin: '10px 0 0' }}>
+            <button type="button" className="btn small" disabled={busy} onClick={() => run(() => api('/api/docs/starter-incident-report', { body: {} }), 'Incident report added. Crew can file one from any of their shifts; coordinators are told when one comes in.')}>+ Add the incident report (PDF)</button>{' '}
+            <span className="muted">A two-page report with two witness signatures and a lead or supervisor signature. General wording, not legal advice.</span>
           </p>
         )}
         {tab === 'shift' && (

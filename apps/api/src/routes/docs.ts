@@ -6,7 +6,7 @@ import { authenticate, guard } from '../auth';
 import { pool, withTenant, audit } from '../db';
 import { appliesTo, formField, formPdf, missing, onboardingLeft, pdfField, pdfPageCount, shiftFormsFor, signPdf, signerOf, submitBody, templateSettings, type FormField, type PdfField } from '../docs';
 import { notify, notifyStaff } from '../notify';
-import { STARTER_NAMES, starterPacket } from '../starterPacket';
+import { STARTER_NAMES, incidentReport, starterPacket } from '../starterPacket';
 
 const uuid = z.string().uuid();
 const idParam = z.object({ id: uuid });
@@ -184,6 +184,22 @@ export async function docRoutes(app: FastifyInstance) {
     }),
   );
 
+  // A ready-made incident report (PDF) with witness and supervisor signatures, used only when needed.
+  app.post('/api/docs/starter-incident-report', { preHandler: mgr }, async (req, reply) =>
+    withTenant(req.user.tid, async (c) => {
+      const company = (await c.query('SELECT name FROM tenants WHERE id = $1', [req.user.tid])).rows[0]?.name ?? 'the company';
+      if ((await c.query("SELECT 1 FROM doc_templates WHERE purpose = 'shift' AND lower(name) = 'incident report'")).rowCount) return reply.code(409).send({ error: 'You already have a form called Incident report.' });
+      const d = await incidentReport(company);
+      const sort = (await c.query("SELECT COALESCE(max(sort), 0) + 1 AS n FROM doc_templates WHERE purpose = 'shift'")).rows[0].n;
+      const r = (await c.query(
+        `INSERT INTO doc_templates (tenant_id, name, kind, purpose, data, file_name, size, page_count, fields, settings, sort, created_by) VALUES ($1,$2,'pdf','shift',$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+        [req.user.tid, d.name, d.pdf, d.fileName, d.pdf.length, d.pages, JSON.stringify(d.fields), JSON.stringify(templateSettings.parse({ required: false, who: 'everyone', when: 'any', useOn: 'all' })), sort, req.user.sub],
+      )).rows[0];
+      await audit(c, req.user.tid, req.user.sub, 'docs.starter_incident', 'doc_template', r.id);
+      return reply.code(201).send({ id: r.id });
+    }),
+  );
+
   // ----- filling in and signing -----
   app.post('/api/docs/templates/:id/submit', { preHandler: authenticate, bodyLimit: 8 * 1024 * 1024 }, async (req, reply) => {
     const { id } = idParam.parse(req.params);
@@ -235,6 +251,8 @@ export async function docRoutes(app: FastifyInstance) {
       await audit(c, req.user.tid, req.user.sub, 'docs.signed', 'doc_submission', sid, { template: t.name });
       if (flagged && settings.alertOnNo && shift)
         await notifyStaff(c, req.user.tid, { category: 'approval_request', title: `${t.name}: a "No" answer on ${shift.event}`, body: `${who.name} answered No to a question on ${t.name} (${shift.role_name}). Open the form to see which.`, link: `/events/${shift.event_id}` }, req.user.sub);
+      if (shift && !settings.required)
+        await notifyStaff(c, req.user.tid, { category: 'approval_request', title: `${t.name} filed on ${shift.event}`, body: `${who.name} filed "${t.name}" (${shift.role_name}). Open the event to read the signed PDF.`, link: `/events/${shift.event_id}` }, req.user.sub);
       const left = t.purpose === 'onboarding' ? await onboardingLeft(c, req.user.sub) : [];
       if (t.purpose === 'onboarding' && !left.length)
         await notifyStaff(c, req.user.tid, { category: 'approval_result', title: `${who.name} finished onboarding`, body: `${who.name} has completed every onboarding step. The signed copies are on their profile.`, link: `/crew/${req.user.sub}` }, req.user.sub);
@@ -332,7 +350,7 @@ export async function docRoutes(app: FastifyInstance) {
       const subs = (await c.query(`SELECT s.id, s.template_id, s.template_name, s.shift_id, s.flagged, s.signed_at, u.name AS user_name, sh.role_name FROM doc_submissions s JOIN users u ON u.id = s.user_id LEFT JOIN shifts sh ON sh.id = s.shift_id WHERE s.event_id = $1 ORDER BY s.signed_at DESC`, [id])).rows;
       return {
         formsOn: true,
-        shifts: shifts.map((sh) => ({ id: sh.id, forms: tpls.filter((t) => appliesTo(t.settings, sh)).map((t) => ({ id: t.id, name: t.name, who: t.settings.who, done: subs.filter((x) => x.template_id === t.id && x.shift_id === sh.id).length })) })).filter((x) => x.forms.length),
+        shifts: shifts.map((sh) => ({ id: sh.id, forms: tpls.filter((t) => appliesTo(t.settings, sh) && t.settings.required).map((t) => ({ id: t.id, name: t.name, who: t.settings.who, done: subs.filter((x) => x.template_id === t.id && x.shift_id === sh.id).length })) })).filter((x) => x.forms.length),
         submissions: subs,
       };
     });

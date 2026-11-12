@@ -5176,6 +5176,22 @@ test('documents and forms: upload a PDF, place fields, sign in the app; onboardi
   assert.ok(details.fields.some((f: { type: string }) => f.type === 'signature') && details.fields.filter((f: { type: string }) => f.type === 'text').length >= 10);
   const ans = Object.fromEntries(details.fields.filter((f: { type: string }) => f.type === 'text').map((f: { id: string }) => [f.id, 'x']));
   assert.equal((await call(c1.session, 'POST', `/api/docs/templates/${details.id}/submit`, { answers: ans, signature: PNG, consent: true })).status, 201);
+  // Incident report: a ready-made PDF, only when needed, with witness signatures made on the same device
+  const ir = await call(a, 'POST', '/api/docs/starter-incident-report', {});
+  assert.equal(ir.status, 201);
+  assert.equal((await call(a, 'POST', '/api/docs/starter-incident-report', {})).status, 409);
+  const irT = (await call(a, 'GET', `/api/docs/templates/${ir.json.id}`)).json.template;
+  assert.equal(irT.settings.required, false);
+  assert.equal(irT.fields.filter((f: { type: string }) => f.type === 'sign_other').length, 3);
+  // It is offered on the shift but never counted as to-do, and doesn't gate anything
+  const mineForms = (await call(c1.session, 'GET', `/api/my/shifts/${sh}/forms`)).json.forms;
+  assert.equal(mineForms.find((f: { name: string }) => f.name === 'Incident report').settings.required, false);
+  assert.ok(!(await call(a, 'GET', `/api/events/${ev}/forms`)).json.shifts.some((x: { forms: { name: string }[] }) => x.forms.some((f) => f.name === 'Incident report')));
+  const need = Object.fromEntries(irT.fields.filter((f: { type: string; required: boolean }) => f.type === 'text' && f.required).map((f: { id: string }) => [f.id, 'x']));
+  const irSub = await call(c1.session, 'POST', `/api/docs/templates/${ir.json.id}/submit`, { shiftId: sh, answers: { ...need, t_injury: true, w1_name: 'Wendy Witness', w1_sig: PNG }, signature: PNG, consent: true });
+  assert.equal(irSub.status, 201);
+  assert.ok((await call(a, 'GET', '/api/notifications')).json.items.some((n: { title: string }) => /Incident report filed/.test(n.title)));
+  assert.equal((await call(c1.session, 'POST', `/api/docs/templates/${ir.json.id}/submit`, { shiftId: sh, answers: need, signature: PNG, consent: true })).status, 201); // a second one is fine
   // Other people and other companies can't read a signed copy
   const c2 = await mkCrew(a, 'ds2');
   assert.equal((await call(c2.session, 'GET', `/api/docs/submissions/${done.json.submissionId}/pdf`)).status, 404);

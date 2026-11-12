@@ -11,7 +11,8 @@ import { z } from 'zod';
 const frac = z.number().min(0).max(1);
 export const pdfField = z.object({
   id: z.string().min(1).max(40),
-  type: z.enum(['signature', 'date', 'name', 'text', 'checkbox']),
+  /** sign_other: a second person (a witness, a supervisor) signs on the same device. */
+  type: z.enum(['signature', 'date', 'name', 'text', 'checkbox', 'sign_other']),
   page: z.number().int().min(0).max(500),
   /** Position and size as fractions of the page, from its top-left corner. */
   x: frac, y: frac, w: frac, h: frac,
@@ -27,7 +28,7 @@ export const formField = z.object({
 export type PdfField = z.infer<typeof pdfField>;
 export type FormField = z.infer<typeof formField>;
 export const templateSettings = z.object({
-  /** Onboarding: must be done; shift forms: must be done by whoever it is for. */
+  /** Onboarding: must be done. Shift forms: false = only when needed (an incident report), never shown as to-do. */
   required: z.boolean().default(true),
   /** Shift forms: who fills it in. */
   who: z.enum(['lead', 'everyone', 'coordinator']).default('lead'),
@@ -80,6 +81,7 @@ export function missing(kind: 'pdf' | 'form', fields: (PdfField | FormField)[], 
     if (!f.required || f.type === 'signature' || f.type === 'date' || f.type === 'name') continue;
     const v = b.answers[f.id];
     const label = f.label || (f.type === 'checkbox' ? 'the checkbox' : 'every field');
+    if (f.type === 'sign_other') { if (typeof v !== 'string' || !v.startsWith('data:image/png')) return `${f.label || 'The other signature'} is missing.`; continue; }
     if (f.type === 'checkbox') { if (v !== true) return kind === 'form' ? `Tick "${label}".` : `Tick ${label}.`; continue; }
     if (v === undefined || v === null || v === '') return `Fill in "${label}".`;
   }
@@ -93,6 +95,7 @@ export async function signPdf(original: Buffer, fields: PdfField[], b: SubmitBod
   const sig = b.signature ? await doc.embedPng(dataUrlBytes(b.signature)) : null;
   const pages = doc.getPages();
   const ink = rgb(0.06, 0.1, 0.2);
+  const others: string[] = [];
   for (const f of fields) {
     const page = pages[f.page];
     if (!page) continue;
@@ -102,6 +105,15 @@ export async function signPdf(original: Buffer, fields: PdfField[], b: SubmitBod
       if (!sig) continue;
       const s = Math.min(w / sig.width, h / sig.height);
       page.drawImage(sig, { x, y: y + (h - sig.height * s) / 2, width: sig.width * s, height: sig.height * s });
+      continue;
+    }
+    if (f.type === 'sign_other') {
+      const v = b.answers[f.id];
+      if (typeof v !== 'string' || !v.startsWith('data:image/png')) continue;
+      const img = await doc.embedPng(dataUrlBytes(v));
+      const s = Math.min(w / img.width, h / img.height);
+      page.drawImage(img, { x, y: y + (h - img.height * s) / 2, width: img.width * s, height: img.height * s });
+      others.push(f.label || 'Another signature');
       continue;
     }
     if (f.type === 'checkbox') {
@@ -114,6 +126,21 @@ export async function signPdf(original: Buffer, fields: PdfField[], b: SubmitBod
     }
     const text = latin(f.type === 'date' ? dateOnly(who) : f.type === 'name' ? (b.signedName ?? who.name) : String(b.answers[f.id] ?? ''));
     if (!text) continue;
+    if (f.type === 'text' && h > 30) {
+      // A tall box is a paragraph: wrap the words and stop at the bottom of the box.
+      const size = 10, lh = 13;
+      const lines: string[] = [];
+      for (const para of text.split(/\r?\n/)) {
+        let line = '';
+        for (const word of para.split(/\s+/)) {
+          const next = line ? `${line} ${word}` : word;
+          if (font.widthOfTextAtSize(next, size) > w - 6 && line) { lines.push(line); line = word; } else line = next;
+        }
+        lines.push(line);
+      }
+      lines.slice(0, Math.max(1, Math.floor((h - 4) / lh))).forEach((ln, i) => page.drawText(ln, { x: x + 3, y: y + h - 12 - i * lh, size, font, color: ink }));
+      continue;
+    }
     let size = Math.min(12, Math.max(6, h * 0.62));
     while (size > 6 && font.widthOfTextAtSize(text, size) > w - 4) size -= 0.5;
     page.drawText(text, { x: x + 2, y: y + (h - size) / 2 + size * 0.18, size, font, color: ink, maxWidth: w });
@@ -130,6 +157,7 @@ export async function signPdf(original: Buffer, fields: PdfField[], b: SubmitBod
     ['Signed by', b.signedName && b.signedName !== who.name ? `${b.signedName} (account: ${who.name})` : who.name],
     ['Email', who.email], ['Signed', stamp(who)], ['Device', who.device ?? 'Unknown device'], ['Network address', who.ip ?? 'Not recorded'],
     ['Company', who.company], ['Record', who.recordId],
+    ...(others.length ? [['Also signed here', `${others.join(', ')} (signed on the same device, in person)`] as [string, string]] : []),
   ];
   for (const [k, v] of rows) {
     p.drawText(k, { x: 54, y, size: 9, font: bold, color: rgb(0.35, 0.42, 0.51) });

@@ -8,6 +8,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 /**
  * Place fields on an uploaded PDF: pick a kind, click the page where it goes, drag to move, drag the corner to resize.
  * Signature, date and name fill themselves in when someone signs; text and checkboxes are for them to fill in.
+ * "Another person's signature" is for a witness or supervisor who signs on the same device.
  */
 export default function PdfFieldEditor({ url, fields, onChange }: { url: string; fields: PdfField[]; onChange: (f: PdfField[]) => void }) {
   const [tool, setTool] = useState<PdfFieldType | null>('signature');
@@ -16,7 +17,7 @@ export default function PdfFieldEditor({ url, fields, onChange }: { url: string;
   const place = (page: number, x: number, y: number) => {
     if (!tool) return setSel(null);
     const d = PDF_FIELD[tool];
-    const f: PdfField = { id: newId(), type: tool, page, x: clamp(x - d.w / 2, 0, 1 - d.w), y: clamp(y - d.h / 2, 0, 1 - d.h), w: d.w, h: d.h, label: tool === 'text' ? '' : d.label, required: true };
+    const f: PdfField = { id: newId(), type: tool, page, x: clamp(x - d.w / 2, 0, 1 - d.w), y: clamp(y - d.h / 2, 0, 1 - d.h), w: d.w, h: d.h, label: tool === 'text' ? '' : tool === 'sign_other' ? 'Witness signature' : d.label, required: tool !== 'sign_other' };
     onChange([...fields, f]);
     setSel(f.id);
   };
@@ -56,9 +57,9 @@ export default function PdfFieldEditor({ url, fields, onChange }: { url: string;
       {cur && (
         <div className="pfe-sel">
           <b>{PDF_FIELD[cur.type].label}</b> on page {cur.page + 1}
-          {(cur.type === 'text' || cur.type === 'checkbox') && (
+          {(cur.type === 'text' || cur.type === 'checkbox' || cur.type === 'sign_other') && (
             <>
-              <input type="text" value={cur.label} onChange={(e) => update(cur.id, { label: e.target.value })} placeholder={cur.type === 'text' ? 'What goes here? (e.g. Address)' : 'What are they ticking?'} aria-label="Field label" maxLength={80} />
+              <input type="text" value={cur.label} onChange={(e) => update(cur.id, { label: e.target.value })} placeholder={cur.type === 'text' ? 'What goes here? (e.g. Address)' : cur.type === 'sign_other' ? 'Who signs here? (e.g. Witness signature)' : 'What are they ticking?'} aria-label="Field label" maxLength={80} />
               <label className="check"><input type="checkbox" checked={cur.required} onChange={(e) => update(cur.id, { required: e.target.checked })} /> Required</label>
             </>
           )}
@@ -85,7 +86,7 @@ export default function PdfFieldEditor({ url, fields, onChange }: { url: string;
                 onPointerUp={() => { drag.current = null; }}
                 onKeyDown={(e) => key(e, f)}
               >
-                <span>{f.type === 'checkbox' ? '☐' : f.type === 'text' ? f.label || 'Text' : PDF_FIELD[f.type].label}</span>
+                <span>{f.type === 'checkbox' ? '☐' : f.type === 'text' || f.type === 'sign_other' ? f.label || PDF_FIELD[f.type].label : PDF_FIELD[f.type].label}</span>
                 <i className="pfe-grip" aria-hidden="true" onPointerDown={(e) => down(e, f, 'size')} onPointerMove={move} onPointerUp={() => { drag.current = null; }} />
               </div>
             ))
