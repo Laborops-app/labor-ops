@@ -5066,3 +5066,48 @@ test('offer waves: best rated first, next person on a no, unanswered offers with
   const qs = (await call(a, 'POST', `/api/events/${q}/shifts`, { roleName: 'Stagehand', startsAt: start(130), endsAt: start(138), headcount: 1 })).json.shift.id;
   assert.equal((await call(a, 'POST', `/api/shifts/${qs}/waves`, { config: cfg })).status, 409);
 });
+
+test('QR clock-in: the screen code clocks crew in and out, old codes and strangers are refused, the poster checks location', async () => {
+  const a = await register('qr1');
+  const c1 = await mkCrew(a, 'qr1c');
+  const c2 = await mkCrew(a, 'qr2c');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'QR Show', startDate: new Date().toISOString().slice(0, 10), endDate: new Date().toISOString().slice(0, 10) })).json.event.id;
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: start(0.5), endsAt: start(8), headcount: 1 })).json.shift.id;
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, confirmed: true })).status, 201);
+  // Off until switched on
+  assert.equal((await call(a, 'GET', `/api/events/${ev}/qr`)).json.on, false);
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/qr`, { on: true })).status, 200);
+  const info = (await call(a, 'GET', `/api/events/${ev}/qr`)).json;
+  const t = new URL(info.screenLink).searchParams.get('t')!;
+  const screen = await call(null, 'GET', `/api/qr-screen?t=${encodeURIComponent(t)}`);
+  assert.equal(screen.status, 200);
+  assert.match(screen.json.svg, /^<svg/);
+  assert.equal(screen.json.counts.expected, 1);
+  assert.equal((await call(null, 'GET', '/api/qr-screen?t=junk.junk')).status, 404);
+  // The code the screen is showing right now
+  const { createHmac } = await import('node:crypto');
+  const secret = (await adminQuery('SELECT qr_secret FROM events WHERE id = $1', [ev])).rows[0].qr_secret as string;
+  const code = (part: string) => createHmac('sha256', secret).update(`${ev}:${part}`).digest('base64url').slice(0, 12);
+  const w = Math.floor(Date.now() / 1000 / 30);
+  assert.equal((await call(c1.session, 'POST', '/api/time/qr', { eventId: ev, code: code(String(w - 10)) })).json.reason, 'old_code');
+  assert.equal((await call(c2.session, 'POST', '/api/time/qr', { eventId: ev, code: code(String(w)) })).json.reason, 'no_shift');
+  const inn = await call(c1.session, 'POST', '/api/time/qr', { eventId: ev, code: code(String(w)) });
+  assert.equal(inn.status, 201);
+  assert.equal(inn.json.action, 'in');
+  assert.equal((await call(null, 'GET', `/api/qr-screen?t=${encodeURIComponent(t)}`)).json.counts.in, 1);
+  // A double scan doesn't clock out; a later scan does
+  assert.equal((await call(c1.session, 'POST', '/api/time/qr', { eventId: ev, code: code(String(w)) })).json.already, true);
+  await adminQuery("UPDATE time_entries SET clock_in = now() - interval '3 hours' WHERE user_id = $1", [c1.id]);
+  const out = await call(c1.session, 'POST', '/api/time/qr', { eventId: ev, code: code(String(Math.floor(Date.now() / 1000 / 30))) });
+  assert.equal(out.json.action, 'out');
+  // Poster: needs the venue location on the event, and the phone there
+  assert.equal((await call(a, 'GET', `/api/events/${ev}/qr-poster.pdf`)).status, 409);
+  await adminQuery('UPDATE events SET geo_lat = 39.6, geo_lng = -104.9, geofence_m = 150 WHERE id = $1', [ev]);
+  const poster = await call(a, 'GET', `/api/events/${ev}/qr-poster.pdf`);
+  assert.ok(poster.status === 200 && poster.res.rawPayload.subarray(0, 4).toString() === '%PDF');
+  assert.equal((await call(c1.session, 'POST', '/api/time/qr', { eventId: ev, code: code('poster') })).json.reason, 'need_location');
+  assert.equal((await call(c1.session, 'POST', '/api/time/qr', { eventId: ev, code: code('poster'), lat: 40.2, lng: -104.9, accuracy: 10 })).json.reason, 'geofence');
+  // Turned off: codes stop working
+  await call(a, 'PUT', `/api/events/${ev}/qr`, { on: false });
+  assert.equal((await call(c1.session, 'POST', '/api/time/qr', { eventId: ev, code: code(String(Math.floor(Date.now() / 1000 / 30))) })).status, 404);
+});

@@ -6,6 +6,7 @@ import { archiveRoutes } from './routes/archive';
 import { eventUpdateRoutes } from './routes/eventUpdates';
 import { workRuleRoutes } from './routes/workRules';
 import { clientRoutes } from './routes/client';
+import { qrClockRoutes } from './routes/qrClock';
 import { waveRoutes } from './routes/waves';
 import { eventDocRoutes } from './routes/eventDocs';
 import { autofillRoutes } from './routes/autofill';
@@ -126,5 +127,6 @@ export async function buildApp() {
   await app.register(autofillRoutes);
   await app.register(eventDocRoutes);
   await app.register(waveRoutes);
+  await app.register(qrClockRoutes);
   return app;
 }

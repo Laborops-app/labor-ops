@@ -2599,3 +2599,36 @@ details.card.profile-fold > summary::before { content: none; }
 .wave-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; }
 .wave-acts .btn { min-height: 44px; }
 @media (max-width: 760px) { .wave-cols { grid-template-columns: minmax(0, 1fr); } }
+
+/* QR clock-in: the venue screen, the scan result page, and the event's QR window */
+.qrs { min-height: 100vh; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 5vw; padding: 5vh 5vw; background: #05080f; color: #e8eef7; box-sizing: border-box; }
+.qrs-code { flex: 0 1 min(70vh, 44vw); min-width: 260px; border-radius: 18px; overflow: hidden; background: #fff; line-height: 0; }
+.qrs-code svg { width: 100%; height: auto; display: block; }
+.qrs-side { flex: 1 1 320px; max-width: 640px; }
+.qrs-kicker { font-size: clamp(14px, 1.4vw, 20px); font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: #93a4bc; }
+.qrs h1 { font-size: clamp(30px, 4.4vw, 64px); line-height: 1.05; letter-spacing: -0.02em; margin: 8px 0; color: #fff; }
+.qrs-venue { font-size: clamp(16px, 1.8vw, 26px); color: #93a4bc; }
+.qrs-how { font-size: clamp(18px, 2vw, 28px); margin: 3vh 0; }
+.qrs-counts { display: flex; gap: 40px; }
+.qrs-counts div { display: grid; }
+.qrs-counts b { font-size: clamp(34px, 4vw, 60px); line-height: 1; }
+.qrs-counts b.ok { color: #4ade9b; }
+.qrs-counts span { color: #93a4bc; font-size: clamp(14px, 1.3vw, 18px); }
+.qrs-foot { margin-top: 2.4vh; color: #93a4bc; font-size: clamp(13px, 1.2vw, 17px); font-variant-numeric: tabular-nums; }
+.qrs-msg { text-align: center; max-width: 520px; }
+.clk { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; background: var(--bg); }
+.clk-card { width: min(420px, 100%); display: grid; gap: 12px; justify-items: center; text-align: center; padding: 28px 22px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border); }
+.clk-card h1 { font-size: 24px; margin: 0; }
+.clk-card .btn { width: 100%; min-height: 48px; justify-content: center; }
+.clk-badge { width: 76px; height: 76px; border-radius: 38px; display: grid; place-items: center; font-size: 38px; font-weight: 800; background: var(--good); color: var(--surface); }
+.clk-badge.out { background: var(--text); }
+.clk-badge.bad { background: var(--bad); }
+.clk-sub { margin: 0; color: var(--muted); }
+.clk-shift { width: 100%; box-sizing: border-box; display: grid; gap: 2px; padding: 12px 14px; border-radius: 12px; background: var(--surface-2); text-align: left; }
+.clk-shift span { color: var(--muted); font-size: 14px; }
+.clk-wait { font-size: 18px; margin: 20px 0; }
+.qrp-toggle { display: flex; gap: 12px; align-items: flex-start; padding: 12px; border: 1px solid var(--border); border-radius: 12px; cursor: pointer; }
+.qrp-toggle input { width: 20px; height: 20px; margin-top: 2px; flex: none; }
+.qrp-toggle > span { display: grid; gap: 2px; }
+.qrp-acts { display: grid; gap: 8px; margin: 14px 0 10px; }
+.qrp-acts .btn { min-height: 44px; justify-content: center; text-align: center; }

@@ -16,6 +16,7 @@ import Modal from '@/components/Modal';
 import ActionMenu, { ActIcon } from '@/components/ActionMenu';
 import EventDocs from '@/components/EventDocs';
 import WavePanel from '@/components/WavePanel';
+import QrPanel from '@/components/QrPanel';
 import CrewMenu, { CrewPayForm, type CrewMenuItem } from '@/components/CrewMenu';
 import InvoicePanel from '@/components/InvoicePanel';
 import HrEventView from '@/components/HrEventView';
@@ -173,6 +174,7 @@ function Body({ me }: { me: Me }) {
   const [teamEdit, setTeamEdit] = useState<{ id: string; picked: Set<string> } | null>(null);
   // Adding time for someone who never clocked in (assignment id).
   const [docsOpen, setDocsOpen] = useState(false);
+  const [qrOpen, setQrOpen] = useState(false);
   // Offer waves: the shift whose window is open, and which shifts have a plan (for the chips).
   const [waveShift, setWaveShift] = useState<string | null>(null);
   const [wavePlans, setWavePlans] = useState<Record<string, { status: string; wave: number }>>({});
@@ -1503,6 +1505,11 @@ function Body({ me }: { me: Me }) {
           <WavePanel shiftId={waveShift} onChanged={() => { loadWaves(); load(); }} />
         </Modal>
       )}
+      {qrOpen && (
+        <Modal title={`QR clock-in · ${ev.name}`} onClose={() => setQrOpen(false)}>
+          <QrPanel eventId={id} onClockSettings={() => { setQrOpen(false); setSettings('clock'); }} />
+        </Modal>
+      )}
       {docsOpen && (
         <Modal title={`Call sheet & wrap report · ${ev.name}`} onClose={() => setDocsOpen(false)} wide>
           <EventDocs eventId={id} phases={d.phases} customerEmail={custInfo?.email} onNote={setNote} />
@@ -1619,6 +1626,7 @@ function Body({ me }: { me: Me }) {
               badge={!!rateInfo?.due}
               items={[
                 { label: 'Call sheet & wrap report', icon: 'quote', hint: 'Printable PDFs for the crew and the customer', onClick: () => setDocsOpen(true) },
+                { label: 'QR clock-in', icon: 'rentman', hint: 'A code at the venue that crew scan to clock in', onClick: () => setQrOpen(true) },
                 { label: 'Who’s free?', icon: 'free', hint: 'Ask crew which days they’re free before booking', onClick: () => setSettings('avail') },
                 { label: 'Rate crew', icon: 'rate', badge: rateInfo?.due ? `${rateInfo.due} to rate` : rateInfo?.total ? `${rateInfo.rated}/${rateInfo.total}` : null, onClick: () => setSettings('rate') },
                 ...((me.role === 'admin' || me.canAdjustRates) ? [{ label: 'Crew pay', icon: 'pay', hint: 'Personal rates for this event', onClick: () => setSettings('pay') }] : []),
