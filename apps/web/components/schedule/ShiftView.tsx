@@ -7,14 +7,17 @@ import { Group, Phase, HOUR_PX, fmtH, fmtMoney, groupByEventDay, hhmm, initials,
 
 const fmtMin = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 
-function Card({ g, seePay, style }: { g: Group; seePay: boolean; style: React.CSSProperties }) {
+function Card({ g, seePay, style, side = 1 }: { g: Group; seePay: boolean; style: React.CSSProperties; side?: number }) {
   const h = ((g.endMin - g.startMin) / 60) * HOUR_PX;
   const tone = g.total === 0 ? 'good' : g.filled >= g.total ? 'good' : g.filled === 0 ? 'bad' : 'warn';
   const size = h < 64 ? 'tiny' : h < 128 ? 'short' : '';
   const shown = g.people.slice(0, 3);
   const extra = g.people.length - shown.length;
   return (
-    <Link href={`/events/${g.event_id}`} className={`sx-sg ${tone} ${size}`} style={{ ...style, height: Math.max(h - 2, 36) }} title={`${g.phase ? g.phase + ' · ' : ''}${g.name}${g.venue ? ' · ' + g.venue : ''}`}>
+    <Link href={`/events/${g.event_id}`} className={`sx-sg ${tone} ${size}${side >= 3 ? ' slim' : side === 2 ? ' half' : ''}`} style={{ ...style, height: Math.max(h - 2, 36) }} title={`${g.phase ? g.phase + ' · ' : ''}${g.name}${g.venue ? ' · ' + g.venue : ''}`}>
+      <span className="slim-l" aria-hidden="true">
+        {fmtMin(g.startMin)} <small>· {g.continued ? 'cont.' : `${g.confirmed}/${g.total}`} · {g.phase ?? g.name}</small>
+      </span>
       <span className="nm">
         {g.phase && <b className="ph">{g.phase}</b>}
         {g.phase ? ' · ' : ''}
@@ -134,6 +137,7 @@ export default function ShiftView({ days, shifts, phases, seePay, now }: { days:
                   key={item.id}
                   g={item}
                   seePay={seePay}
+                  side={n}
                   style={{ top: (item.startMin / 60) * HOUR_PX + 1, left: `calc(${(lane / n) * 100}% + 3px)`, width: `calc(${100 / n}% - 6px)` }}
                 />
               ))}

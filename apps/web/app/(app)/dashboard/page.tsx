@@ -3,7 +3,8 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import Shell, { initials } from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
-import { api, fmtDate, fmtDateTime, fmtTime } from '@/lib/api';
+import SeatBar, { SeatLegend } from '@/components/SeatBar';
+import { api, fmtDate, fmtTime } from '@/lib/api';
 
 type Up = {
   id: string;
@@ -15,6 +16,7 @@ type Up = {
   event_name: string;
   venue: string | null;
   filled: number;
+  confirmed?: number;
   crew: string[];
 };
 type Dash = {
@@ -24,32 +26,13 @@ type Dash = {
   pendingApprovals: number;
   pendingRequests: number;
   hoursScheduled: number;
+  staffing?: { slots: number; confirmed: number; waiting: number; planned: number; open: number };
   upcoming: Up[];
   clockedIn: { name: string; clock_in: string; role_name: string; event_name: string }[];
 };
-type Ev = { id: string; name: string; venue: string | null; start_date: string; end_date: string; shift_count: number; slots: number; accepted: number };
-
-const PIN = (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 0 1 16 0Z" />
-    <circle cx="12" cy="10" r="3" />
-  </svg>
-);
-const CLOCK = (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <circle cx="12" cy="12" r="10" />
-    <path d="M12 6v6l4 2" />
-  </svg>
-);
-const sectionIcon = (d: React.ReactNode) => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    {d}
-  </svg>
-);
+type Ev = { id: string; name: string; venue: string | null; start_date: string; end_date: string; shift_count: number; slots: number; accepted: number; confirmed?: number; waiting?: number; planned?: number; open?: number };
 
 const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
-const hrs = (a: string, b: string) => (new Date(b).getTime() - new Date(a).getTime()) / 3600000;
-const fmtHM = (h: number) => `${Math.floor(h)}h ${String(Math.round((h % 1) * 60)).padStart(2, '0')}m`;
 
 function shiftBadge(s: Up): { label: string; tone: string } {
   const now = Date.now();
@@ -106,9 +89,6 @@ function Body({ name }: { name: string }) {
 
   const first = name.split(' ')[0];
   const todayCount = d ? d.upcoming.filter((s) => sameDay(new Date(s.starts_at), new Date())).length : 0;
-  const totalSlots = d ? d.upcoming.reduce((n, s) => n + s.headcount, 0) : 0;
-  const filledSlots = d ? d.upcoming.reduce((n, s) => n + Math.min(s.filled, s.headcount), 0) : 0;
-  const pct = totalSlots ? Math.round((filledSlots / totalSlots) * 100) : 100;
 
   const dayShifts = d ? d.upcoming.filter((s) => sameDay(new Date(s.starts_at), day)) : [];
   const evHours = dayShifts.map((s) => new Date(s.starts_at).getHours());
@@ -118,197 +98,171 @@ function Body({ name }: { name: string }) {
   const label = (h: number) => `${((h + 11) % 12) + 1} ${h < 12 ? 'AM' : 'PM'}`;
   const tone = (s: Up) => shiftBadge(s).tone;
 
+  const st = d?.staffing ?? { slots: 0, confirmed: 0, waiting: 0, planned: 0, open: 0 };
+  const stPct = st.slots ? Math.round((st.confirmed / st.slots) * 100) : 100;
+  const today0 = new Date(); today0.setHours(0, 0, 0, 0);
+  const dayWord = (iso: string) => {
+    const x = new Date(iso); x.setHours(0, 0, 0, 0);
+    const n = Math.round((x.getTime() - today0.getTime()) / 86400000);
+    return n <= 0 ? 'Today' : n === 1 ? 'Tomorrow' : new Date(iso).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  };
+  // Events still to come, soonest first; the ones with seats to fill lead.
+  const coming = events
+    .filter((e) => new Date(`${e.end_date.slice(0, 10)}T23:59:59`).getTime() >= today0.getTime())
+    .sort((x, y) => x.start_date.localeCompare(y.start_date))
+    .slice(0, 6);
+
   return (
     <>
       {error && <Banner>{error}</Banner>}
       {!d ? (
         <div className="muted">Loading…</div>
       ) : (
-        <div className="dash">
+        <div className="db">
+          <header className="evh">
+            <div className="evh-main">
+              <div className="evh-chips">
+                {d.pendingApprovals > 0 && <Link href="/timesheets" className="evh-chip todo">{d.pendingApprovals} timesheet{d.pendingApprovals === 1 ? '' : 's'} to approve</Link>}
+                {d.pendingRequests > 0 && <Link href="/requests" className="evh-chip todo">{d.pendingRequests} request{d.pendingRequests === 1 ? '' : 's'} to answer</Link>}
+                {d.clockedIn.length > 0 && <a href="#db-clock" className="evh-chip live">{d.clockedIn.length} on the clock</a>}
+                {!d.pendingApprovals && !d.pendingRequests && !d.clockedIn.length && <span className="evh-chip quiet">Nothing is waiting on you</span>}
+              </div>
+              <h1>Welcome back, {first}</h1>
+              <div className="sub">
+                {todayCount ? `${todayCount} shift${todayCount === 1 ? '' : 's'} start today` : 'No shifts start today'}
+                {st.open + st.planned > 0 ? ` · ${st.open + st.planned} seat${st.open + st.planned === 1 ? '' : 's'} still to fill` : st.slots ? ' · everything coming up is staffed' : ''}
+              </div>
+            </div>
+            <Link href="/events" className="evh-staff db-staff" aria-label={`Staffing for everything coming up: ${st.confirmed} of ${st.slots} seats confirmed`}>
+              <div className="evh-num">
+                <b>{st.confirmed}</b>
+                <span>/ {st.slots} confirmed</span>
+                <em>{stPct}%</em>
+              </div>
+              <SeatBar confirmed={st.confirmed} waiting={st.waiting} planned={st.planned} open={st.open} big />
+              <SeatLegend confirmed={st.confirmed} waiting={st.waiting} planned={st.planned} open={st.open} />
+            </Link>
+          </header>
+
+          <div className="db-stats">
+            <Link href="/schedule" className="db-stat">
+              <span>Scheduled, next 7 days</span>
+              <b>{Math.round(d.hoursScheduled).toLocaleString()}<small> hrs</small></b>
+            </Link>
+            <Link href="/events" className="db-stat">
+              <span>Shifts coming up</span>
+              <b>{d.upcomingShifts.toLocaleString()}</b>
+            </Link>
+            <Link href="/crew" className="db-stat">
+              <span>Active crew</span>
+              <b>{d.crewCount.toLocaleString()}</b>
+            </Link>
+            <Link href="/timesheets" className={`db-stat${d.pendingApprovals ? ' warn' : ''}`}>
+              <span>Timesheets to approve</span>
+              <b>{d.pendingApprovals.toLocaleString()}</b>
+            </Link>
+          </div>
+
+          <div className="dash">
           <div className="dash-main">
-            <section className="hero">
-              <div>
-                <h1>Welcome back, {first}</h1>
-                <p>
-                  {todayCount ? `You have ${todayCount} shift${todayCount === 1 ? '' : 's'} starting today` : 'No shifts start today'}
-                  {d.openSlots ? ` and ${d.openSlots} open slot${d.openSlots === 1 ? '' : 's'} to fill.` : ' and everything upcoming is staffed.'}
-                </p>
-                <ul>
-                  {d.pendingApprovals > 0 && (
-                    <li>
-                      <Link href="/timesheets">
-                        {d.pendingApprovals} timesheet{d.pendingApprovals === 1 ? ' is' : 's are'} waiting for approval
-                      </Link>
-                    </li>
-                  )}
-                  {d.pendingRequests > 0 && (
-                    <li>
-                      <Link href="/requests">
-                        {d.pendingRequests} shift request{d.pendingRequests === 1 ? ' needs' : 's need'} your approval
-                      </Link>
-                    </li>
-                  )}
-                  {d.openSlots > 0 && (
-                    <li>
-                      <Link href="/events">Assign crew to open slots</Link>
-                    </li>
-                  )}
-                  {d.clockedIn.length > 0 && <li>{d.clockedIn.length} crew on the clock right now</li>}
-                </ul>
+            <section className="db-sec">
+              <div className="db-sec-h">
+                <h2>Next up</h2>
+                <Link href="/schedule" className="evh-chip">Open the schedule</Link>
               </div>
-              <div className="ring-tile">
-                <div>
-                  <b>{pct}%</b>
-                  <span>Upcoming slots staffed</span>
-                </div>
-                <div className="ring" style={{ ['--pct' as any]: pct }} role="img" aria-label={`${pct}% staffed`} />
-              </div>
-            </section>
-
-            <div className="sec-h">
-              <h2>{sectionIcon(<><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /></>)} Overview</h2>
-            </div>
-            <div className="stats">
-              <Link href="/events" className="stat">
-                <b>{fmtHM(d.hoursScheduled)}</b>
-                <span>Scheduled next 7 days</span>
-                <div className="bars" aria-hidden="true">
-                  {d.upcoming.slice(0, 12).map((s) => (
-                    <i key={s.id} style={{ height: `${Math.max(12, Math.min(100, hrs(s.starts_at, s.ends_at) * 9))}%` }} />
-                  ))}
-                </div>
-              </Link>
-              <Link href="/events" className="stat">
-                <b>{d.upcomingShifts}</b>
-                <span>Upcoming shifts</span>
-                <div className="bars" aria-hidden="true">
-                  {d.upcoming.slice(0, 12).map((s) => (
-                    <i key={s.id} style={{ height: `${Math.max(12, (Math.min(s.filled, s.headcount) / s.headcount) * 100)}%` }} />
-                  ))}
-                </div>
-              </Link>
-              <Link href="/crew" className="stat">
-                <b>{d.crewCount}</b>
-                <span>Active crew</span>
-              </Link>
-              <Link href="/timesheets" className={`stat ${d.pendingApprovals ? 'warn' : ''}`}>
-                <b>{d.pendingApprovals}</b>
-                <span>Timesheets to approve</span>
-              </Link>
-            </div>
-
-            <div className="sec-h">
-              <h2>{sectionIcon(<><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></>)} Upcoming shifts</h2>
-              <Link href="/events" className="btn outline sm">
-                + Schedule shift
-              </Link>
-            </div>
-            {d.upcoming.length === 0 ? (
-              <Empty>No upcoming shifts. Create an event to get started.</Empty>
-            ) : (
-              <div className="cards3">
-                {d.upcoming.slice(0, 3).map((s) => {
-                  const b = shiftBadge(s);
-                  return (
-                    <Link key={s.id} href={`/events/${s.event_id}`} className="sc">
-                      <div className="sc-top">
-                        <b>{s.role_name}</b>
-                        <span className={`badge ${b.tone}`}>{b.label}</span>
-                      </div>
-                      <div className="sub">
-                        <span>{s.event_name}</span>
-                        <span>
-                          {fmtDateTime(s.starts_at)} – {fmtTime(s.ends_at)}
-                        </span>
-                      </div>
-                      <div className="sc-foot">
-                        <div className="meta">
-                          {s.venue && (
-                            <span>
-                              {PIN} {s.venue}
-                            </span>
-                          )}
-                          <span>
-                            {CLOCK} {s.filled} of {s.headcount} filled · {fmtHM(hrs(s.starts_at, s.ends_at))}
-                          </span>
+              {d.upcoming.length === 0 ? (
+                <Empty>No shifts coming up. Create an event to get started.</Empty>
+              ) : (
+                <div className="db-list">
+                  {d.upcoming.slice(0, 6).map((s) => {
+                    const b = shiftBadge(s);
+                    const conf = Math.min(s.confirmed ?? 0, s.headcount);
+                    const wait = Math.max(0, Math.min(s.filled, s.headcount) - conf);
+                    const open = Math.max(0, s.headcount - conf - wait);
+                    return (
+                      <Link key={s.id} href={`/events/${s.event_id}`} className="db-shift">
+                        <div className="db-when">
+                          <small>{dayWord(s.starts_at)}</small>
+                          <b>{fmtTime(s.starts_at)}</b>
+                          <span>to {fmtTime(s.ends_at)}</span>
+                        </div>
+                        <div className="db-what">
+                          <b>{s.role_name}</b>
+                          <span>{s.event_name}{s.venue ? ` · ${s.venue}` : ''}</span>
+                        </div>
+                        <div className="db-seats">
+                          <div className="db-seats-top">
+                            <span><b>{conf}</b> / {s.headcount} confirmed</span>
+                            <span className={`badge ${b.tone}`}>{b.label}</span>
+                          </div>
+                          <SeatBar confirmed={conf} waiting={wait} open={open} />
+                          <div className="db-seats-sub">{[wait ? `${wait} waiting` : '', open ? `${open} open` : ''].filter(Boolean).join(' · ') || 'Fully confirmed'}</div>
                         </div>
                         <Avatars names={s.crew} extra={Math.max(0, s.filled - Math.min(3, s.crew.length))} />
-                      </div>
-                    </Link>
-                  );
-                })}
-              </div>
-            )}
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
 
-            <div className="sec-h">
-              <h2>{sectionIcon(<><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></>)} Events</h2>
-              <Link href="/events" className="btn outline sm">
-                + New event
-              </Link>
-            </div>
-            {events.length === 0 ? (
-              <Empty>No events yet.</Empty>
-            ) : (
-              <div className="cards3">
-                {events.slice(0, 3).map((e) => {
-                  const full = e.slots > 0 && e.accepted >= e.slots;
-                  return (
-                    <Link key={e.id} href={`/events/${e.id}`} className="sc">
-                      <div className="sc-top">
-                        <b>{e.name}</b>
-                        <span className={`badge ${full ? 'good' : e.slots ? 'warn' : ''}`}>{full ? 'Full' : e.slots ? 'Needs crew' : 'No shifts'}</span>
-                      </div>
-                      <div className="sub">
-                        <span>
-                          {fmtDate(e.start_date)}
-                          {e.end_date !== e.start_date ? ` – ${fmtDate(e.end_date)}` : ''}
-                        </span>
-                      </div>
-                      <div className="meta">
-                        {e.venue && (
-                          <span>
-                            {PIN} {e.venue}
-                          </span>
-                        )}
-                        <span>
-                          {CLOCK} {e.shift_count} shift{e.shift_count === 1 ? '' : 's'} · {e.accepted} / {e.slots} accepted
-                        </span>
-                      </div>
-                    </Link>
-                  );
-                })}
+            <section className="db-sec">
+              <div className="db-sec-h">
+                <h2>Events coming up</h2>
+                <Link href="/events" className="evh-chip">All events</Link>
               </div>
-            )}
+              {coming.length === 0 ? (
+                <Empty>No events coming up.</Empty>
+              ) : (
+                <div className="db-events">
+                  {coming.map((e) => {
+                    const conf = e.confirmed ?? e.accepted, wait = e.waiting ?? 0, plan = e.planned ?? 0;
+                    const open = e.open ?? Math.max(0, e.slots - conf - wait - plan);
+                    const done = e.slots > 0 && conf >= e.slots;
+                    return (
+                      <Link key={e.id} href={`/events/${e.id}`} className="db-event">
+                        <div className="db-event-top">
+                          <b>{e.name}</b>
+                          <span className={`badge ${done ? 'good' : e.slots ? (open + plan > 0 ? 'bad' : 'warn') : ''}`}>{done ? 'Confirmed' : !e.slots ? 'No shifts' : open + plan > 0 ? `${open + plan} to fill` : `${wait} waiting`}</span>
+                        </div>
+                        <div className="db-event-sub">
+                          {fmtDate(e.start_date)}{e.end_date !== e.start_date ? ` – ${fmtDate(e.end_date)}` : ''}{e.venue ? ` · ${e.venue}` : ''}
+                        </div>
+                        <SeatBar confirmed={conf} waiting={wait} planned={plan} open={open} />
+                        <div className="db-seats-sub"><b>{conf}</b> / {e.slots} confirmed · {e.shift_count} shift{e.shift_count === 1 ? '' : 's'}</div>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
 
-            <section className="card" style={{ margin: 0 }}>
-              <h2>On the clock now</h2>
+            <section className="db-sec" id="db-clock">
+              <div className="db-sec-h">
+                <h2>On the clock now</h2>
+                <Link href="/timesheets" className="evh-chip">Timesheets</Link>
+              </div>
               {d.clockedIn.length === 0 ? (
                 <Empty>Nobody is clocked in right now.</Empty>
               ) : (
-                <table>
-                  <tbody>
-                    {d.clockedIn.map((c, i) => (
-                      <tr key={i}>
-                        <td>
-                          <b>{c.name}</b>
-                        </td>
-                        <td>
-                          {c.role_name} · {c.event_name}
-                        </td>
-                        <td className="muted">since {fmtDateTime(c.clock_in)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div className="db-list">
+                  {d.clockedIn.map((c, i) => (
+                    <div key={i} className="db-clock">
+                      <span className="avatar t1" aria-hidden="true">{initials(c.name)}</span>
+                      <div className="db-what">
+                        <b>{c.name}</b>
+                        <span>{c.role_name} · {c.event_name}</span>
+                      </div>
+                      <span className="muted small">since {fmtTime(c.clock_in)}</span>
+                    </div>
+                  ))}
+                </div>
               )}
             </section>
           </div>
 
           <aside aria-label="Calendar">
-            <div className="sec-h" style={{ marginBottom: '0.6rem' }}>
-              <h2>{sectionIcon(<><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></>)} Calendar</h2>
-            </div>
-            <div className="cal">
+            <div className="cal db-cal">
               <div className="cal-h">
                 <span>{day.toLocaleDateString([], { month: 'long', year: 'numeric' })}</span>
                 <button className="btn outline sm" onClick={() => setDay(new Date())}>
@@ -355,6 +309,7 @@ function Body({ name }: { name: string }) {
               </div>
             </div>
           </aside>
+          </div>
         </div>
       )}
     </>

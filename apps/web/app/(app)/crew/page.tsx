@@ -10,7 +10,9 @@ import { api, Me, roleLabel } from '@/lib/api';
 import SkillPicker, { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 import Modal from '@/components/Modal';
 import CrewImport, { DemoCrew, RentmanExport } from '@/components/CrewImport';
-import TopbarAction, { PlusIcon, EditIcon, SearchIcon, avClass, initialsOf } from '@/components/TopbarAction';
+import TopbarAction, { PlusIcon, SearchIcon, avClass, initialsOf } from '@/components/TopbarAction';
+import CrewMenu, { CrewMenuItem } from '@/components/CrewMenu';
+import { ActIcon } from '@/components/ActionMenu';
 
 type Cert = { id: string; name: string; expires_on: string | null; verified: boolean; has_file: boolean };
 type Member = { id: string; name: string; email: string; role: string; phone: string | null; skills: string[]; field_roles?: string[]; active: boolean; certs: Cert[]; has_availability: boolean; can_adjust_rates?: boolean; ratings?: Record<string, number>; rating_avg?: number | null; review_count?: number; flag_count?: number; is_demo?: boolean };
@@ -34,6 +36,7 @@ function Body({ me }: { me: Me }) {
   const [open, setOpen] = useState<string | null>(null);
   const [cf, setCf] = useState({ name: '', expiresOn: '' });
   const [rating, setRating] = useState<Member | null>(null);
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
 
   const load = () =>
     api<{ crew: Member[] }>('/api/crew')
@@ -164,7 +167,7 @@ function Body({ me }: { me: Me }) {
       ) : rows.length === 0 ? (
         <Empty>{list.length ? 'Nobody matches.' : 'No crew yet. Add your first crew member.'}</Empty>
       ) : (
-        <div className="table-wrap">
+        <div className="table-wrap pg-table">
           <table className="dlist">
             <thead>
               <tr>
@@ -175,14 +178,13 @@ function Body({ me }: { me: Me }) {
                 <th>Rating</th>
                 <th>Certificates</th>
                 <th className="hide-sm">Phone</th>
-                <th className="hide-sm" />
-                <th className="edit-col">Edit</th>
+                <th className="edit-col"><span className="sr-only">Options</span></th>
               </tr>
             </thead>
             <tbody>
               {rows.map((m) => (
                 <Fragment key={m.id}>
-                  <tr className={m.active ? '' : 'inactive'} onClick={() => router.push(`/crew/${m.id}`)}>
+                  <tr className={m.active ? '' : 'inactive'} onClick={() => router.push(`/crew/${m.id}`)} onContextMenu={(e) => { e.preventDefault(); setMenu({ id: m.id, x: e.clientX, y: e.clientY }); }}>
                     <td className="av-col"><span className={avClass(m.name)} aria-hidden="true">{initialsOf(m.name)}</span></td>
                     <td>
                       <Link href={`/crew/${m.id}`} className="rowlink" onClick={stop}>{m.name}</Link>
@@ -228,28 +230,16 @@ function Body({ me }: { me: Me }) {
                       )}
                     </td>
                     <td className="hide-sm">{m.phone ?? <span className="muted">—</span>}</td>
-                    <td className="hide-sm" onClick={stop} style={{ cursor: 'default' }}>
-                      {m.role === 'manager' && me.role === 'admin' && (
-                        <label className="check small" title="Lets this coordinator change pay and bill rates, including on quotes" style={{ fontWeight: 500 }}>
-                          <input type="checkbox" checked={!!m.can_adjust_rates} onChange={(e) => api(`/api/crew/${m.id}/rate-permission`, { method: 'PUT', body: { allowed: e.target.checked } }).then(() => setList((l) => l && l.map((x) => (x.id === m.id ? { ...x, can_adjust_rates: e.target.checked } : x)))).catch((x) => setError(x.message))} />
-                          {' '}Can adjust rates
-                        </label>
-                      )}
-                      {m.role === 'crew' && (
-                        <button className="btn ghost small" onClick={() => toggle(m)}>
-                          {m.active ? 'Deactivate' : 'Reactivate'}
-                        </button>
-                      )}
-                    </td>
-                    <td className="edit-col">
-                      <Link href={`/crew/${m.id}`} className="btn-round sm" aria-label={`Edit ${m.name}`} onClick={stop} style={{ border: 0, background: 'transparent' }}>
-                        <EditIcon />
-                      </Link>
+                    <td className="edit-col" onClick={stop} style={{ cursor: 'default' }}>
+                      <button type="button" className="act-dots" aria-label={`Options for ${m.name}`} aria-haspopup="menu" aria-expanded={menu?.id === m.id} title="Options (or right-click the row)"
+                        onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setMenu(menu?.id === m.id ? null : { id: m.id, x: r.right - 280, y: r.bottom + 4 }); }}>
+                        <ActIcon n="more" size={18} />
+                      </button>
                     </td>
                   </tr>
                   {open === m.id && (
                     <tr onClick={stop} style={{ cursor: 'default' }}>
-                      <td colSpan={9} className="cert-edit wrap" style={{ height: 'auto', padding: '16px 12px', maxWidth: 'none' }}>
+                      <td colSpan={8} className="cert-edit wrap" style={{ height: 'auto', padding: '16px 12px', maxWidth: 'none' }}>
                         <form className="grid-form" onSubmit={(e) => addCert(m, e)}>
                           <label>
                             Certificate
@@ -298,6 +288,22 @@ function Body({ me }: { me: Me }) {
         </div>
       )}
 
+      {menu && (() => {
+        const m = (list ?? []).find((x) => x.id === menu.id);
+        if (!m) return null;
+        const setRates = (allowed: boolean) => api(`/api/crew/${m.id}/rate-permission`, { method: 'PUT', body: { allowed } }).then(() => setList((l) => l && l.map((x) => (x.id === m.id ? { ...x, can_adjust_rates: allowed } : x)))).catch((x) => setError(x.message));
+        const items: CrewMenuItem[] = [
+          { label: 'Open profile', icon: 'person', onClick: () => router.push(`/crew/${m.id}`) },
+          ...(m.role === 'crew' ? [
+            { label: m.review_count ? 'Ratings' : 'Rate this person', icon: 'rate', onClick: () => setRating(m) },
+            { label: m.certs.length ? 'Certificates' : 'Add a certificate', icon: 'cert', onClick: () => setOpen(m.id) },
+          ] as CrewMenuItem[] : []),
+          ...(m.phone && !m.is_demo ? ['divider' as const, { label: `Call ${m.phone}`, icon: 'phone', onClick: () => { window.location.href = `tel:${m.phone}`; } }, { label: 'Text', icon: 'text', onClick: () => { window.location.href = `sms:${m.phone}`; } }] as CrewMenuItem[] : []),
+          ...(m.role === 'manager' && me.role === 'admin' ? ['divider' as const, { label: m.can_adjust_rates ? 'Stop rate changes' : 'Allow rate changes', icon: 'pay', hint: 'Whether this coordinator can change pay and bill rates, including on quotes', onClick: () => setRates(!m.can_adjust_rates) }] as CrewMenuItem[] : []),
+          ...(m.role === 'crew' ? ['divider' as const, { label: m.active ? 'Deactivate' : 'Reactivate', icon: m.active ? 'off' : 'restore', danger: m.active, onClick: () => toggle(m) }] as CrewMenuItem[] : []),
+        ];
+        return <CrewMenu x={menu.x} y={menu.y} title={m.name} sub={`${roleLabel(m.role)}${m.active ? '' : ' · inactive'}`} items={items} onClose={() => setMenu(null)} />;
+      })()}
       {importing && <CrewImport isAdmin={me.role === 'admin'} onClose={() => setImporting(false)} onDone={(m) => { setNotice(m); load(); }} />}
       {rmExport && <RentmanExport onClose={() => setRmExport(false)} />}
       {demo && <DemoCrew onClose={() => setDemo(false)} onDone={(m) => { setNotice(m); load(); }} />}

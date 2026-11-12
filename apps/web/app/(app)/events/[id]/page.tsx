@@ -176,6 +176,16 @@ function Body({ me }: { me: Me }) {
   // Adding time for someone who never clocked in (assignment id).
   const [docsOpen, setDocsOpen] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
+  // On a phone or a narrow window the side column drops below the shifts, so what needs the coordinator moves to the top.
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 1180px)');
+    const on = () => setNarrow(mq.matches);
+    on();
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
+  const [reminding, setReminding] = useState(false);
   // Offer waves: the shift whose window is open, and which shifts have a plan (for the chips).
   const [waveShift, setWaveShift] = useState<string | null>(null);
   const [wavePlans, setWavePlans] = useState<Record<string, { status: string; wave: number }>>({});
@@ -1441,6 +1451,34 @@ function Body({ me }: { me: Me }) {
     </div>
   );
 
+  const attention = (
+      <NeedsAttention
+        eventId={id}
+        shifts={d.shifts}
+        onDone={(m) => { setNote(m); load(); }}
+        onError={setError}
+        onFill={(sid) => openPicker(sid)}
+        onReplace={async (sid, aid) => {
+          const a = d.shifts.find((s) => s.id === sid)?.assignments.find((x) => x.id === aid);
+          if (a && a.status !== 'declined' && !confirm(`Take ${a.user_name} off this shift and pick someone else? They'll be told.`)) return;
+          setError('');
+          try {
+            await api(`/api/assignments/${aid}`, { method: 'DELETE' });
+            await load();
+            openPicker(sid);
+          } catch (e) { setError((e as Error).message); }
+        }}
+      />
+  );
+  const waitingNow = d.shifts.filter((x) => new Date(x.ends_at).getTime() > Date.now()).reduce((n, x) => n + x.assignments.filter((a) => a.status === 'offered' && !a.planned).length, 0);
+  const remindAll = async () => {
+    setReminding(true); setError(''); setNote('');
+    try {
+      const r = await api<{ sent: number; skipped: number }>(`/api/events/${id}/nudge`, { body: {} });
+      setNote(r.sent ? `Reminded ${r.sent} ${r.sent === 1 ? 'person' : 'people'} to answer.${r.skipped ? ` ${r.skipped} were reminded in the last hour.` : ''}` : 'Everyone waiting was reminded in the last hour.');
+      await load();
+    } catch (e) { setError((e as Error).message); } finally { setReminding(false); }
+  };
   return (
     <div className="split">
       {crewMenu && (() => {
@@ -1593,6 +1631,23 @@ function Body({ me }: { me: Me }) {
           )}
         </div>
       </div>
+      {narrow && attention}
+      {(me.role === 'admin' || me.role === 'manager') && d.shifts.length > 0 && (
+        <nav className="ev-quick" aria-label="Quick actions">
+          <button type="button" onClick={() => { setAfCheck(''); setSettings('autofill'); }} aria-haspopup="dialog">
+            <ActIcon n="autofill" size={20} /><span>Auto-fill</span>{staff.open > 0 && <em aria-label={`${staff.open} open`}>{staff.open}</em>}
+          </button>
+          <button type="button" disabled={!waitingNow || reminding} onClick={remindAll} title="Remind everyone who has not answered (push and text)">
+            <ActIcon n="nudge" size={20} /><span>{reminding ? 'Sending…' : 'Remind'}</span>{waitingNow > 0 && <em aria-label={`${waitingNow} waiting`}>{waitingNow}</em>}
+          </button>
+          <button type="button" onClick={() => setQrOpen(true)} aria-haspopup="dialog">
+            <ActIcon n="qr" size={20} /><span>QR clock-in</span>
+          </button>
+          <button type="button" onClick={() => setSettings('update')} aria-haspopup="dialog">
+            <ActIcon n="update" size={20} /><span>Message</span>
+          </button>
+        </nav>
+      )}
       <div className="ev-bar">
             {/* Main actions: building and sending the crew, then talking to them and billing. Everything else is under More. */}
             {ev.staffing_draft ? (
@@ -1607,7 +1662,7 @@ function Body({ me }: { me: Me }) {
             <button className="btn act-btn" onClick={() => openShiftModal()} aria-haspopup="dialog" title="Set the role, times, pay, minimum call and crew">
               <PlusIcon /> Add shift
             </button>
-            <button className="btn act-btn" onClick={() => { setAfCheck(''); setSettings('autofill'); }} aria-haspopup="dialog" title="Propose the best available crew for every open seat">
+            <button className="btn act-btn in-quick" onClick={() => { setAfCheck(''); setSettings('autofill'); }} aria-haspopup="dialog" title="Propose the best available crew for every open seat">
               <ActIcon n="autofill" /> Auto-fill
             </button>
             {rm?.linked && rm.project && (me.role === 'admin' || me.role === 'manager') && (
@@ -1615,7 +1670,7 @@ function Body({ me }: { me: Me }) {
                 <ActIcon n="rentman" /> {rmBuilding ? 'Building the crew…' : 'Build from Rentman'}
               </button>
             )}
-            <button className="btn act-btn" onClick={() => setSettings('update')} aria-haspopup="dialog" title="Send an update to the crew scheduled on this event">
+            <button className="btn act-btn in-quick" onClick={() => setSettings('update')} aria-haspopup="dialog" title="Send an update to the crew scheduled on this event">
               <ActIcon n="update" /> Send update
             </button>
             {(me.role === 'admin' || me.canAdjustRates) && (
@@ -1729,23 +1784,7 @@ function Body({ me }: { me: Me }) {
       )}
       </div>
       <aside className="split-aside ev-aside">
-      <NeedsAttention
-        eventId={id}
-        shifts={d.shifts}
-        onDone={(m) => { setNote(m); load(); }}
-        onError={setError}
-        onFill={(sid) => openPicker(sid)}
-        onReplace={async (sid, aid) => {
-          const a = d.shifts.find((s) => s.id === sid)?.assignments.find((x) => x.id === aid);
-          if (a && a.status !== 'declined' && !confirm(`Take ${a.user_name} off this shift and pick someone else? They'll be told.`)) return;
-          setError('');
-          try {
-            await api(`/api/assignments/${aid}`, { method: 'DELETE' });
-            await load();
-            openPicker(sid);
-          } catch (e) { setError((e as Error).message); }
-        }}
-      />
+      {!narrow && attention}
       <EventDetails ev={ev} hasPhases={d.phases.length > 0} shiftCount={d.shifts.length} onSaved={load} onError={setError} />
       <div id="ev-phases">
         <Phases eventId={id} phases={d.phases} onChanged={load} onError={setError} />

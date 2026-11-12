@@ -2,6 +2,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import SeatBar from '@/components/SeatBar';
 import Shell from '@/components/Shell';
 import Modal from '@/components/Modal';
 import CustomerSelect from '@/components/CustomerSelect';
@@ -104,7 +105,10 @@ function CardMenu({ c, onMove, onPriority }: { c: Card; onMove: (s: PipelineStat
 function CardView({ c, onMove, onPriority, onDragStart, onDragEnd, dragging, rmAccount }: { rmAccount?: string | null; c: Card; onMove: (s: PipelineStatus) => void; onPriority: (p: Priority) => void; onDragStart: (e: React.DragEvent, c: Card) => void; onDragEnd: () => void; dragging: boolean }) {
   const router = useRouter();
   const w = when(c);
-  const pct = c.slots ? Math.min(100, Math.round((c.filled / c.slots) * 100)) : 0;
+  // Same split as the event page: confirmed, waiting for an answer, open.
+  const conf = Math.min(c.accepted, c.slots);
+  const wait = Math.max(0, Math.min(c.filled, c.slots) - conf);
+  const open = Math.max(0, c.slots - conf - wait);
   const tone = !c.slots ? 'none' : c.filled >= c.slots ? 'good' : c.filled > 0 ? 'warn' : 'bad';
   const wrap = c.status === 'completed' || (c.status === 'in_progress' && w.past);
   const shown = c.crew.slice(0, 3);
@@ -129,13 +133,13 @@ function CardView({ c, onMove, onPriority, onDragStart, onDragEnd, dragging, rmA
         <div className={`pm-crew ${tone}`}>
           <div className="pm-crew-top">
             <b>Crew</b>
-            <span>{c.slots ? `${c.filled}/${c.slots} seats` : c.shift_count ? 'No seats' : 'No shifts yet'}</span>
+            <span>{c.slots ? <><b>{conf}</b> / {c.slots} confirmed</> : c.shift_count ? 'No seats' : 'No shifts yet'}</span>
           </div>
-          <span className="pm-bar" aria-hidden="true"><i style={{ width: `${pct}%` }} /></span>
+          {c.slots > 0 && <SeatBar confirmed={conf} waiting={wait} open={open} />}
           <div className="pm-crew-sub">
-            {c.slots > 0 && <span>{c.accepted} confirmed</span>}
-            {c.waiting > 0 && <span className="warn">{c.waiting} waiting</span>}
-            {c.slots > c.filled && <span className="bad">{c.slots - c.filled} open</span>}
+            {wait > 0 && <span className="warn">{wait} waiting</span>}
+            {open > 0 && <span className="bad">{open} open</span>}
+            {c.slots > 0 && !wait && !open && <span>Fully confirmed</span>}
             {c.on_clock > 0 && <span className="live"><i className="pm-live" />{c.on_clock} on the clock</span>}
           </div>
         </div>

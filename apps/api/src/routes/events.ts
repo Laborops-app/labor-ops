@@ -876,11 +876,28 @@ export async function eventRoutes(app: FastifyInstance) {
         upcoming: (
           await c.query(`SELECT s.id, s.role_name, s.starts_at, s.ends_at, s.headcount, e.id AS event_id, e.name AS event_name, e.venue,
               (SELECT count(*)::int FROM shift_assignments a WHERE a.shift_id = s.id AND a.status <> 'declined') AS filled,
+              LEAST(s.headcount, (SELECT count(*) FROM shift_assignments a WHERE a.shift_id = s.id AND a.status = 'accepted'))::int AS confirmed,
               COALESCE((SELECT json_agg(x.name) FROM (SELECT u.name FROM shift_assignments a JOIN users u ON u.id = a.user_id
                 WHERE a.shift_id = s.id AND a.status <> 'declined' ORDER BY u.name LIMIT 4) x), '[]'::json) AS crew
             FROM shifts s JOIN events e ON e.id = s.event_id
             WHERE s.ends_at > now() ORDER BY s.starts_at LIMIT 12`)
         ).rows,
+        // Seats on every shift still to come, by state (per shift, up to its headcount): the same split the event page shows.
+        staffing: (
+          await c.query(`SELECT COALESCE(sum(x.h), 0)::int AS slots, COALESCE(sum(x.c), 0)::int AS confirmed, COALESCE(sum(x.w), 0)::int AS waiting,
+              COALESCE(sum(x.p), 0)::int AS planned, COALESCE(sum(x.h - x.c - x.w - x.p), 0)::int AS open
+            FROM (
+              SELECT s.headcount AS h,
+                     LEAST(s.headcount, k.acc) AS c,
+                     LEAST(s.headcount - LEAST(s.headcount, k.acc), k.wait) AS w,
+                     LEAST(GREATEST(0, s.headcount - k.acc - k.wait), k.plan) AS p
+                FROM shifts s JOIN events e ON e.id = s.event_id,
+                LATERAL (SELECT count(*) FILTER (WHERE a.status = 'accepted') AS acc, count(*) FILTER (WHERE a.status IN ('offered', 'pending')) AS wait,
+                                (SELECT count(*) FROM planned_picks pp WHERE pp.shift_id = s.id) AS plan
+                           FROM shift_assignments a WHERE a.shift_id = s.id) k
+               WHERE s.ends_at > now() AND e.archived_at IS NULL
+            ) x`)
+        ).rows[0],
         clockedIn: (
           await c.query(`SELECT u.name, t.clock_in, s.role_name, e.name AS event_name
             FROM time_entries t JOIN users u ON u.id = t.user_id

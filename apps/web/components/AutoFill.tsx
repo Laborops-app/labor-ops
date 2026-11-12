@@ -58,7 +58,10 @@ export default function AutoFill({
   );
   return (
     <div className="af">
-      <p className="muted small" style={{ marginTop: 0 }}>
+      <p className="muted small only-phone" style={{ marginTop: 0 }}>
+        The best match for every open seat. Untick anyone you don’t want; nothing is sent until you press the button.
+      </p>
+      <p className="muted small hide-phone" style={{ marginTop: 0 }}>
         The best people for every open seat: they list the position, aren’t booked or on time off, hold the certificates, keep the rest and daily-hours rules, and aren’t tagged Do not rehire. Ranked by position, stars, work for this customer, then fewest hours this week. Untick anyone you don’t want; nothing is sent until you press the button.
       </p>
       <div className="row" style={{ flexWrap: 'wrap', marginBottom: 10 }}>

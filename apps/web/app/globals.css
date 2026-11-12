@@ -778,7 +778,7 @@ button.star:hover, button.star:focus-visible { color: #e5a50a; }
 }
 :root[data-theme='dark'] .sb {
   --sb-bg: rgba(15, 9, 12, 0.56); --sb-border: #b86e9f; --sb-shadow: 0 64px 64px -32px rgba(41, 15, 0, 0.56);
-  --sb-title: rgba(255, 255, 255, 0.32); --sb-text: rgba(255, 255, 255, 0.56); --sb-strong: #fff; --sb-glow-text: 0 0 16px #fff;
+  --sb-title: rgba(255, 255, 255, 0.32); --sb-text: rgba(255, 255, 255, 0.56); --sb-strong: #fff; --sb-glow-text: 0 0 14px rgba(255, 255, 255, 0.3);
   --sb-on-bg: rgba(255, 255, 255, 0.03); --sb-on-border: #b86e9f;
   --sb-line: radial-gradient(50% 50% at 50% 50%, rgba(204, 139, 139, 1) 0%, rgba(184, 99, 99, 0.5) 50%, rgba(163, 59, 59, 0) 100%); --sb-line-op: 0.32;
   --sb-promo-bg: rgba(56, 14, 36, 0.1); --sb-promo-border: #b86e9f; --sb-promo-shadow: drop-shadow(0 64px 32px rgba(102, 37, 0, 0.65));
@@ -976,7 +976,7 @@ tr:last-child td { border-bottom: 1px solid var(--border); }
 /* banner header with a big avatar (Customer Details) */
 .hero { position: relative; height: 200px; border-radius: 12px; overflow: hidden; margin-bottom: 28px;
   background: radial-gradient(120% 140% at 85% 0%, rgba(255,255,255,0.9) 0%, transparent 55%), linear-gradient(135deg, #d9e0ea 0%, #eef2f7 45%, #c9d2de 100%); }
-:root[data-theme='dark'] .hero { background: radial-gradient(120% 140% at 85% 0%, rgba(108,105,246,0.25) 0%, transparent 55%), linear-gradient(135deg, #132536 0%, #0f1d2b 50%, #1b2f42 100%); }
+:root[data-theme='dark'] .hero { background: radial-gradient(120% 140% at 85% 0%, color-mix(in srgb, var(--primary) 26%, transparent) 0%, transparent 55%), linear-gradient(135deg, var(--surface) 0%, var(--surface-2) 50%, var(--surface) 100%); border: 1px solid var(--border); }
 .hero .av.lg { position: absolute; left: 24px; bottom: 24px; }
 .hero .hero-actions { position: absolute; right: 24px; bottom: 26px; display: flex; gap: 12px; }
 /* strip across the top of a detail page (Deal Details: customer / email / phone) */
@@ -2694,3 +2694,110 @@ details.card.profile-fold > summary::before { content: none; }
 .docfill-list label.check.big { padding: 8px 0; border-bottom: 1px solid var(--border); }
 .docfill-field { display: grid; gap: 6px; font-weight: 600; }
 .docfill-field input, .docfill-field textarea { font-weight: 400; min-height: 44px; font-size: 16px; }
+
+/* ============================================================
+   Dashboard, crew list, pipeline and schedule in the event page's look: same header, chips, seat bar,
+   card corners, borders and shadows (--ev-*), so they follow Classic, Modern and Violet, light and dark.
+   ============================================================ */
+.db { display: grid; gap: 18px; }
+.db .evh { margin-bottom: 0; }
+.db-staff { display: block; color: inherit; text-decoration: none; }
+.db-staff:hover { border-color: var(--primary); }
+.evh-chip.todo::before, .evh-chip.live::before { content: ''; flex: none; width: 8px; height: 8px; margin-right: 7px; border-radius: 50%; background: var(--cs-wait); }
+.evh-chip.live::before { background: var(--cs-ok); }
+.evh-legend .lg-plan b { color: var(--text); }
+.db-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.db-stat { display: grid; gap: 8px; min-width: 0; padding: 14px 16px; border-radius: var(--ev-r); background: var(--surface); border: 1px solid var(--ev-card-border); box-shadow: var(--ev-shadow); color: var(--text); text-decoration: none; }
+.db-stat span { color: var(--muted); font-size: 13px; font-weight: 600; }
+.db-stat b { font-size: 30px; font-weight: 800; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.db-stat b small { font-size: 14px; font-weight: 600; letter-spacing: 0; color: var(--muted); }
+.db-stat.warn b { color: var(--cs-wait-text); }
+.db-stat:hover { border-color: var(--primary); }
+.db-sec { min-width: 0; border-radius: var(--ev-r); background: var(--surface); border: 1px solid var(--ev-card-border); box-shadow: var(--ev-shadow); }
+.db-sec-h { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px 12px; }
+.db-sec-h h2 { margin: 0; font-size: 17px; }
+.db-sec > .empty { margin: 0 16px 16px; border: 1px dashed var(--border-strong); background: transparent; padding: 20px; box-shadow: none; }
+.db-list { display: grid; }
+.db-shift { display: grid; grid-template-columns: 116px minmax(0, 1.2fr) minmax(170px, 1fr) 78px; gap: 16px; align-items: center; padding: 12px 16px; border-top: 1px solid var(--border); color: var(--text); text-decoration: none; }
+.db-shift:hover { background: var(--surface-2); }
+.db-shift:last-child { border-radius: 0 0 var(--ev-r) var(--ev-r); }
+.db-when { display: grid; gap: 1px; }
+.db-when small { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.db-when b { font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.db-when span { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.db-what { display: grid; gap: 2px; min-width: 0; }
+.db-what b { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-what span { font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-seats { min-width: 0; }
+.db-seats-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.db-seats-top b { font-size: 15px; color: var(--text); }
+.db-seats .cs-bar, .db-event .cs-bar { margin: 6px 0 4px; }
+.db-seats-sub { font-size: 12px; color: var(--muted); }
+.db-seats-sub b { color: var(--text); }
+.db-shift .avatars { justify-content: flex-end; }
+.db-events { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 0 16px 16px; }
+.db-event { display: grid; gap: 4px; align-content: start; min-width: 0; padding: 12px 14px; border-radius: calc(var(--ev-r) - 2px); background: var(--surface-2); border: 1px solid var(--border); color: var(--text); text-decoration: none; }
+.db-event:hover { border-color: var(--primary); }
+.db-event-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.db-event-top b { min-width: 0; font-size: 15px; overflow-wrap: anywhere; }
+.db-event-sub { font-size: 13px; color: var(--muted); }
+.db-clock { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--border); }
+.db-clock .db-what { flex: 1; }
+.cal.db-cal { border-radius: var(--ev-r); border-color: var(--ev-card-border); box-shadow: var(--ev-shadow); }
+@media (max-width: 1100px) {
+  .db-events { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .db-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .db-stat b { font-size: 26px; }
+  .db-shift { grid-template-columns: 92px minmax(0, 1fr); gap: 8px 12px; }
+  .db-shift .db-seats { grid-column: 1 / -1; }
+  .db-shift .avatars { display: none; }
+  .db-events { grid-template-columns: 1fr; }
+}
+
+/* List tables (crew, events, customers, quotes): one card, same corners and border as the event page */
+.table-wrap:has(> table.dlist) { border: 1px solid var(--ev-card-border); border-radius: var(--ev-r); background: var(--surface); box-shadow: var(--ev-shadow); }
+.table-wrap:has(> table.dlist) .dlist td { height: 68px; }
+.table-wrap:has(> table.dlist) .dlist tbody tr:last-child td { border-bottom: 0; }
+.table-wrap:has(> table.dlist) .dlist th { border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; padding: 12px; }
+.dlist .edit-col .act-dots { margin: 0 auto; }
+
+/* Pipeline board: card corners, borders and the seat bar match the event page */
+.page > .pm .pm-title h1, .pm-title h1 { font-size: 34px; font-weight: 700; line-height: 1.12; }
+.pm-col { border-radius: var(--ev-r) var(--ev-r) 0 0; }
+.pm-card { border-radius: var(--ev-r); border-color: var(--ev-card-border); box-shadow: var(--ev-shadow); }
+.pm-card:hover { border-color: var(--primary); }
+.pm-crew { border-radius: calc(var(--ev-r) - 4px); gap: 2px; }
+.pm-crew .cs-bar { margin: 6px 0 4px; }
+.pm-crew-top { align-items: baseline; font-size: 13px; }
+.pm-crew-top span b { color: var(--text); font-size: 15px; font-weight: 800; }
+.pm-crew-sub { font-size: 12px; }
+@media (max-width: 700px) { .page > .pm .pm-title h1, .pm-title h1 { font-size: 26px; } }
+
+/* ---------- Coordinator on a phone ---------- */
+.ev-quick { display: none; }
+@media (max-width: 760px) {
+  /* Thumb bar on the event page: the four things done most often on site, always in reach above the tab bar. */
+  .ev-quick { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; position: fixed; left: 8px; right: 8px; bottom: calc(68px + env(safe-area-inset-bottom)); z-index: 29; padding: 6px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border-strong); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2); }
+  .ev-quick button { position: relative; display: grid; justify-items: center; align-content: center; gap: 3px; min-width: 0; min-height: 52px; padding: 6px 2px; border: 0; border-radius: 12px; background: transparent; color: var(--text); font: inherit; font-size: 12px; font-weight: 700; line-height: 1.1; cursor: pointer; }
+  .ev-quick button span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ev-quick button:active:not(:disabled) { background: var(--primary-soft); }
+  .ev-quick button:disabled { color: var(--muted); opacity: 0.65; }
+  .ev-quick em { position: absolute; top: 2px; left: calc(50% + 7px); min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--primary); color: var(--on-primary); font-style: normal; font-size: 11px; font-weight: 800; line-height: 18px; text-align: center; }
+  .split:has(.ev-quick) > .split-aside { padding-bottom: 104px; }
+  /* The action bar keeps what the thumb bar doesn't have, two to a row. */
+  .ev-bar { display: grid; grid-template-columns: 1fr 1fr; }
+  .ev-bar .in-quick { display: none; }
+  .ev-bar .btn { width: 100%; justify-content: center; }
+  .ev-bar .act-menu { margin-left: 0; }
+  .ev-bar .act-menu .act-pop { right: 0; left: auto; }
+}
+@media (max-width: 640px) {
+  /* The page's main action in the top bar becomes a round + button so it fits beside the bell and the menu. */
+  .topbar-actions .btn { flex: none; width: 40px; height: 40px; min-height: 0; padding: 0; border-radius: 50%; display: inline-grid; place-items: center; font-size: 0; line-height: 0; }
+  .topbar-actions .btn svg { margin: 0 !important; width: 20px; height: 20px; }
+  .topbar:has(.topbar-actions .btn) .brand > span { display: none; }
+}
+.only-phone { display: none; }
+@media (max-width: 760px) { .only-phone { display: block; } .hide-phone { display: none; } }
