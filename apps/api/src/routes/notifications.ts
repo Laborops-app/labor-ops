@@ -1,3 +1,4 @@
+import { GROUPS } from '../notify/prefs';
 import type { FastifyInstance } from 'fastify';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
@@ -73,17 +74,28 @@ export async function notificationRoutes(app: FastifyInstance) {
 
   // ---------- my notification settings ----------
   const prefs = (c: import('pg').PoolClient, id: string) =>
-    c.query('SELECT phone, notify_email AS email, notify_sms AS sms, sms_consent_at FROM users WHERE id = $1', [id]).then((r) => r.rows[0]);
+    c.query('SELECT phone, role, notify_email AS email, notify_sms AS sms, sms_consent_at, notify_prefs, quiet_start, quiet_end, digest_on FROM users WHERE id = $1', [id]).then((r) => r.rows[0]);
 
   app.get('/api/my/notification-prefs', { preHandler: authenticate }, async (req) =>
     withTenant(req.user.tid, async (c) => {
       const p = await prefs(c, req.user.sub);
-      return { email: p.email, sms: p.sms, phone: p.phone, phoneValid: !!toE164(p.phone), consentAt: p.sms_consent_at, smsAvailable: true };
+      return {
+        email: p.email, sms: p.sms, phone: p.phone, phoneValid: !!toE164(p.phone), consentAt: p.sms_consent_at, smsAvailable: true,
+        groups: Object.entries(GROUPS).map(([key, g]) => ({ key, label: g.label, canText: g.sms, push: true, email: true, text: g.sms, ...Object.fromEntries(Object.entries(p.notify_prefs?.[key] ?? {}).map(([ch, v]) => [ch === 'sms' ? 'text' : ch, v])) })),
+        quietStart: p.quiet_start, quietEnd: p.quiet_end,
+        digest: p.role === 'admin' || p.role === 'manager' ? p.digest_on : null,
+      };
     }),
   );
 
   app.put('/api/my/notification-prefs', { preHandler: authenticate }, async (req, reply) => {
-    const b = z.object({ email: z.boolean(), sms: z.boolean(), smsConsent: z.boolean().optional() }).parse(req.body);
+    const ch = z.object({ push: z.boolean().optional(), email: z.boolean().optional(), text: z.boolean().optional() });
+    const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional();
+    const b = z.object({
+      email: z.boolean(), sms: z.boolean(), smsConsent: z.boolean().optional(),
+      groups: z.record(z.string(), ch).optional().transform((g) => g && Object.fromEntries(Object.entries(g).filter(([k]) => k in GROUPS))),
+      quietStart: hhmm, quietEnd: hhmm, digest: z.boolean().optional(),
+    }).parse(req.body);
     const out = await withTenant(req.user.tid, async (c) => {
       const p = await prefs(c, req.user.sub);
       if (b.sms) {
@@ -96,7 +108,16 @@ export async function notificationRoutes(app: FastifyInstance) {
          WHERE id = $1`,
         [req.user.sub, b.email, b.sms],
       );
-      await audit(c, req.user.tid, req.user.sub, 'notify.prefs', 'user', req.user.sub, { email: b.email, sms: b.sms });
+      if (b.groups) {
+        const prefs = Object.fromEntries(Object.entries(b.groups).map(([k, v]) => [k, Object.fromEntries(Object.entries(v).map(([ch, on]) => [ch === 'text' ? 'sms' : ch, on]))]));
+        await c.query('UPDATE users SET notify_prefs = $2 WHERE id = $1', [req.user.sub, JSON.stringify(prefs)]);
+      }
+      if (b.quietStart !== undefined || b.quietEnd !== undefined) {
+        const on = b.quietStart && b.quietEnd && b.quietStart !== b.quietEnd;
+        await c.query('UPDATE users SET quiet_start = $2, quiet_end = $3 WHERE id = $1', [req.user.sub, on ? b.quietStart : null, on ? b.quietEnd : null]);
+      }
+      if (b.digest !== undefined) await c.query('UPDATE users SET digest_on = $2 WHERE id = $1', [req.user.sub, b.digest]);
+      await audit(c, req.user.tid, req.user.sub, 'notify.prefs', 'user', req.user.sub, { email: b.email, sms: b.sms, groups: !!b.groups, quiet: b.quietStart ?? null });
       return { code: 200, ok: true };
     });
     const { code, ...body } = out as { code: number; [k: string]: unknown };

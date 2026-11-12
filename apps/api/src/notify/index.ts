@@ -2,8 +2,9 @@ import type { PoolClient } from 'pg';
 import { toE164 } from './providers';
 import { absUrl, renderEmail } from './templates';
 import { loadRates, loadRules, estimateShift, money } from '../pay';
+import { MERGE, MERGE_HOLD_MIN, quietDelayMin, wants, type Prefs } from './prefs';
 
-export type Category = 'assignment' | 'shift_change' | 'reminder' | 'approval_request' | 'approval_result' | 'open_shift' | 'chat' | 'cert' | 'account' | 'training' | 'attendance' | 'billing' | 'event_update';
+export type Category = 'assignment' | 'shift_change' | 'reminder' | 'approval_request' | 'approval_result' | 'open_shift' | 'chat' | 'cert' | 'account' | 'training' | 'attendance' | 'billing' | 'event_update' | 'digest';
 
 // Categories that may also go out by text message (when the person opted in). Everything else is email + in-app only.
 const SMS_CATEGORIES = new Set<Category>(['assignment', 'shift_change', 'reminder', 'approval_result', 'attendance']);
@@ -34,7 +35,7 @@ export type NotifyInput = {
   allowSms?: boolean;
 };
 
-type Target = { id: string; email: string; phone: string | null; notify_email: boolean; notify_sms: boolean; sms_consent_at: Date | null };
+type Target = { id: string; email: string; phone: string | null; notify_email: boolean; notify_sms: boolean; sms_consent_at: Date | null; notify_prefs: Prefs | null; quiet_start: string | null; quiet_end: string | null };
 
 /**
  * Record an in-app notification and queue email/SMS deliveries according to the person's settings.
@@ -46,11 +47,12 @@ export async function notify(c: PoolClient, tenantId: string, input: NotifyInput
   if (!list.length) return made;
   const ids = [...new Set(list.map((n) => n.userId))];
   const { rows } = await c.query<Target>(
-    'SELECT id, email, phone, notify_email, notify_sms, sms_consent_at FROM users WHERE id = ANY($1::uuid[]) AND active',
+    'SELECT id, email, phone, notify_email, notify_sms, sms_consent_at, notify_prefs, quiet_start, quiet_end FROM users WHERE id = ANY($1::uuid[]) AND active',
     [ids],
   );
   const byId = new Map(rows.map((r) => [r.id, r]));
   const subs = (await c.query('SELECT id, user_id FROM push_subscriptions WHERE user_id = ANY($1::uuid[])', [ids])).rows as { id: string; user_id: string }[];
+  const tz = ((await c.query('SELECT timezone FROM tenants WHERE id = $1', [tenantId])).rows[0]?.timezone as string | undefined) ?? 'America/Denver';
   for (const n of list) {
     const u = byId.get(n.userId);
     if (!u) continue;
@@ -60,7 +62,8 @@ export async function notify(c: PoolClient, tenantId: string, input: NotifyInput
     );
     const nid = nr[0].id;
     made.push({ userId: u.id, id: nid });
-    const mySubs = subs.filter((x) => x.user_id === u.id).slice(0, 5);
+    const quiet = quietDelayMin(n.category, u.quiet_start, u.quiet_end, tz);
+    const mySubs = wants(u.notify_prefs, n.category, 'push') ? subs.filter((x) => x.user_id === u.id).slice(0, 5) : [];
     const unread = mySubs.length ? Number((await c.query('SELECT count(*)::int AS n FROM notifications WHERE user_id = $1 AND read_at IS NULL', [u.id])).rows[0].n) : 0;
     for (const sub of mySubs) {
       const short = n.body.split('\n').filter(Boolean).slice(0, 3).join('\n');
@@ -71,28 +74,47 @@ export async function notify(c: PoolClient, tenantId: string, input: NotifyInput
         title: n.title, body: short, url: n.link ?? '/', tag: n.category, id: nid, badge: unread,
       });
       await c.query(
-        `INSERT INTO deliveries (tenant_id, user_id, notification_id, channel, category, to_addr, subject, body)
-         VALUES ($1,$2,$3,'push',$4,$5,$6,$7)`,
-        [tenantId, u.id, nid, n.category, sub.id, n.title, payload],
+        `INSERT INTO deliveries (tenant_id, user_id, notification_id, channel, category, to_addr, subject, body, send_after)
+         VALUES ($1,$2,$3,'push',$4,$5,$6,$7, now() + make_interval(mins => $8))`,
+        [tenantId, u.id, nid, n.category, sub.id, n.title, payload, quiet],
       );
     }
-    if (!n.quiet && u.notify_email && u.email) {
-      const m = renderEmail({ title: n.title, body: n.body, link: n.link, linkLabel: n.linkLabel ?? (n.actions?.length ? 'Open the shift in LaborOps' : undefined), actions: n.actions });
-      await c.query(
-        `INSERT INTO deliveries (tenant_id, user_id, notification_id, channel, category, to_addr, subject, body, html)
-         VALUES ($1,$2,$3,'email',$4,$5,$6,$7,$8)`,
-        [tenantId, u.id, nid, n.category, u.email, n.title, m.text, m.html],
-      );
+    // Bursts about the same page (several changes to one event) are held a couple of minutes and sent as one.
+    const mergeKey = MERGE.has(n.category) && n.link ? `${n.category}:${n.link}` : null;
+    if (!n.quiet && u.notify_email && u.email && wants(u.notify_prefs, n.category, 'email')) {
+      const prev = mergeKey ? (await c.query("SELECT id, merged FROM deliveries WHERE user_id = $1 AND channel = 'email' AND merge_key = $2 AND status = 'queued' AND send_after > now() ORDER BY created_at DESC LIMIT 1 FOR UPDATE", [u.id, mergeKey])).rows[0] : null;
+      if (prev) {
+        const items = [...((prev.merged as { title: string; body: string }[] | null) ?? []), { title: n.title, body: n.body }];
+        const m = renderEmail({ title: `${items.length} updates · ${items[items.length - 1]!.title}`, body: items.map((x) => `${x.title}\n${x.body}`).join('\n\n—\n\n'), link: n.link, linkLabel: n.linkLabel });
+        await c.query("UPDATE deliveries SET subject = $2, body = $3, html = $4, merged = $5, send_after = now() + make_interval(mins => $6) WHERE id = $1",
+          [prev.id, `${items.length} updates · ${items[items.length - 1]!.title}`, m.text, m.html, JSON.stringify(items), MERGE_HOLD_MIN]);
+      } else {
+        const m = renderEmail({ title: n.title, body: n.body, link: n.link, linkLabel: n.linkLabel ?? (n.actions?.length ? 'Open the shift in LaborOps' : undefined), actions: n.actions });
+        await c.query(
+          `INSERT INTO deliveries (tenant_id, user_id, notification_id, channel, category, to_addr, subject, body, html, merge_key, merged, send_after)
+           VALUES ($1,$2,$3,'email',$4,$5,$6,$7,$8,$9,$10, now() + make_interval(mins => $11))`,
+          [tenantId, u.id, nid, n.category, u.email, n.title, m.text, m.html, mergeKey, mergeKey ? JSON.stringify([{ title: n.title, body: n.body }]) : null, mergeKey ? MERGE_HOLD_MIN : 0],
+        );
+      }
     }
     const phone = toE164(u.phone);
-    if (!n.quiet && (SMS_CATEGORIES.has(n.category) || n.allowSms) && u.notify_sms && u.sms_consent_at && phone) {
-      const text = `LaborOps: ${n.sms ?? n.title}${n.smsLink || n.link ? ' ' + absUrl(n.smsLink ?? n.link) : ''} Reply STOP to opt out.`;
+    if (!n.quiet && (SMS_CATEGORIES.has(n.category) || n.allowSms) && u.notify_sms && u.sms_consent_at && phone && wants(u.notify_prefs, n.category, 'sms')) {
+      const link = n.smsLink || n.link ? ' ' + absUrl(n.smsLink ?? n.link) : '';
       const escalate = mySubs.length > 0 && ESCALATE_MIN > 0;
-      await c.query(
-        `INSERT INTO deliveries (tenant_id, user_id, notification_id, channel, category, to_addr, body, escalation, send_after)
-         VALUES ($1,$2,$3,'sms',$4,$5,$6,$7, now() + make_interval(mins => $8))`,
-        [tenantId, u.id, nid, n.category, phone, text.slice(0, 480), escalate, escalate ? ESCALATE_MIN : 0],
-      );
+      const wait = Math.max(escalate ? ESCALATE_MIN : 0, quiet, mergeKey ? MERGE_HOLD_MIN : 0);
+      const prev = mergeKey ? (await c.query("SELECT id, merged FROM deliveries WHERE user_id = $1 AND channel = 'sms' AND merge_key = $2 AND status = 'queued' AND send_after > now() ORDER BY created_at DESC LIMIT 1 FOR UPDATE", [u.id, mergeKey])).rows[0] : null;
+      if (prev) {
+        const items = [...((prev.merged as string[] | null) ?? []), n.sms ?? n.title];
+        const text = `LaborOps: ${items.length} updates: ${items.join('; ')}${link} Reply STOP to opt out.`;
+        await c.query('UPDATE deliveries SET body = $2, merged = $3, send_after = greatest(send_after, now() + make_interval(mins => $4)) WHERE id = $1', [prev.id, text.slice(0, 480), JSON.stringify(items), MERGE_HOLD_MIN]);
+      } else {
+        const text = `LaborOps: ${n.sms ?? n.title}${link} Reply STOP to opt out.`;
+        await c.query(
+          `INSERT INTO deliveries (tenant_id, user_id, notification_id, channel, category, to_addr, body, escalation, send_after, merge_key, merged)
+           VALUES ($1,$2,$3,'sms',$4,$5,$6,$7, now() + make_interval(mins => $8), $9, $10)`,
+          [tenantId, u.id, nid, n.category, phone, text.slice(0, 480), escalate, wait, mergeKey, mergeKey ? JSON.stringify([n.sms ?? n.title]) : null],
+        );
+      }
     }
   }
   return made;

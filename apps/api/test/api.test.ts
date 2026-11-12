@@ -5389,3 +5389,54 @@ test('answer an offer by text: YES / NO, numbered picks with several offers, and
     globalThis.fetch = realFetch;
   }
 });
+
+test('notification choices: switch off a kind by channel, quiet hours hold non-urgent alerts, bursts merge into one email', async () => {
+  const { quietDelayMin, groupOf } = await import('../src/notify/prefs');
+  // 22:00–07:00 Denver: 23:30 local waits until 7:00; urgent kinds never wait; outside the window nothing waits
+  const at = (iso: string) => new Date(iso);
+  assert.equal(quietDelayMin('chat', '22:00', '07:00', 'America/Denver', at('2031-01-15T06:30:00Z')), 450); // 23:30 MST
+  assert.equal(quietDelayMin('assignment', '22:00', '07:00', 'America/Denver', at('2031-01-15T06:30:00Z')), 0);
+  assert.equal(quietDelayMin('chat', '22:00', '07:00', 'America/Denver', at('2031-01-15T20:00:00Z')), 0); // 13:00
+  assert.equal(groupOf('event_update'), 'changes');
+
+  const a = await register('nprefs');
+  const tid = await tenantOf(a);
+  const c = await mkCrew(a, 'np1');
+  const prefs = (await call(c.session, 'GET', '/api/my/notification-prefs')).json;
+  assert.ok(prefs.groups.some((g: any) => g.key === 'changes' && g.email === true));
+  assert.equal(prefs.digest, null); // crew don't get the morning summary
+  const put = await call(c.session, 'PUT', '/api/my/notification-prefs', { email: true, sms: false, groups: { chat: { email: false } }, quietStart: '22:00', quietEnd: '07:00' });
+  assert.equal(put.status, 200, put.text);
+  const back = (await call(c.session, 'GET', '/api/my/notification-prefs')).json;
+  assert.equal(back.groups.find((g: any) => g.key === 'chat').email, false);
+  assert.deepEqual([back.quietStart, back.quietEnd], ['22:00', '07:00']);
+
+  const { notify } = await import('../src/notify');
+  await withTenant(tid, (x) => notify(x, tid, { userId: c.id, category: 'chat', title: 'Hi', body: 'x', link: '/chat' }));
+  assert.equal((await withTenant(tid, (x) => x.query("SELECT 1 FROM deliveries WHERE user_id = $1 AND channel = 'email' AND category = 'chat'", [c.id]))).rowCount, 0);
+  // Three changes to the same event within the hold: one email listing all three
+  for (const t of ['Call time moved', 'Parking changed', 'Dress code']) await withTenant(tid, (x) => notify(x, tid, { userId: c.id, category: 'shift_change', title: t, body: t, link: '/my-shifts/abc' }));
+  const em = (await withTenant(tid, (x) => x.query("SELECT subject, body FROM deliveries WHERE user_id = $1 AND channel = 'email' AND category = 'shift_change'", [c.id]))).rows;
+  assert.equal(em.length, 1);
+  assert.match(em[0].subject, /^3 updates/);
+  assert.match(em[0].body, /Call time moved[\s\S]*Parking changed[\s\S]*Dress code/);
+  // The in-app list still has all three
+  assert.equal((await withTenant(tid, (x) => x.query("SELECT 1 FROM notifications WHERE user_id = $1 AND category = 'shift_change'", [c.id]))).rowCount, 3);
+});
+
+test('morning summary: coordinators get one at 7am with the day, open seats and what is waiting; can be turned off', async () => {
+  const a = await register('digest');
+  const tid = await tenantOf(a);
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Digest Day', startDate: '2031-05-01', endDate: '2031-05-01' })).json.event.id;
+  await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Rigger', startsAt: start(20), endsAt: start(24), headcount: 3 });
+  const { digestFor } = await import('../src/digest');
+  const n = await withTenant(tid, (c) => digestFor(c, tid, 'America/Denver', new Date(), true));
+  assert.equal(n, 1);
+  const note = (await withTenant(tid, (c) => c.query("SELECT title, body FROM notifications WHERE user_id = $1 AND category = 'digest'", [a.id]))).rows[0];
+  assert.match(note.title, /morning summary/);
+  assert.match(note.body, /Open seats in the next 3 days: 3/);
+  // Not at another hour, and not for someone who turned it off
+  assert.equal(await withTenant(tid, (c) => digestFor(c, tid, 'America/Denver', new Date('2031-01-15T20:00:00Z'))), 0);
+  await call(a, 'PUT', '/api/my/notification-prefs', { email: true, sms: false, digest: false });
+  assert.equal(await withTenant(tid, (c) => digestFor(c, tid, 'America/Denver', new Date(), true)), 0);
+});
