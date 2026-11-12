@@ -7,7 +7,7 @@ import QuoteCompare, { type Comparison, type QuoteChoice } from '@/components/Qu
 import { askConfirm } from '@/components/Toasts';
 import Skeleton from '@/components/Skeleton';
 
-type Line = { role: string; date: string; kind: 'regular' | 'overtime' | 'double' | 'day'; qty: number; unit: 'hour' | 'day'; rate: number; amount: number; description: string; qboItemId: string | null };
+type Line = { role: string; date: string; kind: 'regular' | 'overtime' | 'double' | 'day'; qty: number; unit: 'hour' | 'day'; rate: number; amount: number; description: string; qboItemId: string | null; rateFrom?: 'rentman' | 'role' };
 type Billing = {
   lines: Line[]; total: number; warnings: string[]; canBill: boolean; unmapped: string[];
   clientApproval?: { required: boolean; approved: boolean; stale: boolean; disputed: boolean; customer: string | null; last: { note: string | null; by_name: string | null; created_at: string } | null };
@@ -111,7 +111,9 @@ export default function InvoicePanel({ eventId, isAdmin }: { eventId: string; is
               <b style={{ fontSize: '1.15rem' }}>{money(b.total)}</b>
             </div>
             <p className="muted small">
-              Bill rates from Roles &amp; pay rates.{' '}
+              {b.lines.some((l) => l.rateFrom === 'rentman')
+                ? <>Rates marked <span className="rate-src">Rentman</span> are the hourly prices on the Rentman quote; the rest come from Roles &amp; pay rates.{' '}</>
+                : <>Bill rates from Roles &amp; pay rates.{' '}</>}
               {b.overtime.otAfter ? `Overtime after ${b.overtime.otAfter} h a day at ${b.overtime.otMult}×` : 'No daily overtime on this job'}
               {b.overtime.otAfter && b.overtime.dtAfter ? `, double time after ${b.overtime.dtAfter} h at ${b.overtime.dtMult}×` : ''}.
             </p>
@@ -128,7 +130,7 @@ export default function InvoicePanel({ eventId, isAdmin }: { eventId: string; is
                         <td>{l.role}</td>
                         <td>{KIND[l.kind]}</td>
                         <td>{l.qty} {l.unit === 'day' ? (l.qty === 1 ? 'day' : 'days') : 'h'}</td>
-                        <td>{l.rate ? money(l.rate) : <span style={{ color: 'var(--bad)' }}>not set</span>}</td>
+                        <td>{l.rate ? money(l.rate) : <span style={{ color: 'var(--bad)' }}>not set</span>}{l.rate > 0 && l.rateFrom === 'rentman' && <> <span className="rate-src" title="Hourly price on the Rentman quote">Rentman</span></>}</td>
                         <td style={{ textAlign: 'right' }}>{money(l.amount)}</td>
                       </tr>
                     ))}

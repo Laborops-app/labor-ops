@@ -1,5 +1,5 @@
 import type { PoolClient } from 'pg';
-import { getAll, refId, RentmanError } from './rentman';
+import { functionLabor, getAll, refId, RentmanError } from './rentman';
 import { roleKeyOf } from './pay';
 import { audit } from './db';
 import { loadOptions } from './rentmanOptions';
@@ -83,10 +83,10 @@ export async function wantedShifts(c: PoolClient, tid: string, token: string, pr
               [s, e, tz],
             )
           ).rows;
-    // The hourly price quoted in Rentman: its time-based price over all the people-hours (crew only; transport is priced by distance).
+    // The hourly price quoted in Rentman for one person (crew only; transport is priced by distance).
     const peopleHours = days.reduce((n: number, d: any) => n + ((+new Date(d.e) - +new Date(d.s)) / 3600_000) * headcount, 0);
-    const variable = Number(f.price_variable) || Math.max(0, (Number(f.price_total) || 0) - (Number(f.price_fixed) || 0));
-    const billRate = !transport && variable > 0 && peopleHours > 0 ? Math.round((variable / peopleHours) * 100) / 100 : null;
+    const hourly = transport ? 0 : functionLabor({ variable: f.price_variable, fixed: f.price_fixed, total: f.price_total }, peopleHours).hourly;
+    const billRate = hourly > 0 ? Math.round(hourly * 100) / 100 : null;
     days.forEach((d: any, i: number) =>
       out.push({
         key: days.length > 1 ? `${f.id}:${i}` : String(f.id), role, start: iso(d.s), end: iso(d.e), headcount, date: d.d,
@@ -195,6 +195,30 @@ export async function applyBuild(c: PoolClient, tid: string, by: string | null, 
 }
 
 /** Plan and apply for one event (used by the button, new pipeline events and the 30-minute run). */
+/**
+ * Quoted rates on or off for Rentman-built shifts on recent and upcoming events: on, each shift takes its function's
+ * quoted hourly rate again; off, the shifts go back to the role bill rates.
+ */
+export async function refreshQuotedRates(c: PoolClient, tid: string, token: string | null, on: boolean) {
+  if (!on) {
+    const r = await c.query('UPDATE shifts SET bill_rate_override = NULL WHERE rentman_key IS NOT NULL AND bill_rate_override IS NOT NULL');
+    return { events: 0, cleared: r.rowCount ?? 0 };
+  }
+  if (!token) return { events: 0, cleared: 0 };
+  const evs = (await c.query(
+    `SELECT id, rentman_project_id FROM events WHERE rentman_build AND rentman_project_id IS NOT NULL AND archived_at IS NULL
+        AND end_date >= current_date - 90 ORDER BY start_date DESC LIMIT 60`)).rows;
+  let events = 0;
+  for (const e of evs) {
+    try {
+      const w = await wantedShifts(c, tid, token, Number(e.rentman_project_id));
+      for (const x of w.want) await c.query('UPDATE shifts SET bill_rate_override = $3 WHERE event_id = $1 AND rentman_key = $2 AND bill_rate_override IS DISTINCT FROM $3', [e.id, x.key, x.billRate]);
+      events++;
+    } catch { /* that project can't be read now; the 30-minute run tries again */ }
+  }
+  return { events, cleared: 0 };
+}
+
 export async function buildFromRentman(c: PoolClient, tid: string, by: string | null, eventId: string, token: string, opts: { apply: boolean }) {
   const ev = (await c.query('SELECT rentman_project_id FROM events WHERE id = $1', [eventId])).rows[0];
   if (!ev) throw new RentmanError('Event not found', 404);

@@ -2925,3 +2925,6 @@ details.card.profile-fold > summary::before { content: none; }
 .sk-staff { flex: 1 1 300px; max-width: 460px; }
 .sk-shift { grid-template-columns: 220px 1fr; gap: 20px; }
 @media (max-width: 640px) { .sk-shift { grid-template-columns: 1fr; } }
+
+/* Where an invoice line's rate came from */
+.rate-src { display: inline-block; font-size: .7rem; font-weight: 600; line-height: 1; padding: 3px 6px; border-radius: 999px; background: var(--primary-soft); color: var(--primary); vertical-align: middle; }

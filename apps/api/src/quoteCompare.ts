@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg';
 import { roleKeyOf } from './pay';
 import { baseRole, type BillLine } from './accounting';
-import { projectCrewFunctions, rentmanQuote, RentmanError } from './rentman';
+import { functionLabor, projectCrewFunctions, rentmanQuote, RentmanError } from './rentman';
 import { onQuote } from './pipeline';
 import { audit } from './db';
 
@@ -36,15 +36,15 @@ export async function importRentmanQuote(c: PoolClient, tid: string, by: string,
     const e = f.end ? new Date(f.end) : null;
     const span = s && e ? Math.max(0, (+e - +s) / 3600_000) : 0;
     const hours = span > 0 ? r2(span) : 1;
-    const variable = f.variable || (!f.fixed ? f.total : 0);
+    const lab = functionLabor(f, f.people * hours);
     const a = s ? local(ev.timezone, f.start!) : null;
     const b = e ? local(ev.timezone, f.end!) : null;
     // Clock times only for a call inside one day; a function running for days keeps just its first day.
     const timed = a && b && span > 0 && span < 24;
-    if (variable > 0 || !f.fixed)
+    if (lab.amount > 0 || !f.fixed)
       lines.push({
         section: f.group, description: f.name, day: a?.day ?? null, start: timed ? a!.time : null, end: timed ? b!.time : null,
-        qty: f.people, hours, rate: r2(variable / (f.people * hours)), amount: r2(variable),
+        qty: f.people, hours, rate: r2(lab.hourly), amount: r2(lab.amount),
       });
     if (f.fixed > 0)
       lines.push({ section: f.group, description: `${f.name} · travel and other costs`, day: a?.day ?? null, start: null, end: null, qty: 1, hours: 1, rate: r2(f.fixed), amount: r2(f.fixed) });

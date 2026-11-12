@@ -486,6 +486,27 @@ export type RentmanQuote = {
   price: number; crew: number; transport: number; project: number | null;
 };
 const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+
+/**
+ * The labor price on a Rentman crew function: its hourly rate per person and its labor amount.
+ * Rentman's variable price is a rate per person-hour (as on its crew rates). Some accounts' data carries the whole
+ * labor amount there instead, so Rentman's own total decides: whichever reading lands closer to total minus fixed
+ * costs wins. With no total to compare, it is read as the hourly rate.
+ */
+export function functionLabor(f: { variable?: unknown; fixed?: unknown; total?: unknown }, peopleHours: number): { hourly: number; amount: number } {
+  const v = num(f.variable), fixed = num(f.fixed), total = num(f.total);
+  const ph = peopleHours > 0 ? peopleHours : 1;
+  const labor = total > 0 ? Math.max(0, total - fixed) : 0;
+  if (v > 0) {
+    if (labor > 0) {
+      const off = (x: number) => Math.abs(Math.log(x / labor));
+      return off(v * ph) <= off(v) ? { hourly: v, amount: labor } : { hourly: v / ph, amount: v };
+    }
+    return { hourly: v, amount: v * ph };
+  }
+  if (labor > 0 && !fixed) return { hourly: labor / ph, amount: labor };
+  return { hourly: 0, amount: 0 };
+}
 const quoteRow = (q: any): RentmanQuote => ({
   id: Number(q.id), number: String(q.number ?? q.displayname ?? q.id), version: Number(q.version) || 1, subject: text(q.subject, q.displayname),
   date: ts(q.date), expires: ts(q.expiration_date), price: num(q.price), crew: num(q.project_crew_price), transport: num(q.project_transport_price), project: refId(q.project),

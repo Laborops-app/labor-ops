@@ -5,7 +5,7 @@ import { guard } from '../auth';
 import { syncProjects, checkEventRequest, checkOpenRequests, clearToken, getToken, projectQuotes, pushCustomer, pushEventRequest, RentmanError, saveToken, syncEquipment, testToken } from '../rentman';
 import { importRentmanQuote } from '../quoteCompare';
 import { addProjectNow, findRentman, loadPipelineSettings, pullRentman, savePipelineSettings } from '../rentmanPipeline';
-import { buildFromRentman, keepConflict, renameMappedShifts, resyncRoleNames, suggestRole } from '../rentmanBuild';
+import { buildFromRentman, keepConflict, refreshQuotedRates, renameMappedShifts, resyncRoleNames, suggestRole } from '../rentmanBuild';
 import { loadOptions, OPTION_KEYS, saveOptions, verifyDigest, webhookToken, rentmanProjectUrl } from '../rentmanOptions';
 import { queueRentman } from '../rentmanWebhook';
 import { syncCrew, syncRates, unlockRates } from '../rentmanSync';
@@ -413,6 +413,7 @@ export async function rentmanRoutes(app: FastifyInstance) {
         if (token && b.crew_link && !before.crew_link) ran.crew = await syncCrew(c, req.user.tid, token);
         if (token && b.rates_source && !before.rates_source) ran.rates = await syncRates(c, req.user.tid, token);
         if (b.rates_source === false && before.rates_source) await unlockRates(c);
+        if (b.quoted_bill_rates !== undefined && b.quoted_bill_rates !== before.quoted_bill_rates) ran.quotedRates = await refreshQuotedRates(c, req.user.tid, token, b.quoted_bill_rates);
         return { options: await optionsView(c), ran };
       });
     } catch (e) {

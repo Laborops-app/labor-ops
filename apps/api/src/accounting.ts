@@ -108,7 +108,7 @@ function splitHours(rules: Rules, rate: number, start: Date | string, end: Date 
 
 // ---------- event billing ----------
 export type BillKind = 'regular' | 'overtime' | 'double' | 'day';
-export type BillLine = { role: string; date: string; kind: BillKind; qty: number; unit: 'hour' | 'day'; rate: number; amount: number; description: string; qboItemId: string | null };
+export type BillLine = { role: string; date: string; kind: BillKind; qty: number; unit: 'hour' | 'day'; rate: number; amount: number; description: string; qboItemId: string | null; rateFrom: 'rentman' | 'role' };
 export type BillSource = 'time' | 'schedule';
 
 export async function eventBilling(c: PoolClient, eventId: string, source: BillSource) {
@@ -124,10 +124,10 @@ export async function eventBilling(c: PoolClient, eventId: string, source: BillS
   const warnings: string[] = [];
   const missingRate = new Set<string>();
   const acc = new Map<string, BillLine>();
-  const add = (role: string, date: string, kind: BillKind, qty: number, unit: 'hour' | 'day', rate: number) => {
+  const add = (role: string, date: string, kind: BillKind, qty: number, unit: 'hour' | 'day', rate: number, from: BillLine['rateFrom'] = 'role') => {
     if (qty <= 0) return;
     const sk = skills.get(roleKeyOf(role));
-    const key = `${baseRole(role)}|${date}|${kind}|${rate}`;
+    const key = `${baseRole(role)}|${date}|${kind}|${rate}|${from}`;
     const cur = acc.get(key);
     if (cur) {
       cur.qty = r2(cur.qty + qty);
@@ -135,12 +135,13 @@ export async function eventBilling(c: PoolClient, eventId: string, source: BillS
       return;
     }
     const label = kind === 'regular' ? 'hours' : kind === 'overtime' ? 'overtime hours' : kind === 'double' ? 'double-time hours' : 'day rate';
-    acc.set(key, { role: baseRole(role), date, kind, qty: r2(qty), unit, rate, amount: r2(qty * rate), description: `${baseRole(role)} ${label} · ${fmtDay(date)} · ${ev.name}`, qboItemId: sk?.qbo_item_id ?? settings.qbo.defaultItemId ?? null });
+    acc.set(key, { role: baseRole(role), date, kind, qty: r2(qty), unit, rate, amount: r2(qty * rate), description: `${baseRole(role)} ${label} · ${fmtDay(date)} · ${ev.name}`, qboItemId: sk?.qbo_item_id ?? settings.qbo.defaultItemId ?? null, rateFrom: from });
   };
   // A shift's own billing rate (the rate quoted in Rentman) wins over the role's hourly bill rate.
   const rates = (role: string, override?: unknown) => {
     const sk = skills.get(roleKeyOf(role));
-    return { hourly: override != null && Number(override) > 0 ? Number(override) : Number(sk?.bill_rate ?? 0), day: Number(sk?.day_bill_rate ?? 0) };
+    const quoted = override != null && Number(override) > 0;
+    return { hourly: quoted ? Number(override) : Number(sk?.bill_rate ?? 0), day: Number(sk?.day_bill_rate ?? 0), from: (quoted ? 'rentman' : 'role') as BillLine['rateFrom'] };
   };
 
   if (source === 'time') {
@@ -176,9 +177,9 @@ export async function eventBilling(c: PoolClient, eventId: string, source: BillS
       const dk = `${r.user_id}|${date}`;
       const h = splitHours(rules, rt.hourly, r.clock_in, r.clock_out, { ...otOpts, priorDay: dayWorked.get(dk) ?? 0 }, false);
       dayWorked.set(dk, (dayWorked.get(dk) ?? 0) + h.hours);
-      add(r.role_name, date, 'regular', h.reg, 'hour', rt.hourly);
-      add(r.role_name, date, 'overtime', h.ot, 'hour', r2(rt.hourly * st.otMult));
-      add(r.role_name, date, 'double', h.dt, 'hour', r2(rt.hourly * st.dtMult));
+      add(r.role_name, date, 'regular', h.reg, 'hour', rt.hourly, rt.from);
+      add(r.role_name, date, 'overtime', h.ot, 'hour', r2(rt.hourly * st.otMult), rt.from);
+      add(r.role_name, date, 'double', h.dt, 'hour', r2(rt.hourly * st.dtMult), rt.from);
     }
   } else {
     const shifts = (await c.query('SELECT role_name, starts_at, ends_at, headcount, pay_type, bill_rate_override FROM shifts WHERE event_id = $1 ORDER BY starts_at', [eventId])).rows;
@@ -193,9 +194,9 @@ export async function eventBilling(c: PoolClient, eventId: string, source: BillS
       }
       if (!(rt.hourly > 0)) missingRate.add(baseRole(s.role_name));
       const h = splitHours(rules, rt.hourly, s.starts_at, s.ends_at, otOpts, false);
-      add(s.role_name, date, 'regular', h.reg * s.headcount, 'hour', rt.hourly);
-      add(s.role_name, date, 'overtime', h.ot * s.headcount, 'hour', r2(rt.hourly * st.otMult));
-      add(s.role_name, date, 'double', h.dt * s.headcount, 'hour', r2(rt.hourly * st.dtMult));
+      add(s.role_name, date, 'regular', h.reg * s.headcount, 'hour', rt.hourly, rt.from);
+      add(s.role_name, date, 'overtime', h.ot * s.headcount, 'hour', r2(rt.hourly * st.otMult), rt.from);
+      add(s.role_name, date, 'double', h.dt * s.headcount, 'hour', r2(rt.hourly * st.dtMult), rt.from);
     }
   }
   if (missingRate.size) warnings.push(`No bill rate set for ${[...missingRate].join(', ')}. Set it under Roles & pay rates.`);

@@ -5461,3 +5461,58 @@ test('event time zone: shifts keep their clock time at the venue, and messages u
   await call(a, 'PATCH', `/api/events/${ev}`, { timezone: null });
   assert.equal(new Date((await call(a, 'GET', `/api/events/${ev}`)).json.shifts[0].starts_at).toISOString(), '2031-01-20T15:00:00.000Z');
 });
+
+test('Rentman quoted rates: hourly price read as a rate, a total read as a total, and switching off goes back to role rates', async () => {
+  const { functionLabor } = await import('../src/rentman');
+  // Hourly reading (Rentman total = rate × people-hours), total reading (total = price), no total → hourly.
+  assert.deepEqual(functionLabor({ variable: 35, fixed: 0, total: 560 }, 16), { hourly: 35, amount: 560 });
+  assert.deepEqual(functionLabor({ variable: 1280, fixed: 0, total: 1280 }, 32), { hourly: 40, amount: 1280 });
+  assert.deepEqual(functionLabor({ variable: 25 }, 120), { hourly: 25, amount: 3000 });
+  assert.deepEqual(functionLabor({ variable: 0, fixed: 320, total: 320 }, 8), { hourly: 0, amount: 0 });
+  assert.deepEqual(functionLabor({ total: 400 }, 8), { hourly: 50, amount: 400 });
+
+  const a = await register('rmqr');
+  const tid = await tenantOf(a);
+  await call(a, 'POST', '/api/skills', { name: 'A1', payRate: 30, billRate: 60 });
+  await call(a, 'POST', '/api/skills', { name: 'Stagehand', payRate: 20, billRate: 45 });
+  await call(a, 'POST', '/api/skills', { name: 'Audio SE', payRate: 40, billRate: 80 });
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Ball Arena', startDate: '2031-07-01', endDate: '2031-07-01' })).json.event.id;
+  await withTenant(tid, (c) => c.query('UPDATE events SET rentman_project_id = 700 WHERE id = $1', [ev]));
+  const real = globalThis.fetch;
+  const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: { 'content-type': 'application/json' } });
+  const fns = [
+    { id: 21, type: 'crew_function', name: 'A1', amount: 1, planperiod_start: '2031-07-01T06:00:00Z', planperiod_end: '2031-07-01T22:00:00Z', price_variable: 35, price_fixed: 0, price_total: 560 },
+    { id: 22, type: 'crew_function', name: 'Stage hand', amount: 15, planperiod_start: '2031-07-01T14:00:00Z', planperiod_end: '2031-07-01T22:00:00Z', price_variable: 25 },
+    { id: 23, type: 'crew_function', name: 'Audio SE', amount: 1, planperiod_start: '2031-07-01T14:00:00Z', planperiod_end: '2031-07-01T22:00:00Z', price_variable: 440, price_fixed: 0, price_total: 440 },
+  ];
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = String(input);
+    if (!url.startsWith('https://api.rentman.net')) return real(input, init);
+    if (url.includes('/projects/700/projectfunctiongroups')) return json({ data: [] });
+    if (url.includes('/projects/700/projectfunctions')) return json({ data: fns });
+    if (url.includes('/projects')) return json({ data: [] });
+    return json({ error: 'unexpected' }, 404);
+  }) as typeof fetch;
+  const rates = async () => {
+    const b = (await call(a, 'GET', `/api/events/${ev}/billing?source=schedule`)).json;
+    return Object.fromEntries(b.lines.filter((l: any) => l.kind === 'regular').map((l: any) => [l.role, [l.rate, l.rateFrom]]));
+  };
+  try {
+    assert.equal((await call(a, 'PUT', '/api/rentman/settings', { token: 'good-token-123456' })).status, 200);
+    assert.equal((await call(a, 'PUT', '/api/rentman/options', { quoted_bill_rates: true })).status, 200);
+    assert.equal((await call(a, 'POST', `/api/events/${ev}/rentman/build`)).status, 200);
+    assert.deepEqual(await rates(), { A1: [35, 'rentman'], Stagehand: [25, 'rentman'], 'Audio SE': [55, 'rentman'] });
+
+    // Off: the shifts go back to the rates list
+    const off = (await call(a, 'PUT', '/api/rentman/options', { quoted_bill_rates: false })).json;
+    assert.equal(off.ran.quotedRates.cleared, 3);
+    assert.deepEqual(await rates(), { A1: [60, 'role'], Stagehand: [45, 'role'], 'Audio SE': [80, 'role'] });
+
+    // On again: the quoted rates come straight back without rebuilding
+    const on = (await call(a, 'PUT', '/api/rentman/options', { quoted_bill_rates: true })).json;
+    assert.equal(on.ran.quotedRates.events, 1);
+    assert.deepEqual(await rates(), { A1: [35, 'rentman'], Stagehand: [25, 'rentman'], 'Audio SE': [55, 'rentman'] });
+  } finally {
+    globalThis.fetch = real;
+  }
+});
