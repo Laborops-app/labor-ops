@@ -5018,3 +5018,51 @@ test('call sheet and wrap report: PDFs for coordinators, signed links for crew a
   const b = await register('docs2');
   assert.equal((await call(b, 'GET', `/api/events/${ev}/call-sheet.pdf`)).status, 404);
 });
+
+test('offer waves: best rated first, next person on a no, unanswered offers withdrawn at wave end, then an open shift', async () => {
+  const a = await register('waves');
+  const tid = (await adminQuery('SELECT tenant_id FROM users WHERE id = $1', [a.id])).rows[0].tenant_id as string;
+  const { advancePlan } = await import('../src/waves');
+  const crew = [] as { id: string; session: Session }[];
+  for (const t of ['wv1', 'wv2', 'wv3', 'wv4']) crew.push(await mkCrew(a, t));
+  // Ratings decide the order: wv1 5 stars, wv2 4, wv3 3, wv4 none
+  for (const [i, stars] of [[0, 5], [1, 4], [2, 3]] as const)
+    await adminQuery("INSERT INTO crew_ratings (tenant_id, user_id, role_key, stars) VALUES ($1,$2,'stagehand',$3)", [tid, crew[i]!.id, stars]);
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Wave Show', startDate: '2031-08-01', endDate: '2031-08-01' })).json.event.id;
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: start(100), endsAt: start(108), headcount: 2 })).json.shift.id;
+  const pre = (await call(a, 'GET', `/api/shifts/${sh}/waves`)).json;
+  assert.equal(pre.plan, null);
+  assert.deepEqual(pre.preview.top.slice(0, 2).map((x: { name: string }) => x.name), ['Crew wv1', 'Crew wv2']);
+  // Wave 1 = top 3; two seats, so the two best get offers
+  const cfg = { ...pre.defaults, topN: 3, wait1Min: 60, wait2Min: 60, answerByHours: 2 };
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/waves`, { config: cfg })).status, 201);
+  let w = (await call(a, 'GET', `/api/shifts/${sh}/waves`)).json;
+  assert.deepEqual(w.offers.map((o: { name: string; state: string }) => [o.name, o.state]), [['Crew wv1', 'waiting'], ['Crew wv2', 'waiting']]);
+  const planId = w.plan.id as string;
+  const tick = () => withTenant(tid, (c) => advancePlan(c, tid, planId));
+  // wv1 says no: the third-best in wave 1 is offered right away
+  const asg1 = w.offers[0].assignment_id;
+  assert.equal((await call(crew[0]!.session, 'POST', `/api/assignments/${asg1}/respond`, { response: 'declined' })).status, 200);
+  await tick();
+  w = (await call(a, 'GET', `/api/shifts/${sh}/waves`)).json;
+  assert.deepEqual(w.offers.map((o: { name: string; state: string }) => [o.name, o.state]), [['Crew wv1', 'declined'], ['Crew wv2', 'waiting'], ['Crew wv3', 'waiting']]);
+  // wv2 accepts; wave 1 runs out of time: wv3's unanswered offer is withdrawn and wave 2 offers wv4
+  await call(crew[1]!.session, 'POST', `/api/assignments/${w.offers[1].assignment_id}/respond`, { response: 'accepted' });
+  await adminQuery("UPDATE shift_wave_plans SET wave_started_at = now() - interval '61 minutes' WHERE id = $1", [planId]);
+  await tick();
+  w = (await call(a, 'GET', `/api/shifts/${sh}/waves`)).json;
+  assert.equal(w.plan.wave, 2);
+  assert.deepEqual(w.offers.map((o: { name: string; state: string }) => [o.name, o.state]), [['Crew wv1', 'declined'], ['Crew wv2', 'accepted'], ['Crew wv3', 'expired'], ['Crew wv4', 'waiting']]);
+  assert.ok((await call(crew[2]!.session, 'GET', '/api/notifications')).json.items.some((n: { title: string }) => /Offer expired/.test(n.title)));
+  // Wave 2 times out too: the seat becomes an open shift and the plan is done
+  await adminQuery("UPDATE shift_wave_plans SET wave_started_at = now() - interval '61 minutes' WHERE id = $1", [planId]);
+  await tick();
+  w = (await call(a, 'GET', `/api/shifts/${sh}/waves`)).json;
+  assert.equal(w.plan.status, 'done');
+  assert.equal(w.shift.is_open, true);
+  assert.equal(w.shift.confirmed, 1);
+  // Not allowed while an event is built quietly
+  const q = (await call(a, 'POST', '/api/events', { name: 'Quiet', startDate: '2031-08-02', endDate: '2031-08-02', buildQuietly: true })).json.event.id;
+  const qs = (await call(a, 'POST', `/api/events/${q}/shifts`, { roleName: 'Stagehand', startsAt: start(130), endsAt: start(138), headcount: 1 })).json.shift.id;
+  assert.equal((await call(a, 'POST', `/api/shifts/${qs}/waves`, { config: cfg })).status, 409);
+});

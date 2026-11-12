@@ -2,7 +2,7 @@
 import { useTabTitle } from '@/lib/tabs';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
@@ -15,6 +15,7 @@ import TimeEdit from '@/components/TimeEdit';
 import Modal from '@/components/Modal';
 import ActionMenu, { ActIcon } from '@/components/ActionMenu';
 import EventDocs from '@/components/EventDocs';
+import WavePanel from '@/components/WavePanel';
 import CrewMenu, { CrewPayForm, type CrewMenuItem } from '@/components/CrewMenu';
 import InvoicePanel from '@/components/InvoicePanel';
 import HrEventView from '@/components/HrEventView';
@@ -172,6 +173,13 @@ function Body({ me }: { me: Me }) {
   const [teamEdit, setTeamEdit] = useState<{ id: string; picked: Set<string> } | null>(null);
   // Adding time for someone who never clocked in (assignment id).
   const [docsOpen, setDocsOpen] = useState(false);
+  // Offer waves: the shift whose window is open, and which shifts have a plan (for the chips).
+  const [waveShift, setWaveShift] = useState<string | null>(null);
+  const [wavePlans, setWavePlans] = useState<Record<string, { status: string; wave: number }>>({});
+  const loadWaves = useCallback(() => {
+    api<{ plans: { shift_id: string; status: string; wave: number }[] }>(`/api/events/${id}/waves`).then((r) => setWavePlans(Object.fromEntries(r.plans.map((p) => [p.shift_id, p])))).catch(() => {});
+  }, [id]);
+  useEffect(() => { loadWaves(); }, [loadWaves]);
   const [addTime, setAddTime] = useState<string | null>(null);
   // Right-click (or ⋯) menu on a crew member: which shift and assignment, and where it opens.
   const [crewMenu, setCrewMenu] = useState<{ sid: string; aid: string; x: number; y: number } | null>(null);
@@ -810,8 +818,13 @@ function Body({ me }: { me: Me }) {
                 )}
               </div>
               <div className="cs-right">
-                {(s.is_open || !!s.required_certs?.length || s.lead_shift_id) && (
+                {(s.is_open || !!s.required_certs?.length || s.lead_shift_id || wavePlans[s.id]) && (
                   <div className="shift-flags">
+                    {wavePlans[s.id] && (
+                      <button type="button" className="chip" style={{ border: 0, cursor: 'pointer' }} onClick={() => setWaveShift(s.id)} title="Open the offer waves for this shift">
+                        {wavePlans[s.id]!.status === 'active' ? `Waves running · wave ${wavePlans[s.id]!.wave}` : wavePlans[s.id]!.status === 'paused' ? 'Waves paused' : 'Waves finished'}
+                      </button>
+                    )}
                     {s.is_open && <span className="chip open">Open for claiming</span>}
                     {s.required_certs?.map((c) => <span key={c} className="chip">{c}</span>)}
                     {s.lead_shift_id && (() => {
@@ -1000,6 +1013,11 @@ function Body({ me }: { me: Me }) {
                       }
                     >
                       Confirm everyone
+                    </button>
+                  )}
+                  {!full && new Date(s.starts_at) > new Date() && (
+                    <button type="button" className="btn small" onClick={() => setWaveShift(s.id)} title="Offer in rounds: best rated first, then everyone qualified, then an open shift">
+                      {wavePlans[s.id] && wavePlans[s.id]!.status !== 'done' ? 'Offer waves…' : 'Fill in waves'}
                     </button>
                   )}
                   {!full && crewGroups.length > 0 && (
@@ -1480,6 +1498,11 @@ function Body({ me }: { me: Me }) {
           />
         );
       })()}
+      {waveShift && (
+        <Modal title="Offer waves" onClose={() => setWaveShift(null)} wide>
+          <WavePanel shiftId={waveShift} onChanged={() => { loadWaves(); load(); }} />
+        </Modal>
+      )}
       {docsOpen && (
         <Modal title={`Call sheet & wrap report · ${ev.name}`} onClose={() => setDocsOpen(false)} wide>
           <EventDocs eventId={id} phases={d.phases} customerEmail={custInfo?.email} onNote={setNote} />

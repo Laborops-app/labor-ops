@@ -28,7 +28,7 @@ export const dayList = (dates: string[]) => {
 };
 
 /** Remind one person to answer an offer. Returns false when they were nudged too recently. */
-async function nudgeOne(c: PoolClient, tid: string, a: { id: string; user_id: string; shift_id: string }) {
+export async function nudgeOne(c: PoolClient, tid: string, a: { id: string; user_id: string; shift_id: string }) {
   const r = await c.query(
     `UPDATE shift_assignments SET nudged_at = now() WHERE id = $1 AND status = 'offered' AND (nudged_at IS NULL OR nudged_at < now() - make_interval(mins => $2)) RETURNING id`,
     [a.id, NUDGE_GAP_MIN],

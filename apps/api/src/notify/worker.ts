@@ -7,6 +7,7 @@ import { useSmsAllowance } from '../billing';
 import { runAttendance } from '../attendance';
 import { runRentmanAll } from '../rentmanWebhook';
 import { runRentmanPush } from '../rentmanPush';
+import { runWaves } from '../waves';
 
 const MAX_ATTEMPTS = 4;
 const BACKOFF = [60, 300, 900]; // seconds before retry 2, 3, 4
@@ -104,5 +105,7 @@ export function startWorkers() {
   const t5 = setInterval(() => runRentmanAll().catch((e) => console.error('rentman sync error', e)), 30 * 60 * 1000);
   // Approved hours and time off to Rentman, for companies that turned them on.
   const t6 = setInterval(() => runRentmanPush().catch((e) => console.error('rentman push error', e)), 2 * 60 * 1000);
-  t1.unref(); t2.unref(); t3.unref(); t4.unref(); t5.unref(); t6.unref();
+  // Offer waves: reminders, the next person on a no, and moving to the next wave when the time is up.
+  const t7 = setInterval(() => runWaves().catch((e) => console.error('offer waves error', e)), 60 * 1000);
+  t1.unref(); t2.unref(); t3.unref(); t4.unref(); t5.unref(); t6.unref(); t7.unref();
 }
