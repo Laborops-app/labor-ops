@@ -787,13 +787,13 @@ button.star:hover, button.star:focus-visible { color: #e5a50a; }
   --sb-chev: url(/sidebar/chevron-dark.svg); --sb-fly-bg: #1d1117;
 }
 .sb-dots { position: absolute; left: 24px; top: 24px; width: 52px; height: 12px; background: var(--sb-dots) no-repeat; transition: left 0.32s; }
-.sb-head { position: relative; height: 130px; flex: none; }
-.sb-who { position: absolute; left: 24px; top: 66px; display: flex; align-items: center; gap: 12px; text-decoration: none; color: inherit; transition: left 0.32s; }
+.sb-head { position: relative; height: 96px; flex: none; }
+.sb-who { position: absolute; left: 24px; top: 26px; display: flex; align-items: center; gap: 12px; text-decoration: none; color: inherit; transition: left 0.32s; }
 .sb-avatar { flex: none; width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; background: url(/sidebar/avatar-ring.svg) center / cover; color: #7a242f; font-weight: 700; font-size: 15px; }
 .sb-who-txt { display: grid; min-width: 0; white-space: nowrap; transition: opacity 0.2s; }
 .sb-role { font-size: 11px; font-weight: 500; line-height: 22px; letter-spacing: 0.4px; text-transform: uppercase; color: var(--sb-title); }
 .sb-name { font-size: 14px; font-weight: 500; line-height: 20px; color: var(--sb-strong); text-shadow: var(--sb-glow-text); overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
-.sb-toggle { position: absolute; left: 244px; top: 78px; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; cursor: pointer; background: var(--sb-collapse) center / 24px 24px no-repeat; transition: left 0.32s, transform 0.2s; z-index: 2; transform: rotate(-90deg); }
+.sb-toggle { position: absolute; left: 244px; top: 38px; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; cursor: pointer; background: var(--sb-collapse) center / 24px 24px no-repeat; transition: left 0.32s, transform 0.2s; z-index: 2; transform: rotate(-90deg); }
 .sb-toggle:hover { transform: rotate(-90deg) scale(1.12); }
 .sb-toggle:focus-visible, .sb-link:focus-visible, .sb-chev:focus-visible, .sb-sub:focus-visible, .sb-cta:focus-visible { outline: 2px solid var(--sb-cta); outline-offset: 2px; }
 .sb-line { height: 0.5px; flex: none; background: var(--sb-line); opacity: var(--sb-line-op); }

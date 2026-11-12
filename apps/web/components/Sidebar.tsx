@@ -66,7 +66,6 @@ export default function Sidebar({ items, me, path, chatUnread }: { items: NavIte
 
   return (
     <aside className={collapsed ? 'sb collapsed' : 'sb'} aria-label="Main">
-      <div className="sb-dots" aria-hidden="true" />
       <div className="sb-head">
         <Link href="/profile" className="sb-who" aria-label="My profile">
           <span className="sb-avatar" aria-hidden="true">{initials}</span>
