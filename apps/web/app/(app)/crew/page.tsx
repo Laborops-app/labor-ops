@@ -6,13 +6,14 @@ import { roleKey } from '@/components/Stars';
 import { CrewReviews, StarMeter } from '@/components/Rating';
 import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
-import { api, Me, roleLabel } from '@/lib/api';
+import { api, Me, roleLabel, peek } from '@/lib/api';
 import SkillPicker, { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 import Modal from '@/components/Modal';
 import CrewImport, { DemoCrew, RentmanExport } from '@/components/CrewImport';
 import TopbarAction, { PlusIcon, SearchIcon, avClass, initialsOf } from '@/components/TopbarAction';
 import CrewMenu, { CrewMenuItem } from '@/components/CrewMenu';
 import { ActIcon } from '@/components/ActionMenu';
+import Skeleton from '@/components/Skeleton';
 
 type Cert = { id: string; name: string; expires_on: string | null; verified: boolean; has_file: boolean };
 type Member = { id: string; name: string; email: string; role: string; phone: string | null; skills: string[]; field_roles?: string[]; active: boolean; certs: Cert[]; has_availability: boolean; can_adjust_rates?: boolean; ratings?: Record<string, number>; rating_avg?: number | null; review_count?: number; flag_count?: number; is_demo?: boolean };
@@ -27,7 +28,7 @@ const chipCls = (c: Cert) => (c.verified ? certState(c) : 'warn');
 
 function Body({ me }: { me: Me }) {
   const router = useRouter();
-  const [list, setList] = useState<Member[] | null>(null);
+  const [list, setList] = useState<Member[] | null>(() => peek<{ crew: Member[] }>('/api/crew')?.crew ?? null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [f, setF] = useState({ name: '', email: '', phone: '', skills: [] as string[], role: 'crew' });
@@ -163,7 +164,7 @@ function Body({ me }: { me: Me }) {
       </div>
 
       {!list ? (
-        <div className="muted">Loading…</div>
+        <Skeleton kind="list" />
       ) : rows.length === 0 ? (
         <Empty>{list.length ? 'Nobody matches.' : 'No crew yet. Add your first crew member.'}</Empty>
       ) : (

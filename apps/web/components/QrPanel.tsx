@@ -1,6 +1,7 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
+import Skeleton from '@/components/Skeleton';
 
 type Info = { on: boolean; hasVenueLocation: boolean; screenLink: string | null };
 
@@ -11,7 +12,7 @@ export default function QrPanel({ eventId, onClockSettings }: { eventId: string;
   const [msg, setMsg] = useState('');
   const load = useCallback(() => api<Info>(`/api/events/${eventId}/qr`).then(setD).catch((e) => setErr(e.message)), [eventId]);
   useEffect(() => { load(); }, [load]);
-  if (!d) return err ? <p className="error" role="alert">{err}</p> : <p className="muted">Loading…</p>;
+  if (!d) return err ? <p className="error" role="alert">{err}</p> : <Skeleton />;
   const toggle = async (on: boolean) => {
     setErr(''); setMsg('');
     setD({ ...d, on }); // flip straight away; put it back if the server says no

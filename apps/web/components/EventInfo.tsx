@@ -8,27 +8,31 @@ import CustomerSelect from '@/components/CustomerSelect';
 import LocationPick from '@/components/LocationPick';
 import { askConfirm } from '@/components/Toasts';
 
-export type EventFull = { id: string; customer_id?: string | null; name: string; client: string | null; venue: string | null; address: string | null; notes: string | null; start_date: string; end_date: string; clock_mode?: 'self' | 'coordinator'; geo_lat?: number | null; geo_lng?: number | null; geofence_m?: number | null; pipeline_status?: string; priority?: string; staffing_draft?: boolean };
+export type EventFull = { id: string; customer_id?: string | null; timezone?: string | null; name: string; client: string | null; venue: string | null; address: string | null; notes: string | null; start_date: string; end_date: string; clock_mode?: 'self' | 'coordinator'; geo_lat?: number | null; geo_lng?: number | null; geofence_m?: number | null; pipeline_status?: string; priority?: string; staffing_draft?: boolean };
 export type Phase = { id: string; label: string; starts_on: string; ends_on: string };
 
 export const PRESETS = ['Load in', 'Setup', 'Rehearsal', 'Tech', 'Show day', 'Show days', 'Strike', 'Load out'];
 const d10 = (s: string) => s.slice(0, 10);
+// Time zones a US labor company is likely to work in.
+const ZONES = ['America/New_York', 'America/Chicago', 'America/Denver', 'America/Phoenix', 'America/Los_Angeles', 'America/Anchorage', 'Pacific/Honolulu', 'America/Puerto_Rico', 'America/Toronto', 'America/Vancouver', 'Europe/London'];
+const ZONE_NAMES: Record<string, string> = { 'America/New_York': 'Eastern', 'America/Chicago': 'Central', 'America/Denver': 'Mountain', 'America/Phoenix': 'Arizona (no daylight saving)', 'America/Los_Angeles': 'Pacific', 'America/Anchorage': 'Alaska', 'Pacific/Honolulu': 'Hawaii', 'America/Puerto_Rico': 'Atlantic (Puerto Rico)', 'America/Toronto': 'Toronto', 'America/Vancouver': 'Vancouver', 'Europe/London': 'London' };
+const zoneName = (z: string) => ZONE_NAMES[z] ?? z.split('/').pop()!.replace(/_/g, ' ');
 const range = (a: string, b: string) => (d10(a) === d10(b) ? fmtDate(d10(a)) : `${fmtDate(d10(a))} – ${fmtDate(d10(b))}`);
 
 /** Event name, client, venue and address, with an edit form. */
-export function EventDetails({ ev, hasPhases, shiftCount = 0, onSaved, onError }: { ev: EventFull; hasPhases: boolean; shiftCount?: number; onSaved: () => void; onError: (m: string) => void }) {
+export function EventDetails({ ev, hasPhases, shiftCount = 0, onSaved, onError, companyTz }: { ev: EventFull; hasPhases: boolean; shiftCount?: number; onSaved: () => void; onError: (m: string) => void; companyTz?: string }) {
   const [moveShifts, setMoveShifts] = useState(true);
   const [editing, setEditing] = useState(false);
-  const [f, setF] = useState<{ name: string; client: string; venue: string; address: string; notes: string; startDate: string; endDate: string; customerId: string | null }>({ name: '', client: '', venue: '', address: '', notes: '', startDate: '', endDate: '', customerId: null });
+  const [f, setF] = useState<{ name: string; client: string; venue: string; address: string; notes: string; startDate: string; endDate: string; customerId: string | null; timezone: string }>({ timezone: '', name: '', client: '', venue: '', address: '', notes: '', startDate: '', endDate: '', customerId: null });
   const open = () => {
-    setF({ name: ev.name, client: ev.client ?? '', venue: ev.venue ?? '', address: ev.address ?? '', notes: ev.notes ?? '', startDate: d10(ev.start_date), endDate: d10(ev.end_date), customerId: ev.customer_id ?? null });
+    setF({ name: ev.name, client: ev.client ?? '', venue: ev.venue ?? '', address: ev.address ?? '', notes: ev.notes ?? '', startDate: d10(ev.start_date), endDate: d10(ev.end_date), customerId: ev.customer_id ?? null, timezone: ev.timezone ?? '' });
     setMoveShifts(true);
     setEditing(true);
   };
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await api(`/api/events/${ev.id}`, { method: 'PATCH', body: { ...f, moveShifts } });
+      await api(`/api/events/${ev.id}`, { method: 'PATCH', body: { ...f, timezone: f.timezone || null, moveShifts } });
       setEditing(false);
       onSaved();
     } catch (err) {
@@ -75,6 +79,12 @@ export function EventDetails({ ev, hasPhases, shiftCount = 0, onSaved, onError }
             <dt>Dates</dt>
             <dd>{range(ev.start_date, ev.end_date)}</dd>
           </div>
+          {ev.timezone && (
+            <div>
+              <dt>Time zone</dt>
+              <dd>{zoneName(ev.timezone)}</dd>
+            </div>
+          )}
           {ev.notes && (
             <div style={{ gridColumn: '1 / -1' }}>
               <dt>Notes</dt>
@@ -108,6 +118,14 @@ export function EventDetails({ ev, hasPhases, shiftCount = 0, onSaved, onError }
         <label>
           Street address
           <input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} maxLength={300} placeholder="123 Main St, Denver, CO" />
+        </label>
+        <label>
+          Time zone
+          <select value={f.timezone} onChange={(e) => setF({ ...f, timezone: e.target.value })}>
+            <option value="">Company’s ({zoneName(companyTz || 'America/Denver')})</option>
+            {ZONES.filter((z) => z !== companyTz).map((z) => <option key={z} value={z}>{zoneName(z)}</option>)}
+          </select>
+          <span className="muted small">For a venue in another time zone. Shifts keep their clock times there (8am stays 8am), and crew see venue time.</span>
         </label>
         <label>
           Starts

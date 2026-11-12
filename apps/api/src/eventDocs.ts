@@ -84,7 +84,7 @@ function footers(doc: PDFKit.PDFDocument, left: string) {
 export async function callSheetPdf(c: PoolClient, eventId: string, o: CallSheetOpts): Promise<{ pdf: Buffer; name: string } | null> {
   const ev = (
     await c.query(
-      `SELECT e.id, e.name, e.venue, e.address, e.notes, e.start_date, e.end_date, e.customer_id, t.name AS company, t.timezone
+      `SELECT e.id, e.name, e.venue, e.address, e.notes, e.start_date, e.end_date, e.customer_id, t.name AS company, COALESCE(e.timezone, t.timezone) AS timezone
          FROM events e JOIN tenants t ON t.id = e.tenant_id WHERE e.id = $1`,
       [eventId],
     )
@@ -192,7 +192,7 @@ export async function callSheetPdf(c: PoolClient, eventId: string, o: CallSheetO
 export async function wrapReportPdf(c: PoolClient, eventId: string, o: WrapOpts): Promise<{ pdf: Buffer; name: string } | null> {
   const r = await eventReport(c, eventId);
   if (!r) return null;
-  const meta = (await c.query('SELECT t.name AS company, t.timezone FROM events e JOIN tenants t ON t.id = e.tenant_id WHERE e.id = $1', [eventId])).rows[0];
+  const meta = (await c.query('SELECT t.name AS company, COALESCE(e.timezone, t.timezone) AS timezone FROM events e JOIN tenants t ON t.id = e.tenant_id WHERE e.id = $1', [eventId])).rows[0];
   const tz: string = meta?.timezone || 'UTC';
   const f = fmt(tz);
   // Per day and role: people, scheduled and worked hours.

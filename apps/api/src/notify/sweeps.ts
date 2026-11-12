@@ -27,14 +27,14 @@ export async function runSweeps(): Promise<{ reminders: number; certs: number }>
       // Archived events are kept two years.
       await purgeArchive(c, t.id);
       const shifts = await c.query(
-        `SELECT a.id, a.user_id, s.role_name, s.starts_at, e.name AS event_name, e.venue
+        `SELECT a.id, a.user_id, s.role_name, s.starts_at, e.name AS event_name, e.venue, e.timezone
            FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
           WHERE a.status = 'accepted' AND s.starts_at > now() + interval '90 minutes' AND s.starts_at <= now() + interval '24 hours'`,
       );
       for (const r of shifts.rows) {
         const mark = await c.query("INSERT INTO notify_marks (tenant_id, key) VALUES ($1,$2) ON CONFLICT DO NOTHING RETURNING key", [t.id, `rem24:${r.id}`]);
         if (!mark.rowCount) continue;
-        const when = fmtWhen(r.starts_at, t.timezone);
+        const when = fmtWhen(r.starts_at, r.timezone || t.timezone);
         await notify(c, t.id, {
           userId: r.user_id, category: 'reminder',
           title: `Reminder: ${r.role_name} tomorrow`,

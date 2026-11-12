@@ -4,6 +4,7 @@ import Shell from '@/components/Shell';
 import { Banner } from '@/components/ui';
 import { api } from '@/lib/api';
 import { askConfirm } from '@/components/Toasts';
+import Skeleton from '@/components/Skeleton';
 
 type Block =
   | { id: string; type: 'header'; showLogo: boolean; logoAlign: 'left' | 'center' | 'right'; logoHeight: number; companyName: string; lines: string; align: 'left' | 'center' | 'right' }
@@ -142,7 +143,7 @@ function Body() {
     } catch (e) { setError((e as Error).message); }
   };
 
-  if (!cfg || !builtIn) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
+  if (!cfg || !builtIn) return error ? <Banner>{error}</Banner> : <Skeleton />;
   return (
     <>
       <h1>Quote layouts</h1>

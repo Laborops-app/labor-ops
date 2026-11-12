@@ -31,12 +31,17 @@ import QuickAdd, { type RoleDefault } from '@/components/QuickAdd';
 import CopyPhase from '@/components/CopyPhase';
 import NeedsAttention from '@/components/NeedsAttention';
 import AvailCheck from '@/components/AvailCheck';
-import { api, ApiError, Me, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
+import { setWallZone, wallZone, deviceZone, zoneLabel } from '@/lib/wallZone';
+import { api, ApiError, Me, fmtDate, fmtDateTime, fmtTime, money, peek } from '@/lib/api';
+
+// The time zone each event page used, so going back to it opens in the right zone straight away.
+const knownZone = new Map<string, string | null>();
 import LaborBudget from '@/components/LaborBudget';
 import RolePicker from '@/components/RolePicker';
 import { EventDetails, Phases, Clocking, RentmanCard, EventFull, Phase, RmView } from '@/components/EventInfo';
 import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 import { askConfirm, undoable } from '@/components/Toasts';
+import Skeleton from '@/components/Skeleton';
 
 type Assignment = { id: string; user_id: string; user_name: string; status: string; is_lead?: boolean; created_at?: string; nudged_at?: string | null; late_eta?: string | null; late_note?: string | null; planned?: boolean; clocked_in_at?: string | null; last_clock_out?: string | null; pay_type?: 'hourly' | 'day'; rate?: number | null; estimated_pay?: number | null };
 type CrewRate = { user_id: string; user_name: string; role_name?: string; pay_type: 'hourly' | 'day'; rate: number; note: string | null };
@@ -121,7 +126,8 @@ const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 function Body({ me }: { me: Me }) {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const [d, setD] = useState<Detail | null>(null);
+  // Opens with what it showed last time (this tab), in the venue's zone, while the fresh copy loads.
+  const [d, setD] = useState<Detail | null>(() => { if (knownZone.has(id)) setWallZone(knownZone.get(id)!); return peek<Detail>(`/api/events/${id}`); });
   const [crew, setCrew] = useState<Member[]>([]);
   const [crewGroups, setCrewGroups] = useState<{ id: string; name: string }[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -318,9 +324,14 @@ function Body({ me }: { me: Me }) {
   const [tplStart, setTplStart] = useState('');
   const [tplName, setTplName] = useState('');
 
-  const load = () =>
+  const load = (): Promise<void> =>
     api<Detail>(`/api/events/${id}`)
       .then((r) => {
+        // A venue in another time zone: show and enter every time on this page in the venue's time (see lib/wallZone).
+        const tz = (r.event as { timezone?: string | null }).timezone || (r as { companyTimezone?: string }).companyTimezone || null;
+        const want = tz && tz !== deviceZone() ? tz : null;
+        knownZone.set(id, want);
+        if (want !== wallZone()) { setWallZone(want); return load(); }
         setD(r);
         setTplStart((v) => v || r.event.start_date.slice(0, 10));
         // The add-shift form starts on the event's first day (not tomorrow); times and length are kept.
@@ -338,6 +349,8 @@ function Body({ me }: { me: Me }) {
   const customerId = d?.event.customer_id ?? null;
   const loadTemplates = () => api<{ templates: Template[] }>(`/api/templates${customerId ? `?customerId=${customerId}` : ''}`).then((r) => setTemplates(r.templates));
   const [tplForCustomer, setTplForCustomer] = useState(false);
+  // Leaving the event page goes back to this device's own time zone.
+  useEffect(() => () => setWallZone(null), []);
   useEffect(() => {
     load();
     api<{ crew: Member[] }>('/api/crew').then((r) => setCrew(r.crew.filter((m) => m.role === 'crew' && m.active)));
@@ -586,7 +599,7 @@ function Body({ me }: { me: Me }) {
   }, [adding]);
 
   useTabTitle(d?.event.name);
-  if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
+  if (!d) return error ? <Banner>{error}</Banner> : <Skeleton kind="event" />;
   const ev = d.event;
   const plannedCount = d.shifts.reduce((k, x) => k + x.assignments.filter((a) => a.planned).length, 0);
 
@@ -1621,6 +1634,7 @@ function Body({ me }: { me: Me }) {
               </span>
             )}
             <Link href="/pipeline" className="evh-chip">View pipeline</Link>
+            {wallZone() && <span className="evh-chip quiet" title={`Times on this page are in the venue’s time zone (${wallZone()}), not this device’s.`}>Times in {zoneLabel(wallZone()!)}</span>}
           </div>
           <h1>{ev.name}</h1>
           <div className="sub">
@@ -1856,7 +1870,7 @@ function Body({ me }: { me: Me }) {
       })()}
       <aside className="split-aside ev-aside">
       {!narrow && attention}
-      <EventDetails ev={ev} hasPhases={d.phases.length > 0} shiftCount={d.shifts.length} onSaved={load} onError={setError} />
+      <EventDetails ev={ev} hasPhases={d.phases.length > 0} shiftCount={d.shifts.length} onSaved={load} onError={setError} companyTz={(d as { companyTimezone?: string }).companyTimezone} />
       <div id="ev-phases">
         <Phases eventId={id} phases={d.phases} onChanged={load} onError={setError} />
       </div>

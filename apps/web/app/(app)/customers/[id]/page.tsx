@@ -12,6 +12,7 @@ import TopbarAction, { PlusIcon, TrashIcon, avClass, initialsOf } from '@/compon
 import { api, fmtDate, money } from '@/lib/api';
 import { ContactDetails, ContactGrid, type Contact } from '@/components/crm/ContactCards';
 import { askConfirm } from '@/components/Toasts';
+import Skeleton from '@/components/Skeleton';
 
 type Cust = { id: string; name: string; notes: string | null; rentman_contact_id: number | null; parent_id?: string | null; parent_name?: string | null };
 type Loc = { id: string; label: string; venue: string | null; address: string | null; notes: string | null; is_default: boolean };
@@ -52,7 +53,7 @@ function Body() {
   const run = (p: Promise<unknown>, ok = '') => p.then(() => { if (ok) setNote(ok); return load(); }).catch((x) => setError((x as Error).message));
 
   useTabTitle(d?.customer.name);
-  if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
+  if (!d) return error ? <Banner>{error}</Banner> : <Skeleton />;
   const c = d.customer;
   const dirty = f.name !== c.name || f.notes !== (c.notes ?? '');
   const today = new Date().toISOString().slice(0, 10);

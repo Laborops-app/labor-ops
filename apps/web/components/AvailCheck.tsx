@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { api, fmtDateTime } from '@/lib/api';
+import Skeleton from '@/components/Skeleton';
 
 type Answer = { user_id: string; name: string; answered_at: string | null; free_dates: string[] | null };
 type Check = { id: string; dates: string[]; message: string | null; created_at: string; closed_at: string | null; created_by_name: string | null; answers: Answer[] };
@@ -63,7 +64,7 @@ export default function AvailCheck({
 
   return (
     <div className="avail-check">
-      {checks === null && <div className="muted">Loading…</div>}
+      {checks === null && <Skeleton />}
       {checks?.map((k) => {
         const answered = k.answers.filter((a) => a.answered_at);
         const free = answered.filter((a) => a.free_dates?.length);

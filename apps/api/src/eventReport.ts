@@ -14,7 +14,7 @@ const LATE_MIN = 10;
 export async function eventReport(c: PoolClient, eventId: string) {
   const e = (
     await c.query(
-      `SELECT e.id, e.name, e.venue, e.start_date, e.end_date, e.labor_budget, e.pipeline_status, e.rentman_project_id, cu.name AS customer, t.timezone
+      `SELECT e.id, e.name, e.venue, e.start_date, e.end_date, e.labor_budget, e.pipeline_status, e.rentman_project_id, cu.name AS customer, COALESCE(e.timezone, t.timezone) AS timezone
          FROM events e LEFT JOIN customers cu ON cu.id = e.customer_id CROSS JOIN tenants t WHERE e.id = $1 AND t.id = e.tenant_id`,
       [eventId],
     )

@@ -1,14 +1,22 @@
+import { inbound, outbound, outboundPath, wallZone } from '@/lib/wallZone';
+
 export class ApiError extends Error {
   constructor(message: string, public status: number, public reason?: string, public data?: Record<string, any>) {
     super(message);
   }
 }
 
+// The last answer to each GET, kept for this browser tab, so pages open straight away with what they showed last time
+// while the fresh data loads (peek). Keyed by the time zone in use too, since times are converted per zone.
+const recent = new Map<string, unknown>();
+const keyOf = (path: string) => `${wallZone() ?? ''}|${path}`;
+export const peek = <T>(path: string): T | null => (recent.get(keyOf(path)) as T | undefined) ?? null;
+
 export async function api<T = any>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(outboundPath(path), {
     method: init.method ?? (init.body ? 'POST' : 'GET'),
     headers: init.body ? { 'content-type': 'application/json' } : undefined,
-    body: init.body ? JSON.stringify(init.body) : undefined,
+    body: init.body ? JSON.stringify(outbound(init.body)) : undefined,
     credentials: 'same-origin',
   });
   let data: any = null;
@@ -18,7 +26,12 @@ export async function api<T = any>(path: string, init: { method?: string; body?:
     /* empty body */
   }
   if (!res.ok) throw new ApiError(data?.error ?? `Request failed (${res.status})`, res.status, data?.reason, data ?? undefined);
-  return data as T;
+  const out = inbound(data) as T;
+  if ((init.method ?? (init.body ? 'POST' : 'GET')) === 'GET') {
+    recent.set(keyOf(path), out);
+    if (recent.size > 80) recent.delete(recent.keys().next().value!);
+  }
+  return out;
 }
 
 export type Role = 'admin' | 'manager' | 'crew' | 'hr' | 'client';

@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Banner, Empty } from '@/components/ui';
 import { api } from '@/lib/api';
 import { askConfirm } from '@/components/Toasts';
+import Skeleton from '@/components/Skeleton';
 
 export type WorkRules = {
   otAfter: number | null; dtAfter: number | null; otMult: number | null; dtMult: number | null;
@@ -187,7 +188,7 @@ export default function WorkRuleSets() {
         <Editor initial={edit.config} name={edit.name} isDefault={edit.isDefault} onSave={save} onCancel={() => setEdit(null)} />
       ) : (
         <>
-          {!sets ? <div className="muted">Loading…</div> : sets.length === 0 ? <Empty>No rule sets yet. Everything uses the company rules above and state overtime.</Empty> : (
+          {!sets ? <Skeleton /> : sets.length === 0 ? <Empty>No rule sets yet. Everything uses the company rules above and state overtime.</Empty> : (
             <ul className="wr-list">
               {sets.map((s) => (
                 <li key={s.id}>

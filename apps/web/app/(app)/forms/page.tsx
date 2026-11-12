@@ -8,6 +8,7 @@ import FormBuilder from '@/components/docs/FormBuilder';
 import PdfFieldEditor from '@/components/docs/PdfFieldEditor';
 import { DEFAULT_SETTINGS, FORM_PRESETS, newId, type DocSettings, type FormField, type PdfField, type Template } from '@/components/docs/types';
 import { askConfirm } from '@/components/Toasts';
+import Skeleton from '@/components/Skeleton';
 
 type Settings = { onboardingOn: boolean; onboardingBlock: boolean; onboardingRemind: boolean; formsOn: boolean };
 type Progress = { total: number; people: { id: string; name: string; done: number; left: string[]; reminded_at: string | null; finished_at: string | null }[] };
@@ -82,7 +83,7 @@ function Body({ me }: { me: Me }) {
       const r = await api<{ added: string[]; skipped: number }>('/api/docs/starter-packet', { body: {} });
       setOk(r.added.length ? `Added ${r.added.length} document${r.added.length === 1 ? '' : 's'}: ${r.added.join(', ')}. Open each one to read it; turn off or remove any you don’t want.` : 'The starter packet is already in your list.');
     });
-  if (!st) return <p className="muted">Loading…</p>;
+  if (!st) return <Skeleton />;
 
   // ---------- editing one document or form ----------
   if (draft) {

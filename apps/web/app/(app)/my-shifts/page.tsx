@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty, Pill } from '@/components/ui';
-import { api, ApiError, fmtDate, fmtDateTime, fmtTime, getPosition, money } from '@/lib/api';
+import { api, ApiError, fmtDate, fmtDateTime, fmtTime, getPosition, money, peek } from '@/lib/api';
 import { onPunchesChanged, pendingPunches, punch, type Punch } from '@/lib/punchQueue';
 import IosInstallHint from '@/components/IosInstallHint';
 import { CalendarFeed, RunningLate } from '@/components/CrewTools';
@@ -11,6 +11,7 @@ import MyEarnings from '@/components/MyEarnings';
 import PastShifts from '@/components/PastShifts';
 import MyAvailChecks from '@/components/MyAvailChecks';
 import { OnboardingBanner } from '@/components/docs/SignedDocs';
+import Skeleton from '@/components/Skeleton';
 
 /** Offline, the server can't say whether clock-in is open, so the window is worked out on the phone (1 h before start to 2 h after end). */
 const canClock = (s: { can_clock_in: boolean; starts_at: string; ends_at: string }) =>
@@ -47,7 +48,7 @@ type MyShift = {
 type Entry = { id: string; status: string; clock_in: string; clock_out: string | null; hours: number; event_name: string; role_name: string };
 
 function Body() {
-  const [shifts, setShifts] = useState<MyShift[] | null>(null);
+  const [shifts, setShifts] = useState<MyShift[] | null>(() => peek<{ shifts: MyShift[] }>('/api/my/shifts')?.shifts ?? null);
   const [period, setPeriod] = useState<{ from: string; to: string; later: number } | null>(null);
   const [view, setView] = useState<'current' | 'past'>('current');
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -158,7 +159,7 @@ function Body() {
       {view === 'past' ? (
         <PastShifts />
       ) : !shifts ? (
-        <div className="muted">Loading…</div>
+        <Skeleton kind="cards" />
       ) : shifts.length === 0 ? (
         <Empty>No shifts left in this pay period. When a labor coordinator assigns you one, it will show up here.</Empty>
       ) : (

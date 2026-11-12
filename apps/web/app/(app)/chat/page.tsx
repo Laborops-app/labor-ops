@@ -6,6 +6,7 @@ import { Banner } from '@/components/ui';
 import { avClass, initialsOf } from '@/components/TopbarAction';
 import { api, fmtDateTime, Me, roleLabel } from '@/lib/api';
 import { askConfirm } from '@/components/Toasts';
+import Skeleton from '@/components/Skeleton';
 
 type Channel = {
   id: string; kind: 'dm' | 'group' | 'event'; name: string | null; unread: number; muted: boolean; pinned: boolean; member_count: number;
@@ -825,7 +826,7 @@ export default function ChatPage() {
   return (
     <Shell roles={['admin', 'manager', 'crew']}>
       {(me) => (
-        <Suspense fallback={<div className="muted">Loading…</div>}>
+        <Suspense fallback={<Skeleton />}>
           <ChatInner me={me} />
         </Suspense>
       )}

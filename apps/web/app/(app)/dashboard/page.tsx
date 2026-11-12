@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from 'react';
 import Shell, { initials } from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import SeatBar, { SeatLegend } from '@/components/SeatBar';
-import { api, fmtDate, fmtTime } from '@/lib/api';
+import { api, fmtDate, fmtTime, peek } from '@/lib/api';
+import Skeleton from '@/components/Skeleton';
 
 type Up = {
   id: string;
@@ -60,8 +61,9 @@ function Avatars({ names, extra }: { names: string[]; extra: number }) {
 }
 
 function Body({ name }: { name: string }) {
-  const [d, setD] = useState<Dash | null>(null);
-  const [events, setEvents] = useState<Ev[]>([]);
+  // Opens with what it showed last time (this tab) while fresh numbers load.
+  const [d, setD] = useState<Dash | null>(() => peek<Dash>('/api/dashboard'));
+  const [events, setEvents] = useState<Ev[]>(() => peek<{ events: Ev[] }>('/api/events')?.events ?? []);
   const [error, setError] = useState('');
   const [day, setDay] = useState(() => new Date());
 
@@ -116,7 +118,7 @@ function Body({ name }: { name: string }) {
     <>
       {error && <Banner>{error}</Banner>}
       {!d ? (
-        <div className="muted">Loading…</div>
+        <Skeleton />
       ) : (
         <div className="db">
           <header className="evh">

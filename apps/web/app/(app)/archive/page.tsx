@@ -6,6 +6,7 @@ import CopyEvent from '@/components/CopyEvent';
 import { Banner, Empty } from '@/components/ui';
 import { api, fmtDate, money, type Me } from '@/lib/api';
 import { askConfirm } from '@/components/Toasts';
+import Skeleton from '@/components/Skeleton';
 
 type Ev = {
   id: string; name: string; venue: string | null; start_date: string; end_date: string; status: string; customer_id: string | null; customer_name: string | null;
@@ -50,7 +51,7 @@ function Body({ me }: { me: Me }) {
       {note && <Banner kind="ok" onClose={() => setNote('')}>{note}</Banner>}
       <input className="archive-search" type="search" placeholder="Search events or customers…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search the archive" />
       {!list ? (
-        <div className="muted">Loading…</div>
+        <Skeleton />
       ) : list.length === 0 ? (
         <Empty>{q ? `Nothing in the archive matches “${q}”.` : 'Nothing archived yet.'}</Empty>
       ) : (

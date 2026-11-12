@@ -148,7 +148,7 @@ export type ShiftDesc = { role: string; event: string; venue: string | null; whe
 /** Human description of a shift, formatted in the tenant's time zone. */
 export async function describeShift(c: PoolClient, tenantId: string, shiftId: string, userId?: string | null): Promise<ShiftDesc | null> {
   const { rows } = await c.query(
-    `SELECT s.role_name, s.starts_at, s.ends_at, e.name AS event_name, e.venue, t.timezone
+    `SELECT s.role_name, s.starts_at, s.ends_at, e.name AS event_name, e.venue, COALESCE(e.timezone, t.timezone) AS timezone
        FROM shifts s JOIN events e ON e.id = s.event_id JOIN tenants t ON t.id = s.tenant_id WHERE s.id = $1`,
     [shiftId],
   );

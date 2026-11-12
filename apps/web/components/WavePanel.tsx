@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { askConfirm } from '@/components/Toasts';
+import Skeleton from '@/components/Skeleton';
 
 type Cfg = { topN: number; wait1Min: number; wave2: boolean; wait2Min: number; wave3: boolean; answerByHours: number; remindAfterMin: number; rollOnDecline: boolean };
 type Offer = { user_id: string; name: string; wave: number; offered_at: string; reminded_at: string | null; note: string | null; state: 'waiting' | 'accepted' | 'declined' | 'expired' | 'removed' | 'skipped' };
@@ -38,7 +39,7 @@ export default function WavePanel({ shiftId, onChanged }: { shiftId: string; onC
     const t = setInterval(load, 20_000);
     return () => clearInterval(t);
   }, [d?.plan?.status, load]);
-  if (!d || !cfg) return err ? <p className="error" role="alert">{err}</p> : <p className="muted">Loading…</p>;
+  if (!d || !cfg) return err ? <p className="error" role="alert">{err}</p> : <Skeleton />;
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true); setErr('');
     try { await fn(); await load(); onChanged(); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }

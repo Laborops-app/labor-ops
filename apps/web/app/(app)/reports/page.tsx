@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, money } from '@/lib/api';
+import Skeleton from '@/components/Skeleton';
 
 type Ev = {
   id: string; name: string; customer: string | null; start: string; end: string; slots: number; filled: number; fillRate: number | null;
@@ -84,7 +85,7 @@ function Body() {
         <label className="inline">To <input type="date" value={range.to} onChange={(e) => { setPreset(''); setRange({ ...range, to: e.target.value }); }} /></label>
       </div>
       {error && <Banner>{error}</Banner>}
-      {!d && !error && <div className="muted">Loading…</div>}
+      {!d && !error && <Skeleton />}
       {d && t && (
         <>
           <div className="kpis">

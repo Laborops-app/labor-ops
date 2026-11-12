@@ -6,6 +6,7 @@ import Shell from '@/components/Shell';
 import AccountingPanels from '@/components/AccountingPanels';
 import MessagingSettings from '@/components/MessagingSettings';
 import { AcademySettings, RentmanSettings, RENTMAN_TABS, type RentmanTab } from '@/components/IntegrationSettings';
+import Skeleton from '@/components/Skeleton';
 
 function RentmanPage() {
   const [tab, setTab] = useState<RentmanTab>('connection');
@@ -46,7 +47,7 @@ export default function Page() {
   return (
     <Shell roles={['admin']}>
       {() => (
-        <Suspense fallback={<div className="muted">Loading…</div>}>
+        <Suspense fallback={<Skeleton />}>
           <Detail />
         </Suspense>
       )}

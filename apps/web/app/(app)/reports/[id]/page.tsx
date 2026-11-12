@@ -6,6 +6,7 @@ import Shell from '@/components/Shell';
 import { Banner } from '@/components/ui';
 import { api, money } from '@/lib/api';
 import { HBars, Meter, PairBars, StepLine } from '@/components/ReportCharts';
+import Skeleton from '@/components/Skeleton';
 
 type Report = {
   event: { id: string; name: string; customer: string | null; venue: string | null; start: string; end: string; status: string; rentman: number | null };
@@ -52,7 +53,7 @@ function Body() {
   const [err, setErr] = useState('');
   useEffect(() => { api<Report>(`/api/reports/events/${id}`).then(setR).catch((e) => setErr(e.message)); }, [id]);
   if (err) return <Banner>{err}</Banner>;
-  if (!r) return <div className="muted">Loading…</div>;
+  if (!r) return <Skeleton />;
   const { money: m, hours: h, staffing: s } = r;
   const ot = h.overtime + h.double;
   const revRows = [

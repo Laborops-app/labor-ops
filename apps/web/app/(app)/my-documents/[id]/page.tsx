@@ -8,6 +8,7 @@ import { api, type Me } from '@/lib/api';
 import DocFill from '@/components/docs/DocFill';
 import PdfViewer from '@/components/docs/PdfViewer';
 import type { Template } from '@/components/docs/types';
+import Skeleton from '@/components/Skeleton';
 
 function Body({ me }: { me: Me }) {
   const { id } = useParams<{ id: string }>();
@@ -27,7 +28,7 @@ function Body({ me }: { me: Me }) {
     if (shiftId) api<{ people: { id: string; name: string }[] }>(`/api/my/shifts/${shiftId}/forms`).then((r) => setPeople(r.people)).catch(() => {});
   }, [id, shiftId]);
   if (error) return <Banner>{error}</Banner>;
-  if (!t) return <p className="muted">Loading…</p>;
+  if (!t) return <Skeleton />;
   const back = shiftId ? '/my-shifts' : '/my-documents';
   if (done)
     return (

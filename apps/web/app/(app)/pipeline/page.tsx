@@ -11,6 +11,7 @@ import TopbarAction, { PlusIcon, SearchIcon, avClass, initialsOf } from '@/compo
 import { Banner } from '@/components/ui';
 import { api, Me, roleLabel } from '@/lib/api';
 import { STATUS, STATUS_ORDER, PRIORITY, type PipelineStatus, type Priority } from '@/lib/pipeline';
+import Skeleton from '@/components/Skeleton';
 
 /* Event pipeline board, from the "Project Management Dashboard" Figma design: a column per stage, a card per event. */
 
@@ -458,7 +459,7 @@ function Body({ me }: { me: Me }) {
       {note && <Banner kind="ok" onClose={() => setNote('')}>{note}</Banner>}
 
       {!board ? (
-        <div className="muted">Loading…</div>
+        <Skeleton kind="cards" />
       ) : view === 'board' ? (
         <div className="pm-board" style={{ ['--cols' as string]: cols.length }}>
           {cols.map((s) => {

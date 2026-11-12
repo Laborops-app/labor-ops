@@ -118,3 +118,24 @@ test('remove with Undo, then select several crew and move them to another shift'
   expect(after.shifts.find((s) => s.id === s2)!.assignments.map((x) => x.status)).toEqual(['accepted', 'accepted']);
   expect(after.shifts.find((s) => s.id === shiftId)!.assignments).toHaveLength(0);
 });
+
+test('event page shows and saves times in the venue time zone', async ({ page }) => {
+  await newCompany(page);
+  const day = new Date(Date.now() + 5 * 86400_000).toISOString().slice(0, 10);
+  const ev = (await api<{ event: { id: string } }>(page, 'POST', '/api/events', { name: 'Zone Show', startDate: day, endDate: day })).event.id;
+  await api(page, 'PATCH', `/api/events/${ev}`, { timezone: 'America/Phoenix' });
+  // 9:00 in Phoenix (UTC-7 all year) = 16:00Z
+  await api(page, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Rigger', startsAt: `${day}T16:00:00.000Z`, endsAt: `${day}T22:00:00.000Z`, headcount: 1 });
+  await page.goto(`/events/${ev}`);
+  await expect(page.getByText(/Times in Phoenix time/)).toBeVisible();
+  await expect(page.locator('.cs-card').first()).toContainText('9:00 AM');
+  // Edit the start to 10:00 in place: saved as 17:00Z
+  await page.locator('.cs-card').first().getByRole('button', { name: /^Edit/ }).click();
+  const start = page.locator('.cs-card input[type="datetime-local"]').first();
+  await start.fill(`${day}T10:00`);
+  await page.getByRole('button', { name: 'Save shift' }).click();
+  await expect(page.locator('.cs-card').first()).toContainText('10:00 AM');
+  const saved = await api<{ shifts: { starts_at: string }[] }>(page, 'GET', `/api/events/${ev}`);
+  // (read outside the event page, so not converted)
+  expect(new Date(saved.shifts[0]!.starts_at).toISOString()).toBe(`${day}T17:00:00.000Z`);
+});

@@ -7,11 +7,12 @@ import Shell from '@/components/Shell';
 import Modal from '@/components/Modal';
 import TopbarAction, { PlusIcon, EditIcon, SearchIcon } from '@/components/TopbarAction';
 import { Banner, Empty } from '@/components/ui';
-import { api, fmtDate } from '@/lib/api';
+import { api, fmtDate, peek } from '@/lib/api';
 import RentmanPicker from '@/components/RentmanPicker';
 import CustomerPicker, { customerBody, RentmanSend, useCustomerList, useRentmanSend, type CustomerChoice } from '@/components/CustomerPicker';
 import LocationPick from '@/components/LocationPick';
 import EventCalendar from '@/components/EventCalendar';
+import Skeleton from '@/components/Skeleton';
 
 type Ev = {
   id: string; name: string; client: string | null; venue: string | null; start_date: string; end_date: string; shift_count: number; slots: number; accepted: number; filled?: number; to_rate?: number;
@@ -69,7 +70,7 @@ function CrewBar({ ev }: { ev: Ev }) {
 
 function Body() {
   const router = useRouter();
-  const [list, setList] = useState<Ev[] | null>(null);
+  const [list, setList] = useState<Ev[] | null>(() => peek<{ events: Ev[] }>('/api/events')?.events ?? null);
   const [error, setError] = useState('');
   const [view, setView] = useState<View>('upcoming');
   // List or calendar (?view=calendar), remembered per browser.
@@ -197,7 +198,7 @@ function Body() {
       {layout === 'calendar' ? (
         <EventCalendar query={q} />
       ) : !list ? (
-        <div className="muted">Loading…</div>
+        <Skeleton kind="list" />
       ) : rows.length === 0 ? (
         <Empty>{list.length ? 'No events here.' : 'No events yet. Add one, then add shifts to it.'}</Empty>
       ) : (

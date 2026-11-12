@@ -6,6 +6,7 @@ import { Banner } from '@/components/ui';
 import { api } from '@/lib/api';
 import RentmanOptions from '@/components/RentmanOptions';
 import { askConfirm } from '@/components/Toasts';
+import Skeleton from '@/components/Skeleton';
 
 type RunResult = { created: number; moved: number; datesUpdated: number; flagged: number; skipped: number; built?: number; shiftChanges?: number; errors?: string };
 type St = {
@@ -352,7 +353,7 @@ export function RentmanSettings({ tab, setTab }: { tab: RentmanTab; setTab: (t: 
       setBusy('');
     }
   };
-  if (!s) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
+  if (!s) return error ? <Banner>{error}</Banner> : <Skeleton />;
   const tabs = s.connected ? RENTMAN_TABS : RENTMAN_TABS.slice(0, 1);
   const cur = s.connected ? tab : 'connection';
   return (

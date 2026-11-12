@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, fmtDateTime, fmtTime } from '@/lib/api';
+import Skeleton from '@/components/Skeleton';
 
 type Open = {
   id: string;
@@ -68,7 +69,7 @@ function Body() {
         <h2>Shifts you can pick up</h2>
       </div>
       {!open ? (
-        <div className="muted">Loading…</div>
+        <Skeleton kind="cards" />
       ) : open.length === 0 ? (
         <Empty>No open shifts right now. Check back later.</Empty>
       ) : (

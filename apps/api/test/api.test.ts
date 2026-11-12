@@ -5440,3 +5440,24 @@ test('morning summary: coordinators get one at 7am with the day, open seats and 
   await call(a, 'PUT', '/api/my/notification-prefs', { email: true, sms: false, digest: false });
   assert.equal(await withTenant(tid, (c) => digestFor(c, tid, 'America/Denver', new Date(), true)), 0);
 });
+
+test('event time zone: shifts keep their clock time at the venue, and messages use venue time', async () => {
+  const a = await register('evtz');
+  const tid = await tenantOf(a);
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Phoenix Expo', startDate: '2031-01-20', endDate: '2031-01-20' })).json.event.id;
+  // 8:00 Denver (MST, UTC-7) = 15:00Z
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Rigger', startsAt: '2031-01-20T15:00:00.000Z', endsAt: '2031-01-20T23:00:00.000Z', headcount: 1 })).json.shift.id;
+  assert.equal((await call(a, 'PATCH', `/api/events/${ev}`, { timezone: 'Not/AZone' })).status, 400);
+  assert.equal((await call(a, 'PATCH', `/api/events/${ev}`, { timezone: 'America/Los_Angeles' })).status, 200);
+  const got = (await call(a, 'GET', `/api/events/${ev}`)).json;
+  assert.equal(got.event.timezone, 'America/Los_Angeles');
+  assert.equal(got.companyTimezone, 'America/Denver');
+  // Still 8:00 at the venue: 8:00 PST = 16:00Z
+  assert.equal(new Date(got.shifts.find((s: any) => s.id === sh).starts_at).toISOString(), '2031-01-20T16:00:00.000Z');
+  const { describeShift } = await import('../src/notify');
+  const d = await withTenant(tid, (c) => describeShift(c, tid, sh));
+  assert.match(d!.when, /8:00/);
+  // Back to the company's zone
+  await call(a, 'PATCH', `/api/events/${ev}`, { timezone: null });
+  assert.equal(new Date((await call(a, 'GET', `/api/events/${ev}`)).json.shifts[0].starts_at).toISOString(), '2031-01-20T15:00:00.000Z');
+});

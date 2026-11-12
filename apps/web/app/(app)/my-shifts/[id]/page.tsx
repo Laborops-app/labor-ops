@@ -8,6 +8,7 @@ import Shell, { initials } from '@/components/Shell';
 import { Banner, Pill } from '@/components/ui';
 import RentmanExtras, { useRentmanExtras } from '@/components/RentmanExtras';
 import { api, fmtDate, fmtDateTime, fmtTime, money } from '@/lib/api';
+import Skeleton from '@/components/Skeleton';
 
 type Detail = {
   shift: {
@@ -63,7 +64,7 @@ function Body() {
   };
 
   useTabTitle(d ? `${d.shift.role_name}${d.shift.event_name ? ` · ${d.shift.event_name}` : ''}` : null);
-  if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
+  if (!d) return error ? <Banner>{error}</Banner> : <Skeleton />;
   const s = d.shift;
   const place = [s.venue, s.address].filter(Boolean).join(', ');
   const q = encodeURIComponent(s.address || place);

@@ -4,6 +4,7 @@ import Shell from '@/components/Shell';
 import { Banner } from '@/components/ui';
 import { api } from '@/lib/api';
 import WorkRuleSets from '@/components/WorkRuleSets';
+import Skeleton from '@/components/Skeleton';
 
 type Rules = {
   minRestHours: number; maxDailyHours: number; dailyOtAfter: number; weeklyOtAfter: number; otMultiplier: number;
@@ -37,7 +38,7 @@ function Body() {
     api<Rules>('/api/labor-rules').then(setR).catch((e) => setError(e.message));
     loadStates();
   }, []);
-  if (!r) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
+  if (!r) return error ? <Banner>{error}</Banner> : <Skeleton />;
   const set = (p: Partial<Rules>) => setR({ ...r, ...p });
   const save = async (e: React.FormEvent) => {
     e.preventDefault();

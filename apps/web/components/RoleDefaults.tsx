@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { Banner } from '@/components/ui';
+import Skeleton from '@/components/Skeleton';
 
 type R = { id: string; name: string; headcount: number | null; start: string | null; end: string | null };
 
@@ -39,7 +40,7 @@ export default function RoleDefaults() {
           {err && <Banner onClose={() => setErr('')}>{err}</Banner>}
           {msg && <Banner kind="ok" onClose={() => setMsg('')}>{msg}</Banner>}
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search roles" aria-label="Search roles" style={{ maxWidth: '18rem', margin: '8px 0' }} />
-          {!rows ? <div className="muted">Loading…</div> : (
+          {!rows ? <Skeleton /> : (
             <div className="table-wrap">
               <table className="qa-grid">
                 <thead><tr><th>Role</th><th className="qa-num">People</th><th>Start</th><th>End</th><th aria-label="Save" /></tr></thead>

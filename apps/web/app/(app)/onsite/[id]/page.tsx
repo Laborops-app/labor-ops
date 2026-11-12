@@ -10,6 +10,7 @@ import { api, fmtDate, fmtTime } from '@/lib/api';
 import { useTabTitle } from '@/lib/tabs';
 import TimeEdit from '@/components/TimeEdit';
 import { matchScore } from '@/components/CrewPick';
+import Skeleton from '@/components/Skeleton';
 
 type TE = { id: string; clock_in: string; clock_out: string | null; status: string; locked: boolean; edited: boolean };
 type Person = { assignment_id: string; user_id: string; name: string; phone: string | null; clocked_in_at: string | null; last_clock_out: string | null; is_me: boolean; entries?: TE[] };
@@ -77,7 +78,7 @@ function Body() {
     }
   };
 
-  if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
+  if (!d) return error ? <Banner>{error}</Banner> : <Skeleton />;
   const everyone = d.shifts.flatMap((s) => s.crew);
   const onSite = everyone.filter((p) => p.clocked_in_at).length;
   const done = everyone.filter((p) => !p.clocked_in_at && p.last_clock_out).length;
@@ -196,7 +197,7 @@ function Body() {
 
 /** Everyone confirmed on the event, for a lead: read only; phone numbers for their own team. */
 function EventRoster({ rows, q, filter }: { rows: RosterRow[] | null; q: string; filter: Filter }) {
-  if (!rows) return <div className="muted">Loading…</div>;
+  if (!rows) return <Skeleton />;
   const list = rows
     .map((r) => ({ r, score: q.trim() ? matchScore(r.name, r.role_name, q) : 1 }))
     .filter((x) => x.score > 0 && (filter === 'all' || stateOf(x.r) === filter))

@@ -9,6 +9,7 @@ import { Banner, Empty } from '@/components/ui';
 import { api, fmtDate } from '@/lib/api';
 import { cityOf } from '@/lib/crm';
 import { GridIcon, ListIcon, PinIcon } from '@/components/crm/icons';
+import Skeleton from '@/components/Skeleton';
 
 type Cust = {
   id: string; name: string; parent_id?: string | null; parent_name?: string | null; division_count?: number;
@@ -132,7 +133,7 @@ function Body() {
       {note && <Banner kind="ok" onClose={() => setNote('')}>{note}</Banner>}
 
       {!list ? (
-        <div className="muted">Loading…</div>
+        <Skeleton kind="cards" />
       ) : list.length === 0 ? (
         <Empty>No customers yet. Add one, or import the client names already on your events.</Empty>
       ) : rows.length === 0 ? (

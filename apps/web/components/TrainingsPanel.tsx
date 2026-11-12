@@ -5,6 +5,7 @@ import AcademyCourses from '@/components/AcademyCourses';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { api, fmtDateTime, Me } from '@/lib/api';
 import { askConfirm } from '@/components/Toasts';
+import Skeleton from '@/components/Skeleton';
 
 type App = { id: string; user_id: string; user_name: string; status: string; ratings: string | null };
 type Training = {
@@ -68,7 +69,7 @@ export default function TrainingsPanel({ me, embedded = false }: { me: Me; embed
     setError(''); setNote('');
     try { await fn(); if (msg) setNote(msg); await load(); } catch (e) { setError((e as Error).message); }
   };
-  if (!list) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
+  if (!list) return error ? <Banner>{error}</Banner> : <Skeleton />;
   return (
     <>
       {!embedded && <h1>Trainings</h1>}

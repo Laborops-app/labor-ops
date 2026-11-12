@@ -7,6 +7,7 @@ import { useSearchParams } from 'next/navigation';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { api, ApiError, fmtDateTime, fmtTime, type Me } from '@/lib/api';
 import { askConfirm } from '@/components/Toasts';
+import Skeleton from '@/components/Skeleton';
 
 type Entry = {
   id: string;
@@ -110,7 +111,7 @@ function Body({ me }: { me: Me }) {
       </div>
       <section className="card">
         {!rows ? (
-          <div className="muted">Loading…</div>
+          <Skeleton kind="list" />
         ) : rows.length === 0 ? (
           <Empty>Nothing here.</Empty>
         ) : (

@@ -5,6 +5,7 @@ import { Banner, Empty } from '@/components/ui';
 import { api, money } from '@/lib/api';
 import PayAdjustments from '@/components/PayAdjustments';
 import { askConfirm } from '@/components/Toasts';
+import Skeleton from '@/components/Skeleton';
 
 type Provider = 'adp' | 'gusto' | 'quickbooks';
 type Entry = { id: string; date: string; event: string; role: string; hours: number; reg: number; ot: number; dt: number; pay: number | null; rate: number | null; day: boolean; exported: boolean; minCall?: number;
@@ -100,7 +101,7 @@ function Body() {
       </section>
 
       {!d ? (
-        <div className="muted">Loading…</div>
+        <Skeleton kind="list" />
       ) : (
         <>
           {d.warnings.map((w) => <Banner key={w} kind="info">{w}</Banner>)}

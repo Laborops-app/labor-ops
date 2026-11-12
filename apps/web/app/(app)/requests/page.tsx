@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, fmtDateTime, fmtTime } from '@/lib/api';
+import Skeleton from '@/components/Skeleton';
 
 type Base = { id: string; created_at: string; role_name: string; starts_at: string; ends_at: string; event_id: string; event_name: string; venue: string | null };
 type Claim = Base & { user_name: string };
@@ -47,7 +48,7 @@ function Body() {
       <h1>Requests</h1>
       {error && <Banner onClose={() => setError('')}>{error}</Banner>}
       {!claims ? (
-        <div className="muted">Loading…</div>
+        <Skeleton kind="list" />
       ) : empty ? (
         <Empty>Nothing waiting. When crew claim open shifts or swap shifts, their requests show up here for approval.</Empty>
       ) : (

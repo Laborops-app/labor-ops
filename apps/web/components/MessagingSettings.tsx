@@ -4,6 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import Fold from '@/components/Fold';
 import { Banner, Empty, Pill } from '@/components/ui';
 import { api, fmtDateTime } from '@/lib/api';
+import Skeleton from '@/components/Skeleton';
 
 type Row = { id: string; channel: 'email' | 'sms' | 'push'; category: string; to_addr: string; subject: string | null; status: string; attempts: number; last_error: string | null; created_at: string; user_name: string | null };
 type Reply = { id: string; from_addr: string; contact_name: string | null; body: string; received_at: string; user_name: string | null };
@@ -118,7 +119,7 @@ export default function MessagingSettings() {
   const stat = (ch: string) => `Last 30 days: ${count(ch, 'sent')} sent · ${count(ch, 'failed')} failed · ${count(ch, 'queued') + count(ch, 'sending')} waiting`;
   const dot = (live: boolean) => <span className={`status-dot ${live ? 'live' : 'log'}`} />;
 
-  if (!d) return <>{error && <Banner onClose={() => setError('')}>{error}</Banner>}<div className="muted">Loading…</div></>;
+  if (!d) return <>{error && <Banner onClose={() => setError('')}>{error}</Banner>}<Skeleton /></>;
   const s = d.settings;
 
   return (

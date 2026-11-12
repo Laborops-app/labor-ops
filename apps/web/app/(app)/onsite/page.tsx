@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, fmtDate, fmtTime } from '@/lib/api';
+import Skeleton from '@/components/Skeleton';
 
 type Ev = { id: string; name: string; venue: string | null; start_date: string; end_date: string; kind: 'coordinator' | 'lead'; my_shifts: { role_name: string; starts_at: string; ends_at: string; is_lead: boolean }[] };
 
@@ -24,7 +25,7 @@ function Body() {
       </p>
       {error && <Banner onClose={() => setError('')}>{error}</Banner>}
       {!d ? (
-        <div className="muted">Loading…</div>
+        <Skeleton kind="cards" />
       ) : d.events.length === 0 ? (
         <Empty>{d.coordinator ? 'No events yet. Events you are booked on (with a confirmed shift) show up here.' : 'No events where you are a lead right now.'}</Empty>
       ) : (

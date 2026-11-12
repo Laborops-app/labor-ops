@@ -5,6 +5,7 @@ import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api } from '@/lib/api';
 import PdfViewer from '@/components/docs/PdfViewer';
+import Skeleton from '@/components/Skeleton';
 
 type Mine = {
   onboardingOn: boolean; formsOn: boolean;
@@ -18,7 +19,7 @@ function Body() {
   const [error, setError] = useState('');
   const [view, setView] = useState<{ id: string; name: string } | null>(null);
   useEffect(() => { api<Mine>('/api/my/documents').then(setD).catch((e) => setError(e.message)); }, []);
-  if (!d) return error ? <Banner>{error}</Banner> : <p className="muted">Loading…</p>;
+  if (!d) return error ? <Banner>{error}</Banner> : <Skeleton />;
   const left = d.steps.filter((s) => s.required && !s.submission_id).length;
   const next = d.steps.find((s) => !s.submission_id && s.required) ?? d.steps.find((s) => !s.submission_id);
   return (

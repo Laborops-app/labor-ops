@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner } from '@/components/ui';
 import { api, fmtDate } from '@/lib/api';
+import Skeleton from '@/components/Skeleton';
 
 type PlanInfo = { key: string; name: string; crewLimit: number | null; smsIncluded: number | null; priceLabel: string; buyable?: boolean };
 type Data = {
@@ -42,7 +43,7 @@ function Body() {
       setBusy('');
     }
   };
-  if (!d) return <>{error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>}</>;
+  if (!d) return <>{error ? <Banner>{error}</Banner> : <Skeleton />}</>;
   const b = d.billing;
   const trialLeft = b.trialEndsAt ? Math.ceil((+new Date(b.trialEndsAt) - Date.now()) / 86400_000) : null;
   const subscribed = !!b.subscriptionId && b.status !== 'canceled';

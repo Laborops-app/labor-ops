@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import InvoicePanel from '@/components/InvoicePanel';
 import { Banner } from '@/components/ui';
 import { api, fmtDate, fmtTime } from '@/lib/api';
+import Skeleton from '@/components/Skeleton';
 
 type Shift = { id: string; role_name: string; starts_at: string; ends_at: string; headcount: number; assignments: { id: string; user_name: string; status: string }[] };
 type Detail = { event: { id: string; name: string; venue: string | null; start_date: string; end_date: string; pipeline_status?: string; archived_at?: string | null; client: string | null }; shifts: Shift[] };
@@ -21,7 +22,7 @@ export default function HrEventView() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
-  if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
+  if (!d) return error ? <Banner>{error}</Banner> : <Skeleton />;
   const ev = d.event;
   const d10 = (s: string) => String(s).slice(0, 10);
   const archive = () =>

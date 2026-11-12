@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api, fmtDate, fmtTime } from '@/lib/api';
 import { Banner, Empty, Pill } from '@/components/ui';
+import Skeleton from '@/components/Skeleton';
 
 type Past = { assignment_id: string; role_name: string; event_name: string; venue: string | null; starts_at: string; ends_at: string; is_lead?: boolean; no_show_at: string | null; worked: number; time_status: string | null };
 
@@ -28,7 +29,7 @@ export default function PastShifts() {
     load();
   }, []);
   if (error) return <Banner>{error}</Banner>;
-  if (!list) return <div className="muted">Loading…</div>;
+  if (!list) return <Skeleton />;
   if (!list.length) return <Empty>No past shifts yet.</Empty>;
   return (
     <section className="card past-shifts">

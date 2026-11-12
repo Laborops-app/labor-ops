@@ -5,6 +5,7 @@ import { Banner, Empty } from '@/components/ui';
 import { RentmanInvoices, useRentmanExtras } from '@/components/RentmanExtras';
 import QuoteCompare, { type Comparison, type QuoteChoice } from '@/components/QuoteCompare';
 import { askConfirm } from '@/components/Toasts';
+import Skeleton from '@/components/Skeleton';
 
 type Line = { role: string; date: string; kind: 'regular' | 'overtime' | 'double' | 'day'; qty: number; unit: 'hour' | 'day'; rate: number; amount: number; description: string; qboItemId: string | null };
 type Billing = {
@@ -81,7 +82,7 @@ export default function InvoicePanel({ eventId, isAdmin }: { eventId: string; is
         </Banner>
       )}
       {!b ? (
-        <div className="muted">Loading…</div>
+        <Skeleton />
       ) : (
         <>
           {b.warnings.map((w) => <Banner key={w} kind="info">{w}</Banner>)}

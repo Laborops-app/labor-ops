@@ -5,6 +5,7 @@ import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api, Me } from '@/lib/api';
 import { askConfirm } from '@/components/Toasts';
+import Skeleton from '@/components/Skeleton';
 
 type Skill = { id: string; name: string; payRate: number; dayRate?: number; billRate?: number; dayBillRate?: number; active: boolean; groupId: string | null; isLead?: boolean; ratesFromRentman?: boolean };
 type Group = { id: string; name: string };
@@ -38,7 +39,7 @@ function RatesOnly() {
       <p className="muted">Each role has two rates: the <b>pay rate</b> crew are paid, and the <b>bill rate</b> customers are quoted and invoiced. You can change either. Pay changes apply to every shift of that role from now on.</p>
       {error && <Banner onClose={() => setError('')}>{error}</Banner>}
       {note && <Banner kind="ok" onClose={() => setNote('')}>{note}</Banner>}
-      {!list ? <div className="muted">Loading…</div> : (
+      {!list ? <Skeleton /> : (
         <div className="card" style={{ overflowX: 'auto' }}>
           <table className="table">
             <thead><tr><th>Role</th><th>Pay rate /hr</th><th>Day rate</th><th>Bill rate /hr</th><th>Day bill rate</th><th>Margin</th><th></th></tr></thead>
@@ -290,7 +291,7 @@ function Body() {
           )}
         </div>
         {!list ? (
-          <div className="muted">Loading…</div>
+          <Skeleton />
         ) : list.length === 0 ? (
           <Empty>Nothing here yet. Add your first role above.</Empty>
         ) : (

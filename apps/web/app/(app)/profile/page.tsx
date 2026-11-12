@@ -13,6 +13,7 @@ import { api, ApiError, roleLabel, type Me } from '@/lib/api';
 import SkillPicker, { useSkillNames } from '@/components/SkillPicker';
 import Appearance from '@/components/Appearance';
 import { askConfirm, undoRemove, useGone } from '@/components/Toasts';
+import Skeleton from '@/components/Skeleton';
 
 type User = {
   id: string;
@@ -167,7 +168,7 @@ function Body({ me }: { me: Me }) {
     return { cls: 'open', label: 'Verified' };
   };
 
-  if (!u) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
+  if (!u) return error ? <Banner>{error}</Banner> : <Skeleton />;
   const isCrew = role === 'crew';
 
   return (

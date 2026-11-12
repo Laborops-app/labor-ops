@@ -9,6 +9,7 @@ import CustomerSelect from '@/components/CustomerSelect';
 import { api, money } from '@/lib/api';
 import RentmanQuoteView from '@/components/RentmanQuoteView';
 import { askConfirm } from '@/components/Toasts';
+import Skeleton from '@/components/Skeleton';
 
 type Line = { section: string; description: string; day: string; start: string; end: string; qty: string; hours: string; rate: string };
 type Skill = { id: string; name: string; active: boolean; groupId: string | null; billRate?: number };
@@ -126,7 +127,7 @@ function Body() {
   };
 
   useTabTitle(d ? `Quote #${d.quote.number}` : null);
-  if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
+  if (!d) return error ? <Banner>{error}</Banner> : <Skeleton />;
   // A quote pulled in from Rentman is a read-only copy: change it in Rentman and pull it again.
   if (d.quote.source === 'rentman') return <RentmanQuoteView d={d} onChange={apply} />;
   const q = d.quote;

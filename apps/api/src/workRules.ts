@@ -131,7 +131,7 @@ export function turnaroundHours(t: NonNullable<WorkRules['turnaround']>, prevOut
 export async function recordCancellation(c: PoolClient, tid: string, actorId: string | null, a: { userId: string; status: string; shiftId: string }): Promise<boolean> {
   if (a.status !== 'accepted') return false;
   const s = (await c.query(
-    `SELECT s.id, s.event_id, s.role_name, s.starts_at, s.ends_at, s.pay_type, e.name AS event_name, t.timezone
+    `SELECT s.id, s.event_id, s.role_name, s.starts_at, s.ends_at, s.pay_type, e.name AS event_name, COALESCE(e.timezone, t.timezone) AS timezone
        FROM shifts s JOIN events e ON e.id = s.event_id JOIN tenants t ON t.id = s.tenant_id WHERE s.id = $1`, [a.shiftId])).rows[0];
   if (!s) return false;
   const w = (await rulesForEvents(c, [s.event_id])).get(s.event_id);

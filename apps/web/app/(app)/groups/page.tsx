@@ -4,6 +4,7 @@ import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
 import { api } from '@/lib/api';
 import { askConfirm, undoRemove, useGone } from '@/components/Toasts';
+import Skeleton from '@/components/Skeleton';
 
 type Group = { id: string; name: string; description: string | null; members: { id: string; name: string; active: boolean }[] };
 type Crew = { id: string; name: string; role: string; active: boolean };
@@ -26,7 +27,7 @@ function Body() {
     try { await fn(); await load(); return true; } catch (e) { setError((e as Error).message); return false; }
   };
   const edit = (g: Group) => { setOpen(open === g.id ? null : g.id); setSel(new Set(g.members.map((m) => m.id))); };
-  if (!groups) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
+  if (!groups) return error ? <Banner>{error}</Banner> : <Skeleton />;
   return (
     <>
       <h1>Crew groups</h1>

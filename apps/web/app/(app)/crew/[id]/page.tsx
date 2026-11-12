@@ -10,6 +10,7 @@ import { api, ApiError, FIELD_ROLES, FieldRole, Me, roleLabel } from '@/lib/api'
 import { CrewReviews } from '@/components/Rating';
 import SkillPicker, { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 import { askConfirm, undoRemove, useGone } from '@/components/Toasts';
+import Skeleton from '@/components/Skeleton';
 
 type Member = {
   id: string;
@@ -112,7 +113,7 @@ function Body({ me }: { me: Me }) {
   };
 
   useTabTitle(d?.member.name);
-  if (!d) return error ? <Banner>{error}</Banner> : <div className="muted">Loading…</div>;
+  if (!d) return error ? <Banner>{error}</Banner> : <Skeleton />;
   const m = d.member;
 
   const save = (e: React.FormEvent) => {

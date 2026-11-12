@@ -6,6 +6,7 @@ import Shell from '@/components/Shell';
 import TopbarAction, { PlusIcon, EditIcon, SearchIcon } from '@/components/TopbarAction';
 import { Banner, Empty } from '@/components/ui';
 import { api, fmtDate, money } from '@/lib/api';
+import Skeleton from '@/components/Skeleton';
 
 type Q = { id: string; number: number; title: string; status: string; source?: string; rentman_number?: string | null; rentman_version?: number | null; customer_name: string | null; total: number; valid_until: string | null; sent_at: string | null; created_at: string };
 const VIEWS = ['all', 'draft', 'sent', 'accepted', 'declined'] as const;
@@ -64,7 +65,7 @@ function Body() {
       </div>
 
       {!list ? (
-        <div className="muted">Loading…</div>
+        <Skeleton kind="list" />
       ) : rows.length === 0 ? (
         <Empty>{list.length ? 'No quotes here.' : 'No quotes yet. Open an event and choose Create quote, or start a blank one.'}</Empty>
       ) : (

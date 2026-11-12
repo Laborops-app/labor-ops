@@ -32,6 +32,8 @@ const eventBody = z.object({
   notes: z.string().max(5000).optional().nullable(),
   rentmanProjectId: z.number().int().optional().nullable(),
   customerId: z.string().uuid().optional().nullable(),
+  // The venue's time zone when it isn't the company's (IANA name, e.g. America/Phoenix); empty = the company's.
+  timezone: z.string().trim().max(64).nullable().optional().refine((t) => !t || (() => { try { new Intl.DateTimeFormat('en-US', { timeZone: t }); return true; } catch { return false; } })(), 'Unknown time zone'),
   // Pipeline column and priority for a new event (the board's "+" buttons); changed later with PATCH /api/events/:id/pipeline.
   status: z.enum(STATUSES).optional(),
   priority: z.enum(['low', 'medium', 'high']).optional(),
@@ -509,7 +511,8 @@ export async function eventRoutes(app: FastifyInstance) {
       const st = eventState(ev, fallback);
       const so = await loadStateOt(c, st, rl);
       const overtime = { otAfter: ev.ot_after === null ? null : Number(ev.ot_after), state: ev.state ?? null, effectiveState: st, stateFromAddress: !ev.state && !!st && st !== fallback, companyDailyOt: rl.dailyOt, otMult: so.otMult, dtAfter: so.dtAfter, dtMult: so.dtMult };
-      return { event: ev, shifts: out, phases, groups, overtime, ...(seePay ? { crewRates } : {}) };
+      const companyTz = (await c.query('SELECT timezone FROM tenants WHERE id = $1', [req.user.tid])).rows[0]?.timezone ?? 'America/Denver';
+      return { event: ev, shifts: out, phases, groups, overtime, companyTimezone: companyTz, ...(seePay ? { crewRates } : {}) };
     });
     if (!out) return reply.code(404).send({ error: 'Event not found' });
     return out;
@@ -568,6 +571,14 @@ export async function eventRoutes(app: FastifyInstance) {
       }
       const pick = <T>(v: T | undefined, old: T) => (v === undefined ? old : v);
       const cust = b.customerId === undefined ? undefined : b.customerId ? (await c.query('SELECT id, name FROM customers WHERE id = $1', [b.customerId])).rows[0] ?? null : null;
+      // A new time zone keeps every shift at the same clock time in the venue's zone (8am stays 8am there).
+      if (b.timezone !== undefined && (b.timezone || null) !== (cur.timezone || null)) {
+        const tzOld = cur.timezone || (await c.query('SELECT timezone FROM tenants LIMIT 1')).rows[0].timezone;
+        const tzNew = b.timezone || (await c.query('SELECT timezone FROM tenants LIMIT 1')).rows[0].timezone;
+        if (tzOld !== tzNew)
+          await c.query('UPDATE shifts SET starts_at = (starts_at AT TIME ZONE $2) AT TIME ZONE $3, ends_at = (ends_at AT TIME ZONE $2) AT TIME ZONE $3 WHERE event_id = $1', [eventId, tzOld, tzNew]);
+        await c.query('UPDATE events SET timezone = $2 WHERE id = $1', [eventId, b.timezone || null]);
+      }
       const r = await c.query(
         `UPDATE events SET name = $2, client = $3, venue = $4, address = $5, start_date = $6, end_date = $7, notes = $8, customer_id = $9 WHERE id = $1 RETURNING *`,
         [eventId, b.name ?? cur.name, (cust ? cust.name : pick(b.client, cur.client)) || null, pick(b.venue, cur.venue) || null, pick(b.address, cur.address) || null, startDate, endDate, pick(b.notes, cur.notes), cust === undefined ? cur.customer_id : cust?.id ?? null],
