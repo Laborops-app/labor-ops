@@ -30,7 +30,7 @@ function Body({ me }: { me: Me }) {
     return (
       <section className="card doc-done">
         <div className="clk-badge" aria-hidden="true">✓</div>
-        <h1 role="status">{t.name} is done</h1>
+        <h1 aria-live="polite">{t.name} is done</h1>
         <p className="muted">The signed PDF is saved. {t.purpose === 'onboarding' ? (done.left ? `${done.left} onboarding ${done.left === 1 ? 'step' : 'steps'} left.` : 'That was the last onboarding step.') : 'Your coordinator can see it on the event.'}</p>
         <div className="row" style={{ gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
           <Link className="btn primary" href={back}>{t.purpose === 'onboarding' && done.left ? 'Next step' : shiftId ? 'Back to my shifts' : 'Back to my documents'}</Link>

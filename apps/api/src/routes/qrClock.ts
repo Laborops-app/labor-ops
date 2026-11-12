@@ -155,6 +155,8 @@ export async function qrClockRoutes(app: FastifyInstance) {
         if (distance === null) return { code: 409, reason: 'need_location', error: 'Allow location access so we can check you’re at the venue, then scan again.' };
         if (distance - Math.min(b.accuracy ?? 0, 100) > ev.geofence_m) return { code: 409, reason: 'geofence', error: `You’re about ${distance >= 1000 ? (distance / 1000).toFixed(1) + ' km' : distance + ' m'} from ${ev.name}. Scan the poster at the venue.` };
       }
+      // Two scans at the same moment (a double tap, a camera app opening the link twice) are handled one after the other.
+      await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`qr:${req.user.sub}`]);
       const now = new Date();
       // Already clocked in on this event: this scan clocks out.
       const open = (

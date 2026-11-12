@@ -5200,3 +5200,19 @@ test('documents and forms: upload a PDF, place fields, sign in the app; onboardi
   assert.equal((await call(b, 'GET', `/api/docs/submissions/${done.json.submissionId}/pdf`)).status, 404);
   assert.equal((await call(b, 'GET', `/api/docs/templates/${tpl}`)).status, 404);
 });
+
+test('QR clock-in: two scans at the same moment clock in once', async () => {
+  const a = await register('qrtwice');
+  const c1 = await mkCrew(a, 'qrtwicec');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'QR Twice', startDate: new Date().toISOString().slice(0, 10), endDate: new Date().toISOString().slice(0, 10) })).json.event.id;
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: start(0.5), endsAt: start(8), headcount: 1 })).json.shift.id;
+  await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, confirmed: true });
+  await call(a, 'PUT', `/api/events/${ev}/qr`, { on: true });
+  const { createHmac } = await import('node:crypto');
+  const secret = (await adminQuery('SELECT qr_secret FROM events WHERE id = $1', [ev])).rows[0].qr_secret as string;
+  const code = createHmac('sha256', secret).update(`${ev}:${Math.floor(Date.now() / 30_000)}`).digest('base64url').slice(0, 12);
+  const both = await Promise.all([1, 2].map(() => call(c1.session, 'POST', '/api/time/qr', { eventId: ev, code })));
+  assert.deepEqual(both.map((r) => r.status).sort(), [200, 201]);
+  assert.equal(both.find((r) => r.status === 200)!.json.already, true);
+  assert.equal((await adminQuery('SELECT count(*)::int AS n FROM time_entries WHERE user_id = $1', [c1.id])).rows[0].n, 1);
+});

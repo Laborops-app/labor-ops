@@ -14,7 +14,8 @@ export default function QrPanel({ eventId, onClockSettings }: { eventId: string;
   if (!d) return err ? <p className="error" role="alert">{err}</p> : <p className="muted">Loading…</p>;
   const toggle = async (on: boolean) => {
     setErr(''); setMsg('');
-    try { await api(`/api/events/${eventId}/qr`, { method: 'PUT', body: { on } }); await load(); setMsg(on ? 'QR clock-in is on for this event.' : 'QR clock-in is off. Old codes no longer work.'); } catch (e) { setErr((e as Error).message); }
+    setD({ ...d, on }); // flip straight away; put it back if the server says no
+    try { await api(`/api/events/${eventId}/qr`, { method: 'PUT', body: { on } }); await load(); setMsg(on ? 'QR clock-in is on for this event.' : 'QR clock-in is off. Old codes no longer work.'); } catch (e) { setErr((e as Error).message); setD({ ...d, on: !on }); }
   };
   const copy = async () => {
     try { await navigator.clipboard.writeText(d.screenLink!); setMsg('Screen link copied. Send it to whoever runs the screen at the venue.'); } catch { setMsg(d.screenLink!); }

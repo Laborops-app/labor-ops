@@ -38,7 +38,12 @@ function Body({ me }: { me: Me }) {
     setError(''); setOk(''); setBusy(true);
     try { await fn(); if (msg) setOk(msg); load(); return true; } catch (e) { setError((e as Error).message); return false; } finally { setBusy(false); }
   };
-  const setting = (p: Partial<Settings>, msg: string) => run(() => api('/api/docs/settings', { method: 'PUT', body: p }), msg);
+  // Switches flip straight away; if saving fails they go back and the error shows.
+  const setting = async (p: Partial<Settings>, msg: string) => {
+    const before = st;
+    setSt((s) => (s ? { ...s, ...p } : s));
+    if (!(await run(() => api('/api/docs/settings', { method: 'PUT', body: p }), msg))) setSt(before);
+  };
   const upload = async (f: File) => {
     if (f.type !== 'application/pdf' && !f.name.toLowerCase().endsWith('.pdf')) return setError('Choose a PDF file. To use a Word document, save it as a PDF first.');
     if (f.size > 10 * 1024 * 1024) return setError('That PDF is over 10 MB. Save a smaller copy and try again.');
@@ -163,7 +168,7 @@ function Body({ me }: { me: Me }) {
       </div>
       <section className="card">
         <label className="qrp-toggle">
-          <input type="checkbox" checked={on} disabled={!isAdmin || busy} onChange={(e) => setting(tab === 'onboarding' ? { onboardingOn: e.target.checked } : { formsOn: e.target.checked }, e.target.checked ? 'Turned on.' : 'Turned off. Signed copies are kept.')} />
+          <input type="checkbox" checked={on} disabled={!isAdmin} onChange={(e) => setting(tab === 'onboarding' ? { onboardingOn: e.target.checked } : { formsOn: e.target.checked }, e.target.checked ? 'Turned on.' : 'Turned off. Signed copies are kept.')} />
           <span>
             <b>{tab === 'onboarding' ? 'Use an onboarding packet' : 'Use forms and checklists on shifts'}</b>
             <span className="muted small">

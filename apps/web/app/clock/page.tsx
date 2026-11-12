@@ -1,5 +1,5 @@
 'use client';
-import { Suspense, useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Logo from '@/components/Logo';
@@ -16,11 +16,13 @@ function Clock() {
   const [res, setRes] = useState<Result | null>(null);
   const [err, setErr] = useState<{ message: string; reason?: string } | null>(null);
   const [busy, setBusy] = useState(true);
+  const sent = useRef(false);
   const scan = useCallback(async (withLocation: boolean) => {
     setBusy(true); setErr(null);
     try {
       // Location is only needed for a printed poster; ask for it when the server says so.
       const pos = withLocation ? await getPosition(10000).catch(() => null) : null;
+      setErr(null);
       setRes(await api<Result>('/api/time/qr', { body: { eventId: e, code: c, ...(pos ? { lat: pos.lat, lng: pos.lng, accuracy: pos.accuracy } : {}) } }));
     } catch (x) {
       const a = x as ApiError;
@@ -31,6 +33,9 @@ function Clock() {
   }, [e, c, router]);
   useEffect(() => {
     if (!e || !c) { setErr({ message: 'This link is missing its code. Scan the code at the venue again.' }); setBusy(false); return; }
+    // One scan per page load, even if React runs this twice or the camera app opens the link twice.
+    if (sent.current) return;
+    sent.current = true;
     scan(false);
   }, [e, c, scan]);
   const hours = res?.since ? Math.round(((+new Date(res.at) - +new Date(res.since)) / 3600_000) * 10) / 10 : null;
@@ -42,7 +47,7 @@ function Clock() {
         {res && (
           <>
             <div className={`clk-badge ${res.action}`} aria-hidden="true">{res.action === 'in' ? '✓' : '→'}</div>
-            <h1 role="status">{res.action === 'in' ? (res.already ? 'You’re already clocked in' : 'You’re clocked in') : 'You’re clocked out'}</h1>
+            <h1 aria-live="polite">{res.action === 'in' ? (res.already ? 'You’re already clocked in' : 'You’re clocked in') : 'You’re clocked out'}</h1>
             <p className="clk-sub">{fmtTime(res.at)}{hours !== null ? ` · ${hours} h on the clock` : ''}</p>
             <div className="clk-shift">
               <b>{res.shift.role}</b>
@@ -53,7 +58,7 @@ function Clock() {
             {res.action === 'in' && <p className="muted small">Scan the code again when you leave to clock out.</p>}
           </>
         )}
-        {err && (
+        {err && !res && (
           <>
             <div className="clk-badge bad" aria-hidden="true">!</div>
             <h1>Not clocked in</h1>

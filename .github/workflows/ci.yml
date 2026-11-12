@@ -43,10 +43,38 @@ jobs:
       - run: npm ci
       - run: npm run build -w apps/web
 
+  browser:
+    name: Browser tests
+    runs-on: ubuntu-latest
+    env:
+      E2E_DATABASE_ADMIN_URL: postgres://postgres:postgres@localhost:5432/laborops_e2e
+      E2E_DATABASE_URL: postgres://laborops_app:laborops_app@localhost:5432/laborops_e2e
+      APP_DB_PASSWORD: laborops_app
+      E2E_WEB: start
+    steps:
+      - name: Start PostgreSQL
+        run: |
+          sudo systemctl start postgresql.service
+          until pg_isready -h localhost; do sleep 1; done
+          sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'postgres';"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # The web app sends /api to the test API, so it is built pointing there.
+      - run: npm run build -w apps/web
+        env: { API_URL: 'http://localhost:4500' }
+      - run: npm run e2e
+      - name: Keep the report when something fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with: { name: browser-test-report, path: 'e2e-report/', retention-days: 14 }
+
   deploy:
     name: Deploy to demo server
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    needs: [api, web]
+    needs: [api, web, browser]
     runs-on: ubuntu-latest
     concurrency:
       group: deploy-demo
