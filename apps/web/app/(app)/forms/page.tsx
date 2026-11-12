@@ -71,6 +71,11 @@ function Body({ me }: { me: Me }) {
     [next[i], next[j]] = [next[j]!, next[i]!];
     run(() => api('/api/docs/templates-order', { method: 'PUT', body: { ids: next.map((t) => t.id) } }));
   };
+  const starter = () =>
+    run(async () => {
+      const r = await api<{ added: string[]; skipped: number }>('/api/docs/starter-packet', { body: {} });
+      setOk(r.added.length ? `Added ${r.added.length} document${r.added.length === 1 ? '' : 's'}: ${r.added.join(', ')}. Open each one to read it; turn off or remove any you don’t want.` : 'The starter packet is already in your list.');
+    });
   if (!st) return <p className="muted">Loading…</p>;
 
   // ---------- editing one document or form ----------
@@ -182,8 +187,16 @@ function Body({ me }: { me: Me }) {
             <button type="button" className="btn primary small" disabled={busy} onClick={() => file.current?.click()}>+ Upload a PDF</button>
             <input ref={file} type="file" accept="application/pdf,.pdf" className="sr-only" aria-label="Upload a PDF" onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} />
             <button type="button" className="btn small" onClick={() => setDraft({ id: null, name: '', kind: 'form', purpose: tab, fields: [], settings: DEFAULT_SETTINGS })}>+ Build a form</button>
+            {tab === 'onboarding' && (
+              <button type="button" className="btn small" disabled={busy} title="Five ready-made PDFs with the fill-in and signature fields already placed" onClick={starter}>+ Add the starter packet</button>
+            )}
           </div>
         </div>
+        {tab === 'onboarding' && (
+          <p className="muted small" style={{ margin: '10px 0 0' }}>
+            The starter packet is general wording, not legal advice: have whoever handles your HR or legal matters read it before you use it. It leaves out tax forms (W-4, W-9, I-9) and bank details; upload the official forms yourself, and collect bank details through your payroll provider.
+          </p>
+        )}
         {tab === 'shift' && (
           <p className="small" style={{ margin: '10px 0 0' }}>
             <span className="muted">Start from a template: </span>
@@ -193,7 +206,7 @@ function Body({ me }: { me: Me }) {
           </p>
         )}
         {items.length === 0 ? (
-          <Empty>{tab === 'onboarding' ? 'Nothing in the packet yet. Upload a PDF (a handbook, a W-9, a waiver) or build a form.' : 'No forms yet. Build one, start from a template, or upload a PDF.'}</Empty>
+          <Empty>{tab === 'onboarding' ? 'Nothing in the packet yet. Add the starter packet (five ready-made documents), upload your own PDF (a handbook, a W-9, a waiver), or build a form.' : 'No forms yet. Build one, start from a template, or upload a PDF.'}</Empty>
         ) : (
           <ul className="doc-list">
             {items.map((t, i) => (

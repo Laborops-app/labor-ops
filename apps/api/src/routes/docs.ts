@@ -6,6 +6,7 @@ import { authenticate, guard } from '../auth';
 import { pool, withTenant, audit } from '../db';
 import { appliesTo, formField, formPdf, missing, onboardingLeft, pdfField, pdfPageCount, shiftFormsFor, signPdf, signerOf, submitBody, templateSettings, type FormField, type PdfField } from '../docs';
 import { notify, notifyStaff } from '../notify';
+import { STARTER_NAMES, starterPacket } from '../starterPacket';
 
 const uuid = z.string().uuid();
 const idParam = z.object({ id: uuid });
@@ -162,6 +163,26 @@ export async function docRoutes(app: FastifyInstance) {
     });
     return n ? { ok: true } : reply.code(404).send({ error: 'Document not found' });
   });
+
+  // A ready-made onboarding packet: generic PDFs with the fields already placed. Ones already in the packet are skipped.
+  app.post('/api/docs/starter-packet', { preHandler: mgr }, async (req) =>
+    withTenant(req.user.tid, async (c) => {
+      const company = (await c.query('SELECT name FROM tenants WHERE id = $1', [req.user.tid])).rows[0]?.name ?? 'the company';
+      const have = new Set((await c.query("SELECT lower(name) AS n FROM doc_templates WHERE purpose = 'onboarding'")).rows.map((r) => r.n as string));
+      let sort = (await c.query("SELECT COALESCE(max(sort), 0) AS n FROM doc_templates WHERE purpose = 'onboarding'")).rows[0].n as number;
+      const added: string[] = [];
+      for (const d of await starterPacket(company)) {
+        if (have.has(d.name.toLowerCase())) continue;
+        await c.query(
+          `INSERT INTO doc_templates (tenant_id, name, kind, purpose, data, file_name, size, page_count, fields, settings, sort, created_by) VALUES ($1,$2,'pdf','onboarding',$3,$4,$5,$6,$7,$8,$9,$10)`,
+          [req.user.tid, d.name, d.pdf, d.fileName, d.pdf.length, d.pages, JSON.stringify(d.fields), JSON.stringify(templateSettings.parse({})), ++sort, req.user.sub],
+        );
+        added.push(d.name);
+      }
+      if (added.length) await audit(c, req.user.tid, req.user.sub, 'docs.starter_packet', 'doc_template', null, { added });
+      return { added, skipped: STARTER_NAMES.length - added.length };
+    }),
+  );
 
   // ----- filling in and signing -----
   app.post('/api/docs/templates/:id/submit', { preHandler: authenticate, bodyLimit: 8 * 1024 * 1024 }, async (req, reply) => {

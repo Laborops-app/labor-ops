@@ -5168,6 +5168,14 @@ test('documents and forms: upload a PDF, place fields, sign in the app; onboardi
   assert.equal(evForms.shifts[0].forms[0].done, 1);
   assert.equal(evForms.submissions[0].flagged, true);
   assert.equal((await call(c1.session, 'POST', '/api/time/clock-in', { assignmentId: asg })).status, 201);
+  // Starter packet: five ready-made PDFs with fields placed; adding it twice adds nothing new
+  const sp = (await call(a, 'POST', '/api/docs/starter-packet', {})).json;
+  assert.equal(sp.added.length, 5);
+  assert.deepEqual((await call(a, 'POST', '/api/docs/starter-packet', {})).json, { added: [], skipped: 5 });
+  const details = (await call(a, 'GET', '/api/docs/templates?purpose=onboarding')).json.templates.find((t: { name: string }) => t.name === 'Your details and emergency contact');
+  assert.ok(details.fields.some((f: { type: string }) => f.type === 'signature') && details.fields.filter((f: { type: string }) => f.type === 'text').length >= 10);
+  const ans = Object.fromEntries(details.fields.filter((f: { type: string }) => f.type === 'text').map((f: { id: string }) => [f.id, 'x']));
+  assert.equal((await call(c1.session, 'POST', `/api/docs/templates/${details.id}/submit`, { answers: ans, signature: PNG, consent: true })).status, 201);
   // Other people and other companies can't read a signed copy
   const c2 = await mkCrew(a, 'ds2');
   assert.equal((await call(c2.session, 'GET', `/api/docs/submissions/${done.json.submissionId}/pdf`)).status, 404);
