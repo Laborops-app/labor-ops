@@ -1592,9 +1592,14 @@ function Body({ me }: { me: Me }) {
               </select>
             )}
             {rm?.linked && rm.project && (
-              <button type="button" className="evh-chip" onClick={() => setSettings('rentman')} title="Open the linked Rentman project">
+              <button type="button" className="evh-chip" onClick={() => setSettings('rentman')} title="The linked Rentman project: equipment, crew build and options">
                 Rentman {rm.project.number ? `#${rm.project.number}` : rm.project.name}
               </button>
+            )}
+            {rm?.linked && rm.url && (
+              <a className="evh-chip" href={rm.url} target="_blank" rel="noopener noreferrer" title="Open this project in Rentman (new tab)">
+                Open in Rentman ↗
+              </a>
             )}
             {ev.staffing_draft && (
               <span className="evh-chip quiet" title="Picks are kept as a plan. Nobody is told until you press Publish crew.">
@@ -1688,6 +1693,7 @@ function Body({ me }: { me: Me }) {
                 ...((me.role === 'admin' || me.canAdjustRates) ? [{ label: 'Crew pay', icon: 'pay', hint: 'Personal rates for this event', onClick: () => setSettings('pay') }] : []),
                 ...(ev.staffing_draft && !plannedCount ? [{ label: 'Stop building quietly', icon: 'publish', hint: 'Picks go out straight away again', onClick: () => { run(() => api(`/api/events/${id}/build-quietly`, { method: 'PUT', body: { on: false } }), 'Picks now go out straight away.'); } }] : []),
                 'divider',
+                ...(rm?.linked && rm.url ? [{ label: 'Open in Rentman', icon: 'link', hint: 'The project in Rentman, in a new tab', onClick: () => { window.open(rm.url!, '_blank', 'noopener'); } }] : []),
                 ...(rm && (rm.connected || rm.linked) ? [{ label: rm.linked && rm.project ? `Rentman · ${rm.project.number ? `#${rm.project.number}` : rm.project.name}` : 'Link a Rentman project', icon: 'link', onClick: () => setSettings('rentman') }] : []),
                 { label: 'Create a quote', icon: 'quote', onClick: () => api<{ quote: { id: string } }>('/api/quotes', { body: { eventId: id } }).then((r) => router.push(`/quotes/${r.quote.id}`)).catch((e) => setError(e.message)) },
                 { label: 'Event chat', icon: 'chat', onClick: () => api<{ id: string }>('/api/chat/channels', { body: { eventId: id } }).then((r) => router.push(`/chat?c=${r.id}`)).catch((e) => setError(e.message)) },

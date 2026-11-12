@@ -4968,6 +4968,17 @@ test('one event per Rentman project: pulls running together, linking and creatin
   assert.equal(link.status, 409);
 });
 
+test('event page links to its Rentman project once the account name is known', async () => {
+  const a = await register('rmurl');
+  const tid = await tenantOf(a);
+  await withTenant(tid, (c) => c.query("INSERT INTO rentman_projects (tenant_id, id, number, name) VALUES ($1, 4412, 1201, 'Linked show')", [tid]));
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Linked show', startDate: '2031-11-13', endDate: '2031-11-13' })).json.event.id;
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/rentman`, { projectId: 4412 })).status, 200);
+  assert.equal((await call(a, 'GET', `/api/events/${ev}/rentman`)).json.url, null);
+  assert.equal((await call(a, 'PUT', '/api/rentman/options', { accountName: 'https://SummitStage.rentmanapp.com/#/dashboard' })).status, 200);
+  assert.equal((await call(a, 'GET', `/api/events/${ev}/rentman`)).json.url, 'https://summitstage.rentmanapp.com/#/projects/4412/details');
+});
+
 test('Rentman role names: mapping renames existing shifts (so rates apply), Remove hides a name for good, unnamed rates are not listed', async () => {
   const a = await register('rmmap');
   const tid = (await adminQuery('SELECT tenant_id FROM users WHERE id = $1', [a.id])).rows[0].tenant_id as string;

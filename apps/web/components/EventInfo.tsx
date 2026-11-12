@@ -334,6 +334,8 @@ export function Clocking({ ev, onSaved, onError }: { ev: EventFull; onSaved: () 
 
 export type RmView = {
   linked: boolean; connected: boolean; warning?: string;
+  // The project's address in Rentman, when the account name is known.
+  url?: string | null;
   request?: { id: number; status: 'open' | 'accepted' | 'declined'; pushedAt: string | null } | null;
   project?: { id: number; number: number | null; name: string; customer: string | null; location: string | null; reference: string | null; project_type: string | null; tags: string | null; planperiod_start: string | null; planperiod_end: string | null; usageperiod_start: string | null; usageperiod_end: string | null; synced_at: string } | null;
   equipment?: { item_id: number; name: string; quantity: string | null; unit_price?: string | null; is_option: boolean; period_start: string | null; period_end: string | null; remark: string | null; group_id: number | null; group_name: string | null; group_sort: number | null; parent_id: number | null }[];
@@ -377,11 +379,17 @@ export function RentmanCard({ eventId, isAdmin, onError, onView, onShifts }: { e
         </span>
         {v.linked && (
           <span className="row">
+            {v.url && <a className="btn small primary" href={v.url} target="_blank" rel="noopener noreferrer">Open in Rentman ↗</a>}
             <button className="btn small" disabled={busy} onClick={() => run(() => api<RmView>(`/api/events/${eventId}/rentman/refresh`, { body: {} }))}>Refresh equipment</button>
             <button className="btn ghost small" disabled={busy} onClick={() => confirm('Unlink this event from its Rentman project?') && run(() => api<RmView>(`/api/events/${eventId}/rentman`, { method: 'PUT', body: { projectId: null } }))}>Unlink</button>
           </span>
         )}
       </div>
+      {v.linked && !v.url && (
+        <p className="muted small" style={{ margin: '8px 0 0' }}>
+          To open this project in Rentman from here, {isAdmin ? <>add your Rentman account name under <a href="/integrations">Integrations › Rentman</a></> : 'ask an admin to add the Rentman account name under Integrations › Rentman'} (the first part of your Rentman address, before .rentmanapp.com).
+        </p>
+      )}
       {!v.linked && v.connected && (
         <div className={`rm-send ${v.request?.status ?? ''}`}>
           {!v.request ? (

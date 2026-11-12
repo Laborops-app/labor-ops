@@ -6,7 +6,7 @@ import { syncProjects, checkEventRequest, checkOpenRequests, clearToken, getToke
 import { importRentmanQuote } from '../quoteCompare';
 import { addProjectNow, findRentman, loadPipelineSettings, pullRentman, savePipelineSettings } from '../rentmanPipeline';
 import { buildFromRentman, keepConflict, renameMappedShifts, resyncRoleNames, suggestRole } from '../rentmanBuild';
-import { loadOptions, OPTION_KEYS, saveOptions, verifyDigest, webhookToken } from '../rentmanOptions';
+import { loadOptions, OPTION_KEYS, saveOptions, verifyDigest, webhookToken, rentmanProjectUrl } from '../rentmanOptions';
 import { queueRentman } from '../rentmanWebhook';
 import { syncCrew, syncRates, unlockRates } from '../rentmanSync';
 import { pool } from '../db';
@@ -148,7 +148,9 @@ export async function rentmanRoutes(app: FastifyInstance) {
     const project = (await c.query('SELECT * FROM rentman_projects WHERE id = $1', [ev.rentman_project_id])).rows[0] ?? null;
     const equipment = (await c.query('SELECT item_id, name, quantity, unit_price, is_option, period_start, period_end, remark, group_id, group_name, group_sort, parent_id FROM rentman_equipment WHERE project_id = $1 ORDER BY sort', [ev.rentman_project_id])).rows
       .map((r: any) => (isAdmin ? r : { ...r, unit_price: undefined }));
-    return { linked: true, connected: !!(await getToken(c)), project, equipment, request };
+    // The project's address in Rentman's web app, once the account name is known (set under Integrations or learned from webhooks).
+    const account = (await c.query('SELECT account_name FROM rentman_settings LIMIT 1')).rows[0]?.account_name ?? null;
+    return { linked: true, connected: !!(await getToken(c)), project, equipment, request, url: rentmanProjectUrl(account, ev.rentman_project_id) };
   };
 
   app.get('/api/events/:id/rentman', { preHandler: mgr }, async (req, reply) => {
