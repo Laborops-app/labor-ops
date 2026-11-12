@@ -1,41 +1,10 @@
 'use client';
 import { useEffect, useState } from 'react';
+import IosInstallGuide from '@/components/IosInstallGuide';
+import { isAndroid, isIos, isStandalone } from '@/lib/device';
 
-type Prompt = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> };
-let saved: Prompt | null = null; // survives page-to-page navigation
-
-/** "Install app" button: shows only where the browser can install LaborOps (Chrome, Edge, Android) and it isn't installed yet. */
-export function useInstall() {
-  const [prompt, setPrompt] = useState<Prompt | null>(saved);
-  const [installed, setInstalled] = useState(false);
-  useEffect(() => {
-    setInstalled(matchMedia('(display-mode: standalone)').matches);
-    const before = (e: Event) => {
-      e.preventDefault();
-      saved = e as Prompt;
-      setPrompt(saved);
-    };
-    const done = () => {
-      saved = null;
-      setPrompt(null);
-      setInstalled(true);
-    };
-    window.addEventListener('beforeinstallprompt', before);
-    window.addEventListener('appinstalled', done);
-    return () => {
-      window.removeEventListener('beforeinstallprompt', before);
-      window.removeEventListener('appinstalled', done);
-    };
-  }, []);
-  const install = async () => {
-    if (!prompt) return;
-    await prompt.prompt();
-    await prompt.userChoice.catch(() => undefined);
-    saved = null;
-    setPrompt(null);
-  };
-  return { canInstall: !!prompt && !installed, installed, install };
-}
+export { useInstall } from '@/components/useInstall';
+import { useInstall } from '@/components/useInstall';
 
 export default function InstallApp({ className = 'btn small' }: { className?: string }) {
   const { canInstall, install } = useInstall();
@@ -47,9 +16,21 @@ export default function InstallApp({ className = 'btn small' }: { className?: st
   );
 }
 
-/** Profile-page card; hidden where installing isn't possible (the browser's own menu still works). */
+/** Profile-page card; hidden where installing isn't possible (the browser's own menu still works). On an iPhone it opens the picture guide. */
 export function InstallCard() {
   const { canInstall, install } = useInstall();
+  const [ios, setIos] = useState(false);
+  const [guide, setGuide] = useState(false);
+  useEffect(() => setIos((isIos() || (isAndroid() && !canInstall)) && !isStandalone()), [canInstall]);
+  if (ios)
+    return (
+      <section className="card">
+        <h2>Add to your Home Screen</h2>
+        <p className="muted small">LaborOps opens like an app and can show shift alerts once it’s on your home screen.</p>
+        <button className="btn primary small" onClick={() => setGuide(true)}>Show me how</button>
+        <IosInstallGuide open={guide} onClose={() => setGuide(false)} />
+      </section>
+    );
   if (!canInstall) return null;
   return (
     <section className="card">

@@ -68,3 +68,63 @@ test('dashboard shows staffing the same way as the event page; crew list has a r
   const wrap = page.locator('.table-wrap');
   expect(await wrap.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
 });
+
+test('first sign-in on an iPhone shows the picture guide to add LaborOps to the Home Screen, once', async ({ browser, page }) => {
+  await newCompany(page);
+  const sam = await newCrew(page, 'Sam Okafor');
+  const ctx = await browser.newContext({
+    viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true,
+    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1',
+  });
+  const p = await ctx.newPage();
+  await p.goto('/login');
+  await p.getByLabel(/email/i).fill(sam.email);
+  await p.getByLabel(/password/i).fill('password123');
+  await p.keyboard.press('Enter');
+  const guide = p.getByRole('dialog', { name: 'Add LaborOps to your Home Screen' });
+  await expect(guide).toBeVisible();
+  await expect(guide.getByRole('heading', { name: 'Tap ••• then Share' })).toBeVisible();
+  await expect(guide.getByRole('img', { name: /three-dot button/ })).toBeVisible();
+  for (const t of ['Tap Add to Home Screen', 'Tap Add', 'Open it from your Home Screen']) {
+    await guide.getByRole('button', { name: 'Next' }).click();
+    await expect(guide.getByRole('heading', { name: t })).toBeVisible();
+  }
+  await guide.getByRole('button', { name: 'Got it' }).click();
+  await expect(guide).toBeHidden();
+  // Not again on this phone, but it can be opened from My shifts
+  await p.reload();
+  await expect(p.locator('.iosg')).toHaveCount(0);
+  await p.goto('/my-shifts');
+  await p.getByRole('button', { name: 'Show me how' }).click();
+  await expect(p.getByRole('dialog', { name: 'Add LaborOps to your Home Screen' })).toBeVisible();
+  await ctx.close();
+});
+
+test('first sign-in on an Android phone: the home screen guide, then one tap to turn on shift alerts', async ({ browser, page }) => {
+  await newCompany(page);
+  const ari = await newCrew(page, 'Ari Dawson');
+  const ctx = await browser.newContext({
+    viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true,
+    userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+  });
+  // A phone that hasn't been asked about notifications yet (headless Chromium reports "denied")
+  await ctx.addInitScript(() => { Object.defineProperty(Notification, 'permission', { get: () => 'default' }); });
+  const p = await ctx.newPage();
+  await p.goto('/login');
+  await p.getByLabel(/email/i).fill(ari.email);
+  await p.getByLabel(/password/i).fill('password123');
+  await p.keyboard.press('Enter');
+  const guide = p.getByRole('dialog', { name: 'Add LaborOps to your Home Screen' });
+  await expect(guide.getByRole('heading', { name: 'Tap ⋮ at the top right' })).toBeVisible();
+  await expect(guide.getByRole('img', { name: /three-dot menu button at the top right/ })).toBeVisible();
+  // The alerts question waits until the guide is closed
+  await expect(p.getByRole('dialog', { name: 'Turn on shift alerts' })).toHaveCount(0);
+  await guide.getByRole('button', { name: 'Not now' }).click();
+  const alerts = p.getByRole('dialog', { name: 'Turn on shift alerts' });
+  await expect(alerts.getByRole('button', { name: 'Turn on alerts' })).toBeVisible();
+  await alerts.getByRole('button', { name: 'Not now' }).click();
+  await expect(alerts).toBeHidden();
+  await p.reload();
+  await expect(p.locator('.iosg')).toHaveCount(0);
+  await ctx.close();
+});

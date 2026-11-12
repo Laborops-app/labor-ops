@@ -6,6 +6,8 @@ import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { api, ApiError, homeFor, Me, Role, roleLabel } from '@/lib/api';
 import ThemeToggle from '@/components/ThemeToggle';
 import InstallApp, { InstallPopup } from '@/components/InstallApp';
+import IosInstallGuide from '@/components/IosInstallGuide';
+import AlertsPrompt from '@/components/AlertsPrompt';
 import PunchSync from '@/components/PunchSync';
 import DemoBanner from '@/components/DemoBanner';
 import NotificationBell from '@/components/NotificationBell';
@@ -462,6 +464,8 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
           <div id="topbar-actions" className="topbar-actions" />
           <InstallApp className="btn small install-btn" />
           <InstallPopup />
+          <IosInstallGuide />
+          <AlertsPrompt />
           <ThemeToggle />
           <NotificationBell />
           <Link href="/profile" className="me" aria-label={`My profile (${me.name}, ${roleLabel(me.role)})`} title={`${me.name} · ${me.company ? `${me.company} · ` : ''}${roleLabel(me.role)}`}>

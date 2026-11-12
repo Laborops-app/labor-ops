@@ -1,17 +1,16 @@
 'use client';
 import { useEffect, useState } from 'react';
 import BrowserPush from '@/components/BrowserPush';
-import { useInstall } from '@/components/InstallApp';
+import { useInstall } from '@/components/useInstall';
+import IosInstallGuide from '@/components/IosInstallGuide';
 
 const KEY = 'lo-install-hint';
 const SNOOZE = 14 * 24 * 3600_000;
 const snoozed = (k: string) => { try { return Date.now() - Number(localStorage.getItem(`${KEY}:${k}`) || 0) < SNOOZE; } catch { return false; } };
 const snooze = (k: string) => { try { localStorage.setItem(`${KEY}:${k}`, String(Date.now())); } catch { /* ignore */ } };
 
-export const isIos = () =>
-  typeof navigator !== 'undefined' && (/iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1));
-export const isStandalone = () =>
-  typeof window !== 'undefined' && (matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true);
+export { isIos, isStandalone } from '@/lib/device';
+import { isIos, isStandalone } from '@/lib/device';
 
 const ShareIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-label="Share" style={{ verticalAlign: '-3px' }}>
@@ -26,6 +25,7 @@ const ShareIcon = () => (
 export default function IosInstallHint() {
   const { canInstall, install } = useInstall();
   const [step, setStep] = useState<'none' | 'ios' | 'android' | 'push'>('none');
+  const [guide, setGuide] = useState(false);
   useEffect(() => {
     const decide = async () => {
       if (isStandalone()) {
@@ -41,8 +41,8 @@ export default function IosInstallHint() {
     decide();
   }, []);
   useEffect(() => {
-    if (step === 'none' && canInstall && !isStandalone() && !snoozed('android') && /Android/.test(navigator.userAgent)) setStep('android');
-  }, [canInstall, step]);
+    if (step === 'none' && !isStandalone() && !snoozed('android') && /Android/.test(navigator.userAgent)) setStep('android');
+  }, [step]);
 
   if (step === 'none') return null;
   const close = (k: string) => { snooze(k); setStep('none'); };
@@ -51,12 +51,8 @@ export default function IosInstallHint() {
       <section className="card install-hint">
         <div className="row space"><h2>Get shift alerts on your iPhone</h2><button className="chip-x" aria-label="Not now" onClick={() => close('ios')}>✕</button></div>
         <p className="small muted">iPhones only show LaborOps notifications once it is on your Home Screen. It takes 10 seconds:</p>
-        <ol className="install-steps">
-          <li>Tap <b>Share</b> <ShareIcon /> at the bottom of Safari (top right on iPad).</li>
-          <li>Scroll down and tap <b>Add to Home Screen</b>, then <b>Add</b>.</li>
-          <li>Open <b>LaborOps</b> from your Home Screen and turn on notifications.</li>
-        </ol>
-        <p className="small muted">Using Chrome on iPhone? Tap the share icon in the address bar, then Add to Home Screen.</p>
+        <button type="button" className="btn primary" onClick={() => setGuide(true)}>Show me how</button>
+        <IosInstallGuide open={guide} onClose={() => setGuide(false)} />
       </section>
     );
   if (step === 'android')
@@ -64,7 +60,11 @@ export default function IosInstallHint() {
       <section className="card install-hint">
         <div className="row space"><h2>Install LaborOps</h2><button className="chip-x" aria-label="Not now" onClick={() => close('android')}>✕</button></div>
         <p className="small muted">Put LaborOps on your home screen: it opens like an app, works with no signal, and can alert you about shifts.</p>
-        <button className="btn primary" onClick={install}>Install</button>
+        <div className="row">
+          {canInstall && <button className="btn primary" onClick={install}>Install</button>}
+          <button type="button" className={canInstall ? 'btn' : 'btn primary'} onClick={() => setGuide(true)}>Show me how</button>
+        </div>
+        <IosInstallGuide open={guide} onClose={() => setGuide(false)} />
       </section>
     );
   return (

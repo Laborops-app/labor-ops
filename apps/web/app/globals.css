@@ -2801,3 +2801,33 @@ details.card.profile-fold > summary::before { content: none; }
 }
 .only-phone { display: none; }
 @media (max-width: 760px) { .only-phone { display: block; } .hide-phone { display: none; } }
+
+/* iPhone Home Screen guide: a full-height sheet with one drawn picture per step */
+.iosg-back { position: fixed; inset: 0; z-index: 1100; display: grid; place-items: end center; background: rgba(9, 16, 30, 0.55); }
+.iosg { box-sizing: border-box; width: min(480px, 100vw); max-height: 100dvh; overflow-y: auto; display: grid; gap: 10px; padding: 16px 20px calc(18px + env(safe-area-inset-bottom)); border-radius: 22px 22px 0 0; background: var(--surface); color: var(--text); box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.3); outline: none; animation: iosg-up 0.25s ease-out; }
+@keyframes iosg-up { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+.iosg-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.iosg-kicker { font-size: 13px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: var(--link); }
+.iosg-why { margin: 0; font-size: 14px; color: var(--muted); }
+.iosg-pic-wrap { display: grid; place-items: center; padding: 10px 0 4px; border-radius: 16px; background: var(--surface-2); }
+.iosg-pic { width: auto; height: min(34dvh, 300px); max-width: 100%; }
+.iosg-pulse { transform-box: fill-box; transform-origin: center; animation: iosg-pulse 1.6s ease-out infinite; }
+@keyframes iosg-pulse { from { transform: scale(1); opacity: 0.9; } to { transform: scale(1.6); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .iosg, .iosg-pulse { animation: none; } .iosg-pulse { display: none; } }
+.iosg-step { display: grid; gap: 4px; min-height: 120px; align-content: start; }
+.iosg-n { font-size: 12px; font-weight: 700; color: var(--muted); }
+.iosg-step h2 { margin: 0; font-size: 22px; line-height: 1.2; }
+.iosg-step p { margin: 0; font-size: 16px; line-height: 1.45; }
+.iosg-dots { display: flex; justify-content: center; gap: 8px; }
+.iosg-dots button { width: 10px; height: 10px; padding: 0; border: 0; border-radius: 50%; background: var(--border-strong); cursor: pointer; }
+.iosg-dots button.on { width: 26px; border-radius: 5px; background: var(--primary); }
+.iosg-acts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.iosg-acts .btn { min-height: 48px; justify-content: center; }
+.iosg-note { margin: 0; font-size: 12px; color: var(--muted); text-align: center; }
+@media (min-width: 700px) { .iosg-back { place-items: center; } .iosg { border-radius: 22px; } }
+.alerts-ask { justify-items: center; text-align: center; }
+.alerts-ask h2 { margin: 0; font-size: 22px; }
+.alerts-ask p { margin: 0; font-size: 16px; line-height: 1.45; }
+.alerts-ask .iosg-acts { width: 100%; margin-top: 6px; }
+.alerts-bell { display: grid; place-items: center; width: 64px; height: 64px; border-radius: 50%; background: var(--primary-soft); color: var(--primary); }
+.iosg-now { min-height: 48px; justify-content: center; }
