@@ -17,6 +17,7 @@ import ActionMenu, { ActIcon } from '@/components/ActionMenu';
 import EventDocs from '@/components/EventDocs';
 import WavePanel from '@/components/WavePanel';
 import QrPanel from '@/components/QrPanel';
+import { EventFormsCard } from '@/components/docs/SignedDocs';
 import CrewMenu, { CrewPayForm, type CrewMenuItem } from '@/components/CrewMenu';
 import InvoicePanel from '@/components/InvoicePanel';
 import HrEventView from '@/components/HrEventView';
@@ -1750,6 +1751,7 @@ function Body({ me }: { me: Me }) {
         <Phases eventId={id} phases={d.phases} onChanged={load} onError={setError} />
       </div>
       <LaborBudget eventId={id} budget={(ev as any).labor_budget} onError={setError} />
+      <EventFormsCard eventId={id} shiftLabel={(sid) => { const x = d.shifts.find((y) => y.id === sid); return x ? `${x.role_name} · ${shortWhen(x.starts_at)}` : 'Shift'; }} />
       <section className="card ev-rules">
         <h2>Rules for this event</h2>
         <div className="ev-rule">

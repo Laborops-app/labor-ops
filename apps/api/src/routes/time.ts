@@ -4,6 +4,7 @@ import { respondToAssignment } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { autoApprove } from '../autoApprove';
+import { clockInBlock } from '../docs';
 import { editEntry, addEntry } from '../timeEdit';
 import { notifyStaff, describeShift } from '../notify';
 import { withTenant, audit } from '../db';
@@ -221,6 +222,8 @@ export async function timeRoutes(app: FastifyInstance) {
         return { code: 409, error: 'You are already clocked in' };
       const fence = rules ? checkFence(rules, body) : { distance: null };
       if ('error' in fence && fence.error) return { code: 409, error: fence.error, reason: 'geofence', distance: fence.distance };
+      const form = await clockInBlock(c, req.user.sub, assignmentId);
+      if (form) return { code: 409, reason: 'form', error: `Fill in "${form.name}" before you clock in.`, formId: form.id, shiftId: form.shiftId };
       const t = (
         await c.query(
           `INSERT INTO time_entries (tenant_id, assignment_id, user_id, in_lat, in_lng, in_distance_m, clock_in, client_in_id, in_accuracy_m, offline_in)

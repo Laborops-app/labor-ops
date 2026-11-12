@@ -20,7 +20,7 @@ const icon = (d: React.ReactNode) => (
   </svg>
 );
 
-const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; field?: boolean; icon: React.ReactNode }[] = [
+const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; field?: boolean; docs?: boolean; icon: React.ReactNode }[] = [
   {
     href: '/dashboard',
     label: 'Dashboard',
@@ -197,6 +197,16 @@ const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; field?
     ),
   },
   {
+    href: '/forms',
+    label: 'Forms & documents',
+    roles: ['admin', 'manager'],
+    icon: icon(
+      <>
+        <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5ZM14 3v5h5M9 14l2 2 4-4" />
+      </>,
+    ),
+  },
+  {
     href: '/rules',
     label: 'Labor rules',
     roles: ['admin'],
@@ -277,6 +287,17 @@ const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; field?
       <>
         <rect x="3" y="4" width="18" height="18" rx="2.5" />
         <path d="M16 2v4M8 2v4M3 10h18M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01" />
+      </>,
+    ),
+  },
+  {
+    href: '/my-documents',
+    label: 'Documents',
+    roles: ['crew'],
+    docs: true, // only while the company uses onboarding or shift forms
+    icon: icon(
+      <>
+        <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5ZM14 3v5h5M9 13h6M9 17h4" />
       </>,
     ),
   },
@@ -402,6 +423,12 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('resize', updateTabEdges);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, me]);
+  // Crew only see Documents while the company uses onboarding or shift forms.
+  const [docsOn, setDocsOn] = useState(false);
+  const myRole = me?.role;
+  useEffect(() => {
+    if (myRole === 'crew') api<{ onboardingOn: boolean; formsOn: boolean }>('/api/docs/settings').then((r) => setDocsOn(r.onboardingOn || r.formsOn)).catch(() => {});
+  }, [myRole]);
   if (!me) return <div className="center muted">Loading…</div>;
 
   const signOut = async () => {
@@ -410,7 +437,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     // A full reload, so nothing from this session's open tabs stays in memory.
     window.location.href = '/login';
   };
-  const items = NAV.filter((n) => n.roles.includes(me.role) && (!n.rates || me.role === 'admin' || me.canAdjustRates) && (!n.field || !!me.fieldRoles?.length || !!me.leads));
+  const items = NAV.filter((n) => n.roles.includes(me.role) && (!n.rates || me.role === 'admin' || me.canAdjustRates) && (!n.field || !!me.fieldRoles?.length || !!me.leads) && (!n.docs || docsOn));
 
   const current = items.find((n) => path.startsWith(n.href));
   // The phone's bottom bar: Trainings and Availability live on the Profile page there.

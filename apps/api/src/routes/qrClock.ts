@@ -8,6 +8,7 @@ import { authenticate, guard } from '../auth';
 import { autoApprove } from '../autoApprove';
 import { config } from '../config';
 import { withTenant, audit } from '../db';
+import { clockInBlock } from '../docs';
 import { distanceM } from './time';
 
 /**
@@ -191,6 +192,8 @@ export async function qrClockRoutes(app: FastifyInstance) {
         const later = (await c.query(`SELECT s.starts_at FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE a.user_id = $1 AND a.status = 'accepted' AND s.event_id = $2 AND s.starts_at > now() ORDER BY s.starts_at LIMIT 1`, [req.user.sub, ev.id])).rows[0];
         return { code: 409, reason: 'no_shift', error: later ? 'Your shift here hasn’t opened for clock-in yet. It opens 1 hour before the start.' : `You’re not confirmed on a shift at ${ev.name} right now. Find the coordinator on site.`, opensAt: later?.starts_at ?? null };
       }
+      const form = await clockInBlock(c, req.user.sub, a.id);
+      if (form) return { code: 409, reason: 'form', error: `Fill in "${form.name}" before you clock in.`, formId: form.id, shiftId: form.shiftId, assignmentId: a.id };
       const t = (await c.query(`INSERT INTO time_entries (tenant_id, assignment_id, user_id, in_lat, in_lng, in_distance_m, clock_in, in_accuracy_m) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, clock_in`, [req.user.tid, a.id, req.user.sub, b.lat ?? null, b.lng ?? null, distance, now, b.accuracy === undefined ? null : Math.round(b.accuracy)])).rows[0];
       await c.query('UPDATE time_breaks SET ended_at = $2 WHERE user_id = $1 AND ended_at IS NULL', [req.user.sub, now]);
       await audit(c, req.user.tid, req.user.sub, 'time.clock_in', 'time_entry', t.id, { qr: poster ? 'poster' : 'screen' });

@@ -3,6 +3,7 @@ import { useTabTitle } from '@/lib/tabs';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import ShiftForms from '@/components/docs/ShiftForms';
 import Shell, { initials } from '@/components/Shell';
 import { Banner, Pill } from '@/components/ui';
 import RentmanExtras, { useRentmanExtras } from '@/components/RentmanExtras';
@@ -104,6 +105,7 @@ function Body() {
       </div>
 
       {error && <Banner>{error}</Banner>}
+      {s.status === 'accepted' && <ShiftForms shiftId={s.shift_id} />}
       {s.status === 'offered' && (
         <section className="card">
           <h2>Can you work this shift?</h2>

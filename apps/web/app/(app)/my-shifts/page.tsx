@@ -9,6 +9,7 @@ import IosInstallHint from '@/components/IosInstallHint';
 import MyEarnings from '@/components/MyEarnings';
 import PastShifts from '@/components/PastShifts';
 import MyAvailChecks from '@/components/MyAvailChecks';
+import { OnboardingBanner } from '@/components/docs/SignedDocs';
 
 /** Offline, the server can't say whether clock-in is open, so the window is worked out on the phone (1 h before start to 2 h after end). */
 const canClock = (s: { can_clock_in: boolean; starts_at: string; ends_at: string }) =>
@@ -138,6 +139,7 @@ function Body() {
     <>
       <h1>My shifts</h1>
       <IosInstallHint />
+      <OnboardingBanner />
       {error && <Banner onClose={() => setError('')}>{error}</Banner>}
       {notice && <Banner kind="info" onClose={() => setNotice('')}>{notice}</Banner>}
       {offline && <p className="muted small">Offline: showing your shifts as of the last time they loaded.</p>}

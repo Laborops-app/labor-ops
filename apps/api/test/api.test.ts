@@ -5111,3 +5111,68 @@ test('QR clock-in: the screen code clocks crew in and out, old codes and strange
   await call(a, 'PUT', `/api/events/${ev}/qr`, { on: false });
   assert.equal((await call(c1.session, 'POST', '/api/time/qr', { eventId: ev, code: code(String(Math.floor(Date.now() / 1000 / 30))) })).status, 404);
 });
+
+test('documents and forms: upload a PDF, place fields, sign in the app; onboarding progress and hold; shift forms and clock-in', async () => {
+  const a = await register('docsign');
+  const c1 = await mkCrew(a, 'ds1');
+  const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+  const { default: PDFKit } = await import('pdfkit');
+  const blank = await new Promise<Buffer>((res) => { const d = new PDFKit({ size: 'LETTER' }); const ch: Buffer[] = []; d.on('data', (x: Buffer) => ch.push(x)); d.on('end', () => res(Buffer.concat(ch))); d.text('Liability waiver'); d.end(); });
+  // Off by default
+  assert.deepEqual((await call(a, 'GET', '/api/docs/settings')).json, { onboardingOn: false, onboardingBlock: false, onboardingRemind: true, formsOn: false });
+  assert.equal((await call(c1.session, 'PUT', '/api/docs/settings', { onboardingOn: true })).status, 403);
+  await call(a, 'PUT', '/api/docs/settings', { onboardingOn: true, onboardingBlock: true, formsOn: true });
+  // Upload a PDF with a signature, a date and a text field
+  assert.equal((await call(a, 'POST', '/api/docs/templates', { name: 'Nope', kind: 'pdf', purpose: 'onboarding', file: Buffer.from('hello').toString('base64') })).status, 400);
+  const tpl = (await call(a, 'POST', '/api/docs/templates', {
+    name: 'Liability waiver', kind: 'pdf', purpose: 'onboarding', file: blank.toString('base64'), fileName: 'waiver.pdf',
+    fields: [{ id: 'sig', type: 'signature', page: 0, x: 0.1, y: 0.8, w: 0.3, h: 0.06 }, { id: 'dt', type: 'date', page: 0, x: 0.6, y: 0.8, w: 0.2, h: 0.03 }, { id: 'addr', type: 'text', page: 0, x: 0.1, y: 0.5, w: 0.5, h: 0.03, label: 'Address' }],
+  })).json.id;
+  assert.equal((await call(c1.session, 'GET', `/api/docs/templates/${tpl}/file`)).res.rawPayload.subarray(0, 4).toString(), '%PDF');
+  let mine = (await call(c1.session, 'GET', '/api/my/documents')).json;
+  assert.deepEqual(mine.steps.map((s: { name: string; submission_id: string | null }) => [s.name, s.submission_id]), [['Liability waiver', null]]);
+  // Offers are held until onboarding is done (quiet picks are not)
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Doc Show', startDate: new Date().toISOString().slice(0, 10), endDate: new Date().toISOString().slice(0, 10) })).json.event.id;
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Rigger', startsAt: start(0.5), endsAt: start(8), headcount: 1 })).json.shift.id;
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, confirmed: true })).json.reason, 'onboarding');
+  // Signing needs the signature, the consent tick and the required text
+  const sub = (b: object) => call(c1.session, 'POST', `/api/docs/templates/${tpl}/submit`, b);
+  assert.match((await sub({ answers: { addr: '1 Main St' } })).json.error, /signature/);
+  assert.match((await sub({ answers: { addr: '1 Main St' }, signature: PNG })).json.error, /Tick the box/);
+  assert.match((await sub({ answers: {}, signature: PNG, consent: true })).json.error, /Address/);
+  const done = await sub({ answers: { addr: '1 Main St' }, signature: PNG, consent: true, signedName: 'Crew ds1' });
+  assert.equal(done.status, 201);
+  assert.equal(done.json.left, 0);
+  assert.equal((await sub({ answers: { addr: 'x' }, signature: PNG, consent: true })).status, 409);
+  const pdf = await call(c1.session, 'GET', `/api/docs/submissions/${done.json.submissionId}/pdf`);
+  assert.ok(pdf.status === 200 && pdf.res.rawPayload.subarray(0, 4).toString() === '%PDF');
+  const prog = (await call(a, 'GET', '/api/docs/onboarding/progress')).json;
+  assert.deepEqual([prog.total, prog.people.find((p: { id: string }) => p.id === c1.id).left.length], [1, 0]);
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, confirmed: true })).status, 201);
+  // A shift form for the lead, with a No answer that alerts, and that must be done before clock-in
+  const form = (await call(a, 'POST', '/api/docs/templates', {
+    name: 'Load-in safety check', kind: 'form', purpose: 'shift', settings: { who: 'lead', when: 'clock_in', blockClockIn: true },
+    fields: [{ id: 'q1', type: 'checkbox', label: 'Boots and gloves on' }, { id: 'q2', type: 'yesno', label: 'Dock clear and dry?' }, { id: 'q3', type: 'text', label: 'Anything to report?', required: false }, { id: 'q4', type: 'signature', label: 'Lead signature' }],
+  })).json.id;
+  const forms = (await call(c1.session, 'GET', `/api/my/shifts/${sh}/forms`)).json.forms;
+  assert.deepEqual(forms.map((f: { name: string; done: boolean }) => [f.name, f.done]), [['Load-in safety check', false]]);
+  const asg = (await call(c1.session, 'GET', '/api/my/shifts')).json.shifts[0].assignment_id;
+  assert.equal((await call(c1.session, 'POST', '/api/time/clock-in', { assignmentId: asg })).json.reason, 'form');
+  const fsub = (b: object) => call(c1.session, 'POST', `/api/docs/templates/${form}/submit`, b);
+  assert.equal((await fsub({ answers: { q1: true, q2: false }, signature: PNG, consent: true })).status, 400); // no shift
+  assert.match((await fsub({ shiftId: sh, answers: { q2: false }, signature: PNG, consent: true })).json.error, /Boots and gloves/);
+  const fdone = await fsub({ shiftId: sh, answers: { q1: true, q2: false, q3: 'Ramp light out' }, signature: PNG, consent: true });
+  assert.equal(fdone.status, 201);
+  assert.ok((await call(a, 'GET', '/api/notifications')).json.items.some((n: { title: string }) => /"No" answer/.test(n.title)));
+  const evForms = (await call(a, 'GET', `/api/events/${ev}/forms`)).json;
+  assert.equal(evForms.shifts[0].forms[0].done, 1);
+  assert.equal(evForms.submissions[0].flagged, true);
+  assert.equal((await call(c1.session, 'POST', '/api/time/clock-in', { assignmentId: asg })).status, 201);
+  // Other people and other companies can't read a signed copy
+  const c2 = await mkCrew(a, 'ds2');
+  assert.equal((await call(c2.session, 'GET', `/api/docs/submissions/${done.json.submissionId}/pdf`)).status, 404);
+  assert.equal((await call(c2.session, 'GET', `/api/docs/submissions?userId=${c1.id}`)).status, 403);
+  const b = await register('docsign2');
+  assert.equal((await call(b, 'GET', `/api/docs/submissions/${done.json.submissionId}/pdf`)).status, 404);
+  assert.equal((await call(b, 'GET', `/api/docs/templates/${tpl}`)).status, 404);
+});

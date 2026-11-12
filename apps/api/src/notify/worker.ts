@@ -8,6 +8,7 @@ import { runAttendance } from '../attendance';
 import { runRentmanAll } from '../rentmanWebhook';
 import { runRentmanPush } from '../rentmanPush';
 import { runWaves } from '../waves';
+import { runOnboardingReminders } from '../routes/docs';
 
 const MAX_ATTEMPTS = 4;
 const BACKOFF = [60, 300, 900]; // seconds before retry 2, 3, 4
@@ -107,5 +108,7 @@ export function startWorkers() {
   const t6 = setInterval(() => runRentmanPush().catch((e) => console.error('rentman push error', e)), 2 * 60 * 1000);
   // Offer waves: reminders, the next person on a no, and moving to the next wave when the time is up.
   const t7 = setInterval(() => runWaves().catch((e) => console.error('offer waves error', e)), 60 * 1000);
-  t1.unref(); t2.unref(); t3.unref(); t4.unref(); t5.unref(); t6.unref(); t7.unref();
+  // Onboarding: remind people with steps left (at most every 2 days each).
+  const t8 = setInterval(() => runOnboardingReminders().catch((e) => console.error('onboarding reminder error', e)), 6 * 3600 * 1000);
+  t1.unref(); t2.unref(); t3.unref(); t4.unref(); t5.unref(); t6.unref(); t7.unref(); t8.unref();
 }

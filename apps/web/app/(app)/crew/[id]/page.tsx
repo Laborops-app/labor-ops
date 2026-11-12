@@ -1,4 +1,5 @@
 'use client';
+import { PersonDocs } from '@/components/docs/SignedDocs';
 import { useLoadEffect, useTabTitle } from '@/lib/tabs';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
@@ -303,6 +304,7 @@ function Body({ me }: { me: Me }) {
 
       {isCrew && (
         <>
+          <PersonDocs userId={id} />
           <section className="card" id="ratings">
             <h2>Ratings &amp; reviews</h2>
             <p className="muted small" style={{ marginTop: -4 }}>Private to admins and labor coordinators. {m.name.split(' ')[0]} never sees these.</p>

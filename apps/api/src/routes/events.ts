@@ -1,3 +1,4 @@
+import { onboardingLeft } from '../docs';
 import type { PoolClient } from 'pg';
 import { notify, describeShift } from '../notify';
 import { syncEventChannel, sendDirectMessage } from './chat';
@@ -141,6 +142,16 @@ export async function assignCrew(c: PoolClient, tid: string, actorId: string, sh
       error: `${user.name} is ${el.time_off ? 'on time off' : 'outside their weekly availability'} for that shift.`,
       reason: 'unavailable',
     };
+
+  // Onboarding (optional): a company can hold back offers until someone has finished their packet. Quiet picks are fine.
+  if (!override) {
+    const st = (await c.query('SELECT (SELECT onboarding_on AND onboarding_block FROM staffing_settings) AS block, (SELECT staffing_draft FROM events WHERE id = $1) AS draft', [shift.event_id])).rows[0];
+    if (st?.block && !st.draft) {
+      const left = await onboardingLeft(c, userId);
+      if (left.length)
+        return { code: 409, reason: 'onboarding', error: `${user.name} hasn't finished onboarding (${left.length} ${left.length === 1 ? 'step' : 'steps'} left: ${left.map((l) => l.name).join(', ')}). Remind them under Forms & documents, or turn off "Hold offers until onboarding is done" there.` };
+    }
+  }
 
   const chk = await checkRules(c, await loadRules(c), userId, shiftId, shift.starts_at, shift.ends_at, user.name);
   if (chk.blocks.length && !override)
