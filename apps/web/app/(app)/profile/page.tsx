@@ -2,6 +2,7 @@
 import { useLoadEffect } from '@/lib/tabs';
 import { useEffect, useRef, useState } from 'react';
 import { InstallCard } from '@/components/InstallApp';
+import { CalendarFeed } from '@/components/CrewTools';
 import Passkeys from '@/components/Passkeys';
 import TrainingsPanel from '@/components/TrainingsPanel';
 import AvailabilityPanel from '@/components/AvailabilityPanel';
@@ -347,6 +348,7 @@ function Body({ me }: { me: Me }) {
       </Fold>
 
       <InstallCard />
+      <CalendarFeed />
       <Passkeys />
 
       <NotificationSettings phone={u?.phone} />

@@ -7,7 +7,7 @@ export type SmsProvider = 'none' | 'zernio' | 'podium';
 
 export type Ses = { host: string; port: number; user: string; pass: string; from: string };
 /** Zernio (zernio.com) text messages: an API key and the number or sender ID to send from. */
-export type Zernio = { apiKey: string; from: string };
+export type Zernio = { apiKey: string; from: string; webhookSecret?: string; webhookId?: string };
 export type Podium = {
   clientId: string; clientSecret: string; locationUid: string;
   accessToken: string; refreshToken: string; expiresAt: number; connectedAt: string;
@@ -24,7 +24,7 @@ export type Resolved = {
 // Which fields are secret (never sent back to the browser, kept when left blank on save).
 export const SECRET_FIELDS: Record<Provider, string[]> = {
   ses: ['pass'],
-  zernio: ['apiKey'],
+  zernio: ['apiKey', 'webhookSecret'],
   podium: ['clientSecret', 'accessToken', 'refreshToken', 'webhookSecret'],
 };
 
@@ -118,3 +118,7 @@ export function publicView(r: Resolved) {
     },
   };
 }
+
+/** Can crew answer offers by replying to the text? (Incoming texts reach LaborOps from the provider in use.) */
+export const textRepliesOn = (r: Resolved) =>
+  (r.smsProvider === 'podium' && !!r.podium.webhookSecret && !!r.podium.accessToken) || (r.smsProvider === 'zernio' && !!r.zernio.webhookSecret && !!r.zernio.apiKey);

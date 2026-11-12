@@ -5274,3 +5274,118 @@ test('move someone to another shift on the event: keeps their yes, checks clashe
   assert.equal(moved.user_id, p.id);
   assert.equal(moved.status, 'accepted');
 });
+
+test('calendar feed: a private link shows only my confirmed shifts; a new link stops the old one', async () => {
+  const a = await register('calfeed');
+  const c = await mkCrew(a, 'calc1');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Feed Fest', venue: 'Big Barn', startDate: '2031-04-01', endDate: '2031-04-01' })).json.event.id;
+  const s1 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: start(48), endsAt: start(52), headcount: 2 })).json.shift.id;
+  const s2 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Loader', startsAt: start(60), endsAt: start(64), headcount: 2 })).json.shift.id;
+  await call(a, 'POST', `/api/shifts/${s1}/assign`, { userId: c.id, confirmed: true });
+  await call(a, 'POST', `/api/shifts/${s2}/assign`, { userId: c.id }); // offered only: not in the feed
+  const link = (await call(c.session, 'GET', '/api/my/calendar-link')).json.url as string;
+  assert.match(link, /\/api\/calendar\/[A-Za-z0-9_-]{20,}\.ics$/);
+  const path = new URL(link).pathname;
+  const feed = await call(null, 'GET', path);
+  assert.equal(feed.status, 200);
+  assert.match(String(feed.res.headers['content-type']), /text\/calendar/);
+  assert.match(feed.text, /BEGIN:VCALENDAR/);
+  assert.match(feed.text, /SUMMARY:Stagehand · Feed Fest/);
+  assert.match(feed.text, /LOCATION:Big Barn/);
+  assert.doesNotMatch(feed.text, /Loader/);
+  // Same link next time; a reset gives a new one and the old stops
+  assert.equal((await call(c.session, 'GET', '/api/my/calendar-link')).json.url, link);
+  const fresh = (await call(c.session, 'POST', '/api/my/calendar-link/reset')).json.url as string;
+  assert.notEqual(fresh, link);
+  assert.equal((await call(null, 'GET', path)).status, 404);
+  assert.equal((await call(null, 'GET', '/api/calendar/not-a-real-token-at-all-xxxx.ics')).status, 404);
+});
+
+test('running late: the lead and office are told, and late / no-show alerts wait until the time given', async () => {
+  const a = await register('runlate');
+  const tid = await tenantOf(a);
+  const c = await mkCrew(a, 'late1');
+  const ev = await mkEvent(a);
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Audio', startsAt: start(-0.25), endsAt: start(6), headcount: 1 })).json.shift.id;
+  const asg = (await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c.id, confirmed: true, override: true })).json.assignment.id;
+  const r = await call(c.session, 'POST', `/api/my/assignments/${asg}/late`, { minutes: 30, note: 'Flat tire' });
+  assert.equal(r.status, 200, r.text);
+  assert.ok(r.json.told >= 1);
+  const notes = (await withTenant(tid, (x) => x.query('SELECT user_id, title, body FROM notifications WHERE user_id = $1', [a.id]))).rows;
+  assert.ok(notes.some((n) => /running late/.test(n.title) && /Flat tire/.test(n.body)));
+  const { attendanceFor } = await import('../src/attendance');
+  assert.equal((await withTenant(tid, (x) => attendanceFor(x, tid, 'America/Denver'))).late, 0);
+  // Shown on the event
+  const shown = (await call(a, 'GET', `/api/events/${ev}`)).json.shifts[0].assignments[0];
+  assert.ok(shown.late_eta);
+  assert.equal(shown.late_note, 'Flat tire');
+  // Someone else's shift, or after clocking in: refused
+  const other = await mkCrew(a, 'late2');
+  assert.equal((await call(other.session, 'POST', `/api/my/assignments/${asg}/late`, { minutes: 10 })).status, 409);
+});
+
+test('answer an offer by text: YES / NO, numbered picks with several offers, and the Zernio webhook signature', async () => {
+  const { parseAnswer } = await import('../src/notify/textReplies');
+  assert.deepEqual(parseAnswer('Yes'), { answer: 'accepted', pick: null });
+  assert.deepEqual(parseAnswer(' no 2 '), { answer: 'declined', pick: 2 });
+  assert.deepEqual(parseAnswer('YES ALL!'), { answer: 'accepted', pick: 'all' });
+  assert.equal(parseAnswer('yes but only if I can leave early'), null);
+  assert.equal(parseAnswer('Is parking free?'), null);
+
+  const a = await register('txtans');
+  const tid = await tenantOf(a);
+  const realFetch = globalThis.fetch;
+  const sent: { to: string; text: string }[] = [];
+  let hook: any = null;
+  globalThis.fetch = (async (u: any, init: any) => {
+    const url = String(u);
+    if (!url.startsWith('https://zernio.com/api/v1/')) return realFetch(u, init);
+    if (url.endsWith('/sms/messages')) { const b = JSON.parse(init.body); sent.push({ to: b.to, text: b.text }); return new Response(JSON.stringify({ id: 'z1' }), { status: 200 }); }
+    if (url.endsWith('/webhooks/settings')) { hook = JSON.parse(init.body); return new Response(JSON.stringify({ webhook: { _id: 'wh_1' } }), { status: 200 }); }
+    return new Response('{}', { status: 404 });
+  }) as typeof fetch;
+  try {
+    await call(a, 'PUT', '/api/messaging/settings/zernio', { apiKey: 'zk_test', from: '+18015550100' });
+    await call(a, 'PUT', '/api/messaging/sms-provider', { provider: 'zernio' });
+    assert.equal((await call(a, 'POST', '/api/zernio/webhook/register')).status, 200);
+    assert.deepEqual(hook.events, ['message.received']);
+    assert.ok((await call(a, 'GET', '/api/messaging')).json.sms.replies);
+    const c = await mkCrew(a, 'txt1');
+    await call(c.session, 'PUT', '/api/profile', { phone: '+1 385 555 0142' });
+    await withTenant(tid, (x) => x.query("UPDATE users SET phone = '+13855550142', notify_sms = true, sms_consent_at = now() WHERE id = $1", [c.id]));
+    const ev = await mkEvent(a);
+    const s1 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Rigger', startsAt: start(30), endsAt: start(34), headcount: 1 })).json.shift.id;
+    const s2 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Loader', startsAt: start(60), endsAt: start(64), headcount: 1 })).json.shift.id;
+    await call(a, 'POST', `/api/shifts/${s1}/assign`, { userId: c.id });
+    // The offer text asks for YES or NO
+    const offerText = (await withTenant(tid, (x) => x.query("SELECT body FROM deliveries WHERE user_id = $1 AND channel = 'sms' ORDER BY created_at DESC LIMIT 1", [c.id]))).rows[0]?.body ?? '';
+    assert.match(offerText, /Reply YES to accept or NO to decline/);
+    const send = async (text: string, id: string, secret = hook.secret) => {
+      const body = JSON.stringify({ id, event: 'message.received', timestamp: new Date().toISOString(), message: { id, platform: 'sms', direction: 'incoming', text, sender: { id: '+13855550142' } }, conversation: {}, account: {} });
+      const sig = (await import('node:crypto')).createHmac('sha256', secret).update(body).digest('hex');
+      return app.inject({ method: 'POST', url: `/api/zernio/webhook/${tid}`, payload: body, headers: { 'content-type': 'application/json', 'x-zernio-signature': sig } });
+    };
+    assert.equal((await send('YES', 'e0', 'wrong-secret')).statusCode, 401);
+    assert.equal((await send('Yes', 'e1')).statusCode, 200);
+    let shifts = (await call(a, 'GET', `/api/events/${ev}`)).json.shifts;
+    assert.equal(shifts.find((s: any) => s.id === s1).assignments[0].status, 'accepted');
+    assert.match(sent.at(-1)!.text, /confirmed for Rigger/);
+    // Delivered twice: answered once
+    await send('Yes', 'e1');
+    // Two offers waiting: a list comes back, then "NO 2" declines the second
+    const s3 = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Driver', startsAt: start(90), endsAt: start(94), headcount: 1 })).json.shift.id;
+    await call(a, 'POST', `/api/shifts/${s2}/assign`, { userId: c.id });
+    await call(a, 'POST', `/api/shifts/${s3}/assign`, { userId: c.id });
+    await send('yes', 'e2');
+    assert.match(sent.at(-1)!.text, /2 offers waiting[\s\S]*1\) Loader[\s\S]*2\) Driver/);
+    await send('no 2', 'e3');
+    shifts = (await call(a, 'GET', `/api/events/${ev}`)).json.shifts;
+    assert.equal(shifts.find((s: any) => s.id === s3).assignments[0].status, 'declined');
+    assert.equal(shifts.find((s: any) => s.id === s2).assignments[0].status, 'offered');
+    // Anything else is a normal reply for the office
+    await send('Where do I park?', 'e4');
+    assert.ok((await withTenant(tid, (x) => x.query("SELECT 1 FROM notifications WHERE user_id = $1 AND title LIKE 'Text reply from%'", [a.id]))).rowCount);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

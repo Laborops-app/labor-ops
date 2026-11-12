@@ -2881,3 +2881,18 @@ details.card.profile-fold > summary::before { content: none; }
 .bulk-n { padding: 0 6px; font-size: 14px; }
 .bulk-move select { min-height: 34px; font-size: 14px; width: 170px; max-width: 40vw; }
 @media (max-width: 760px) { .bulk-bar { bottom: calc(150px + env(safe-area-inset-bottom)); left: 8px; right: 8px; transform: none; max-width: none; } }
+
+/* Crew tools: running late, calendar feed */
+.late-chip { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; background: var(--warn-bg); color: var(--warn); font-size: 12px; font-weight: 700; }
+.late-sheet h2 { margin: 0; font-size: 22px; }
+.late-sheet p { margin: 0; }
+.late-opts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.late-opts button { min-height: 48px; border-radius: 12px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: inherit; font-weight: 700; cursor: pointer; }
+.late-opts button.on { border-color: var(--primary); background: var(--primary-soft); color: var(--link); }
+.late-note { display: grid; gap: 6px; font-weight: 600; font-size: 14px; }
+.late-note input { min-height: 44px; font-size: 16px; font-weight: 400; }
+.cal-feed .cal-feed-btns { flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.cal-feed a[aria-disabled='true'] { pointer-events: none; opacity: 0.5; }
+.cal-feed.compact { margin-top: 16px; }
+.cs-late { display: inline-flex; padding: 2px 8px; margin-left: 6px; border-radius: 999px; background: var(--warn-bg); color: var(--warn); font-size: 11px; font-weight: 700; white-space: nowrap; }
+.msg-replies { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-top: 16px; padding: 14px 16px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); }

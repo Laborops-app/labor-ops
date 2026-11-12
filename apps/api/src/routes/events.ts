@@ -1,3 +1,4 @@
+import { loadSettings, textRepliesOn } from '../notify/settings';
 import { onboardingLeft } from '../docs';
 import type { PoolClient } from 'pg';
 import { notify, describeShift } from '../notify';
@@ -195,10 +196,11 @@ export async function assignCrew(c: PoolClient, tid: string, actorId: string, sh
       });
       await sendDirectMessage(c, tid, actorId, userId, `You're scheduled\n\n${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nCan't make it? ${links.decline}`);
     } else {
+      const replies = textRepliesOn(await loadSettings(c, tid));
       await notify(c, tid, {
         userId, category: 'assignment', title: `New shift offered: ${d.role}`,
         body: `${d.line}${d.payLine ? '\n' + d.payLine : ''}\n\nPlease accept or decline this shift.`,
-        link: `/my-shifts/${a.id}`, sms: `New shift offered: ${d.role}, ${d.event}, ${d.when}. Accept or decline:`, smsLink: links.accept.replace('&a=accept', ''),
+        link: `/my-shifts/${a.id}`, sms: `New shift offered: ${d.role}, ${d.event}, ${d.when}. ${replies ? 'Reply YES to accept or NO to decline, or open:' : 'Accept or decline:'}`, smsLink: links.accept.replace('&a=accept', ''),
         actions: [{ label: 'Accept shift', url: links.accept, kind: 'accept' }, { label: 'Decline', url: links.decline, kind: 'decline' }],
       });
       // The same offer lands in the crew member's chat, from the coordinator who sent it.
@@ -438,14 +440,14 @@ export async function eventRoutes(app: FastifyInstance) {
       const shifts = (await c.query('SELECT * FROM shifts WHERE event_id = $1 ORDER BY starts_at, role_name', [eventId])).rows;
       const assigns = (
         await c.query(
-          `SELECT a.id, a.shift_id, a.user_id, a.status, a.is_lead, u.name AS user_name, a.created_at, a.nudged_at, false AS planned,
+          `SELECT a.id, a.shift_id, a.user_id, a.status, a.is_lead, u.name AS user_name, a.created_at, a.nudged_at, a.late_eta, a.late_note, false AS planned,
              (SELECT t.clock_in FROM time_entries t WHERE t.assignment_id = a.id AND t.clock_out IS NULL LIMIT 1) AS clocked_in_at,
              (SELECT max(t.clock_out) FROM time_entries t WHERE t.assignment_id = a.id) AS last_clock_out
            FROM shift_assignments a JOIN users u ON u.id = a.user_id
            JOIN shifts s ON s.id = a.shift_id WHERE s.event_id = $1
            UNION ALL
            -- Held back while the event is built quietly (not sent yet).
-           SELECT p.id, p.shift_id, p.user_id, 'planned', COALESCE(p.is_lead, false), u.name, p.created_at, NULL, true, NULL, NULL
+           SELECT p.id, p.shift_id, p.user_id, 'planned', COALESCE(p.is_lead, false), u.name, p.created_at, NULL, NULL::timestamptz, NULL, true, NULL, NULL
            FROM planned_picks p JOIN users u ON u.id = p.user_id WHERE p.event_id = $1
            ORDER BY user_name`,
           [eventId],

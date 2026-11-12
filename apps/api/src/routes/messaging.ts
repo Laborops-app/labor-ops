@@ -4,13 +4,15 @@ import { z } from 'zod';
 import { withTenant, audit } from '../db';
 import { guard } from '../auth';
 import { config } from '../config';
-import { sendEmail, sendSms, toE164 } from '../notify/providers';
+import type { PoolClient } from 'pg';
+import { sendEmail, sendSms, toE164, ZERNIO_API, type SmsContext } from '../notify/providers';
+import { handleTextAnswer } from '../notify/textReplies';
 import { renderEmail } from '../notify/templates';
 import { runSweeps } from '../notify/sweeps';
 import { invalidateSettings } from '../notify/worker';
 import { notifyStaff } from '../notify';
 import {
-  clearIntegration, emailLive, loadSettings, podiumConnected, publicView, saveIntegration, smsLive, smsSender, type Provider,
+  clearIntegration, emailLive, loadSettings, podiumConnected, publicView, saveIntegration, smsLive, smsSender, textRepliesOn, type Provider, type Resolved,
 } from '../notify/settings';
 import { authorizeUrl, exchangeCode, listPodiumLocations, registerWebhook, verifyPodiumSignature } from '../notify/podium';
 
@@ -48,6 +50,15 @@ const persistPodium = (tid: string): ((t: { accessToken: string; refreshToken: s
   invalidateSettings(tid);
 };
 
+/** A YES / NO text from a crew member answers their shift offer; the answer is texted back. True when it was an answer. */
+async function answerByText(c: PoolClient, tenantId: string, cfg: Resolved, u: { id: string; name: string }, text: string, to: string, persist?: SmsContext['persistPodium']) {
+  const back = await handleTextAnswer(c, tenantId, u, text, config.appUrl);
+  if (!back) return false;
+  const phone = toE164(to);
+  if (phone) await sendSms(cfg, { to: phone, body: back }, { persistPodium: persist }).catch(() => undefined);
+  return true;
+}
+
 export async function messagingRoutes(app: FastifyInstance) {
   const redirectUri = () => `${config.appUrl}/api/podium/callback`;
   const webhookUrl = (tid: string) => `${config.appUrl}/api/podium/webhook/${tid}`;
@@ -59,7 +70,7 @@ export async function messagingRoutes(app: FastifyInstance) {
       const view = publicView(r);
       return {
         email: { live: emailLive(r), from: r.ses.from, host: r.ses.host || null, source: r.ses.source },
-        sms: { live: smsLive(r), provider: r.smsProvider, from: smsSender(r) },
+        sms: { live: smsLive(r), provider: r.smsProvider, from: smsSender(r), replies: textRepliesOn(r) },
         settings: view,
         urls: { appUrl: config.appUrl, podiumRedirect: redirectUri(), podiumWebhook: webhookUrl(req.user.tid) },
         stats: (
@@ -221,6 +232,30 @@ export async function messagingRoutes(app: FastifyInstance) {
     return { url: webhookUrl(req.user.tid), secret: cfg.podium.webhookSecret };
   });
 
+  // Turn on text replies with Zernio: create the webhook at Zernio with a secret only we and Zernio know.
+  app.post('/api/zernio/webhook/register', { preHandler: adm }, async (req, reply) => {
+    const cfg = await withTenant(req.user.tid, (c) => loadSettings(c, req.user.tid));
+    if (!cfg.zernio.apiKey) return reply.code(400).send({ error: 'Save your Zernio API key first' });
+    const secret = crypto.randomBytes(24).toString('hex');
+    const url = `${config.appUrl}/api/zernio/webhook/${req.user.tid}`;
+    try {
+      const res = await fetch(`${ZERNIO_API()}/webhooks/settings`, {
+        method: 'POST', headers: { Authorization: `Bearer ${cfg.zernio.apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'LaborOps text replies', url, events: ['message.received'], secret }), signal: AbortSignal.timeout(15_000),
+      });
+      const j: any = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = String(j?.error?.message ?? j?.error ?? j?.message ?? 'could not create the webhook').slice(0, 250);
+        return reply.code(502).send({ error: res.status === 403 ? `Zernio: your plan doesn't include incoming messages (${msg}).` : `Zernio ${res.status}: ${msg}` });
+      }
+      await withTenant(req.user.tid, (c) => saveIntegration(c, req.user.tid, req.user.sub, 'zernio', { webhookSecret: secret, webhookId: String(j?.webhook?._id ?? j?._id ?? '') }, { raw: true }));
+      invalidateSettings(req.user.tid);
+      return { ok: true, url };
+    } catch (e) {
+      return reply.code(502).send({ error: `Couldn't reach Zernio: ${(e as Error).message}` });
+    }
+  });
+
   // Public endpoints below need the raw body (signature checks), so they live in their own plugin scope.
   app.register(async (inst) => {
     inst.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
@@ -265,6 +300,8 @@ export async function messagingRoutes(app: FastifyInstance) {
           if (u && STOP_WORDS.has(String(d.body ?? '').trim().toUpperCase())) {
             await c.query('UPDATE users SET notify_sms = false, sms_consent_at = NULL WHERE id = $1', [u.id]);
           }
+          // YES / NO answers a shift offer, and the answer is texted back.
+          if (u && (await answerByText(c, tenantId, cfg, u, String(d.body ?? ''), identifier, persistPodium(tenantId)))) return;
           await notifyStaff(c, tenantId, {
             category: 'approval_request',
             title: `Text reply from ${u?.name ?? d?.contact?.name ?? identifier}`,
@@ -278,7 +315,38 @@ export async function messagingRoutes(app: FastifyInstance) {
         );
       }
       return { ok: true };
-    });
+        });
 
+    // Zernio: incoming texts (message.received), signed with the secret we gave Zernio when replies were turned on.
+    inst.post('/api/zernio/webhook/:tenantId', async (req, reply) => {
+      const { tenantId } = z.object({ tenantId: z.string().uuid() }).parse(req.params);
+      const cfg = await withTenant(tenantId, (c) => loadSettings(c, tenantId));
+      const raw = String((req as any).rawBody ?? '');
+      const sig = String(req.headers['x-zernio-signature'] ?? req.headers['x-late-signature'] ?? '');
+      const secret = cfg.zernio.webhookSecret ?? '';
+      const want = secret ? crypto.createHmac('sha256', secret).update(raw, 'utf8').digest('hex') : '';
+      if (!secret || sig.length !== want.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(want))) return reply.code(401).send({ error: 'Bad signature' });
+      const ev: any = req.body ?? {};
+      const m = ev?.message ?? {};
+      if (ev?.event !== 'message.received' || m.platform !== 'sms' || m.direction === 'outgoing' || ev?.metadata?.standby) return { ok: true };
+      const from = String(m.sender?.phoneNumber ?? m.sender?.id ?? '');
+      const digits = from.replace(/\D/g, '').slice(-10);
+      const text = String(m.text ?? '');
+      await withTenant(tenantId, async (c) => {
+        const u = digits.length === 10
+          ? (await c.query("SELECT id, name FROM users WHERE right(regexp_replace(coalesce(phone,''),'\\D','','g'),10) = $1 AND active LIMIT 1", [digits])).rows[0]
+          : null;
+        const ins = await c.query(
+          `INSERT INTO inbound_messages (tenant_id, user_id, provider, provider_uid, channel, from_addr, contact_name, body)
+           VALUES ($1,$2,'zernio',$3,'sms',$4,$5,$6) ON CONFLICT DO NOTHING RETURNING id`,
+          [tenantId, u?.id ?? null, String(ev.id ?? m.id ?? ''), from, m.sender?.name ?? null, text.slice(0, 4000)],
+        );
+        if (!ins.rowCount) return; // the same event delivered again
+        if (u && STOP_WORDS.has(text.trim().toUpperCase())) await c.query('UPDATE users SET notify_sms = false, sms_consent_at = NULL WHERE id = $1', [u.id]);
+        if (u && (await answerByText(c, tenantId, cfg, u, text, from))) return;
+        await notifyStaff(c, tenantId, { category: 'approval_request', title: `Text reply from ${u?.name ?? m.sender?.name ?? from}`, body: text.slice(0, 300), link: '/messaging' });
+      });
+      return { ok: true };
+    });
   });
 }

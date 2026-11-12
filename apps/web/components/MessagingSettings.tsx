@@ -9,7 +9,7 @@ type Row = { id: string; channel: 'email' | 'sms' | 'push'; category: string; to
 type Reply = { id: string; from_addr: string; contact_name: string | null; body: string; received_at: string; user_name: string | null };
 type Data = {
   email: { live: boolean; from: string; host: string | null; source: 'company' | 'server' };
-  sms: { live: boolean; provider: 'none' | 'zernio' | 'podium'; from: string | null };
+  sms: { live: boolean; provider: 'none' | 'zernio' | 'podium'; from: string | null; replies?: boolean };
   settings: {
     ses: { host: string; port: number; user: string; passSet: boolean; from: string; source: string };
     zernio: { apiKeySet: boolean; from: string; source: string };
@@ -254,6 +254,22 @@ export default function MessagingSettings() {
             </div>
           </div>
         </form>
+        {s.zernio.apiKeySet && (
+          <div className="msg-replies">
+            <div>
+              <b>Answer offers by text</b>
+              <p className="muted small" style={{ margin: '2px 0 0' }}>
+                {d.sms.provider === 'zernio' && d.sms.replies
+                  ? 'On. Crew can reply YES or NO to a shift offer text, and get a text back confirming it. Other replies show below.'
+                  : 'Crew reply YES or NO to the offer text and they’re confirmed or declined, with a text back. Needs incoming messages on your Zernio plan.'}
+              </p>
+            </div>
+            <button type="button" className={d.sms.replies && d.sms.provider === 'zernio' ? 'btn small' : 'btn primary small'} disabled={!!busy}
+              onClick={() => run('zernio-replies', async () => { await api('/api/zernio/webhook/register', { body: {} }); return 'Text replies are on: Zernio now sends incoming texts to LaborOps.'; })}>
+              {d.sms.replies && d.sms.provider === 'zernio' ? 'Set up again' : 'Turn on text replies'}
+            </button>
+          </div>
+        )}
       </Fold>
 
       <Fold id="msg-podium" title="Podium" sub="Texts through your Podium inbox, with replies" status={<>{dot(s.podium.connected)}{s.podium.connected ? 'Connected' : 'Not connected'}</>}>
@@ -309,7 +325,7 @@ export default function MessagingSettings() {
         {s.podium.connected && (
           <>
             <h3 style={{ marginTop: 18 }}>Replies from customers</h3>
-            <p className="muted small">Podium sends replies and delivery failures to LaborOps through a webhook.</p>
+            <p className="muted small">Podium sends replies and delivery failures to LaborOps through a webhook. With it set up, crew can answer shift offers by replying YES or NO.</p>
             <div className="row">
               <button className="btn" disabled={!!busy} onClick={() => run('hook', async () => { await api('/api/podium/webhook/register', { body: {} }); return 'Webhook registered with Podium.'; })}>
                 {s.podium.webhookRegistered ? 'Register again' : 'Register webhook with Podium'}

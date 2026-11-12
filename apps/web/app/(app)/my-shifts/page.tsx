@@ -6,6 +6,7 @@ import { Banner, Empty, Pill } from '@/components/ui';
 import { api, ApiError, fmtDate, fmtDateTime, fmtTime, getPosition, money } from '@/lib/api';
 import { onPunchesChanged, pendingPunches, punch, type Punch } from '@/lib/punchQueue';
 import IosInstallHint from '@/components/IosInstallHint';
+import { CalendarFeed, RunningLate } from '@/components/CrewTools';
 import MyEarnings from '@/components/MyEarnings';
 import PastShifts from '@/components/PastShifts';
 import MyAvailChecks from '@/components/MyAvailChecks';
@@ -29,6 +30,8 @@ type MyShift = {
   venue: string | null;
   clocked_in: boolean;
   can_clock_in: boolean;
+  can_say_late?: boolean;
+  late_eta?: string | null;
   on_break?: { kind: 'break' | 'lunch'; started_at: string; remind_min?: number } | null;
   clock_mode: 'self' | 'coordinator';
   needs_location: boolean;
@@ -234,6 +237,7 @@ function Body() {
                   {s.needs_location && <span className="muted small">Your location is checked: be within {s.geofence_m} m of the venue.</span>}
                 </>
               )}
+              {s.can_say_late && !isIn(s) && <RunningLate assignmentId={s.assignment_id} eta={s.late_eta ?? null} onDone={load} />}
               {s.status === 'pending' && <span className="muted small">Waiting for approval.</span>}
               {s.swap_status && s.swap_id && (
                 <>

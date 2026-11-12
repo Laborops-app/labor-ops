@@ -64,6 +64,7 @@ export async function timeRoutes(app: FastifyInstance) {
              (a.status = 'accepted' AND s.starts_at > now() AND NOT EXISTS (SELECT 1 FROM time_entries t WHERE t.assignment_id = a.id)) AS can_offer_swap,
              EXISTS (SELECT 1 FROM time_entries t WHERE t.assignment_id = a.id AND t.clock_out IS NULL) AS clocked_in,
              (a.status = 'accepted' AND now() BETWEEN s.starts_at - interval '1 hour' AND s.ends_at + interval '2 hours') AS can_clock_in,
+             a.late_eta, (a.status = 'accepted' AND now() BETWEEN s.starts_at - interval '2 hours' AND s.ends_at AND NOT EXISTS (SELECT 1 FROM time_entries t WHERE t.assignment_id = a.id)) AS can_say_late,
              (SELECT json_build_object('kind', b.kind, 'started_at', b.started_at, 'remind_min', COALESCE((SELECT lunch_reminder_min FROM labor_rules), 45)) FROM time_breaks b WHERE b.assignment_id = a.id AND b.ended_at IS NULL LIMIT 1) AS on_break
            FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
            WHERE a.user_id = $1

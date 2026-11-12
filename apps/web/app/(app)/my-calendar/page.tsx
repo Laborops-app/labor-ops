@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner } from '@/components/ui';
 import { api, fmtTime } from '@/lib/api';
+import { CalendarFeed } from '@/components/CrewTools';
 
 type S = { assignment_id: string; status: string; role_name: string; starts_at: string; ends_at: string; event_name: string; venue: string | null };
 
@@ -141,6 +142,7 @@ function Body() {
           );
         })}
       </div>
+      <CalendarFeed compact />
     </>
   );
 }

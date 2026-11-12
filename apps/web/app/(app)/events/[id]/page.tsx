@@ -38,7 +38,7 @@ import { EventDetails, Phases, Clocking, RentmanCard, EventFull, Phase, RmView }
 import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 import { askConfirm, undoable } from '@/components/Toasts';
 
-type Assignment = { id: string; user_id: string; user_name: string; status: string; is_lead?: boolean; created_at?: string; nudged_at?: string | null; planned?: boolean; clocked_in_at?: string | null; last_clock_out?: string | null; pay_type?: 'hourly' | 'day'; rate?: number | null; estimated_pay?: number | null };
+type Assignment = { id: string; user_id: string; user_name: string; status: string; is_lead?: boolean; created_at?: string; nudged_at?: string | null; late_eta?: string | null; late_note?: string | null; planned?: boolean; clocked_in_at?: string | null; last_clock_out?: string | null; pay_type?: 'hourly' | 'day'; rate?: number | null; estimated_pay?: number | null };
 type CrewRate = { user_id: string; user_name: string; role_name?: string; pay_type: 'hourly' | 'day'; rate: number; note: string | null };
 type Elig = { user_id: string; missing_certs: string[]; time_off: boolean; outside_availability: boolean; booked?: { role_name: string; event_name: string; starts_at: string; ends_at: string } | null };
 /** Stars for a position; on a lead role ("Audio Lead") the rating as that position ("Audio") counts. */
@@ -733,6 +733,7 @@ function Body({ me }: { me: Me }) {
                   <div>
                     <b>{a.user_name}</b>
                     {a.is_lead && a.status !== 'declined' && <span className="cs-lead" title="Leads their department on this event: checks the team in and out and rates them on the On site page">Lead</span>}
+                    {a.late_eta && !a.clocked_in_at && a.status === 'accepted' && <span className="cs-late" title={a.late_note ? `“${a.late_note}”` : 'Told us they are running late'}>Late · ~{fmtTime(a.late_eta)}</span>}
                     {a.rate != null && a.status !== 'declined' && (
                       <button type="button" className="chip" style={{ border: 0, cursor: 'pointer', marginLeft: 6 }} title="This person's own rate on this event. Click to change it." onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setCrewMenu({ sid: s.id, aid: a.id, x: r.left, y: r.bottom + 4 }); }}>
                         {money(a.rate)}{a.pay_type === 'day' ? '/day' : '/hr'}

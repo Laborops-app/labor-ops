@@ -64,6 +64,8 @@ export async function attendanceFor(c: PoolClient, tenantId: string, tz: string)
   const missing = `SELECT a.id, a.user_id, u.name, s.role_name, s.starts_at, s.ends_at, s.event_id, e.name AS event_name, e.clock_mode
       FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id JOIN users u ON u.id = a.user_id
      WHERE a.status = 'accepted' AND a.no_show_at IS NULL
+       -- Said they're running late: no late or no-show alert until 15 minutes after the time they gave.
+       AND (a.late_eta IS NULL OR a.late_eta + interval '15 minutes' < now())
        AND s.starts_at >= now() - interval '12 hours' AND e.pipeline_status <> 'canceled'
        AND NOT EXISTS (SELECT 1 FROM time_entries t WHERE t.assignment_id = a.id)`;
 
