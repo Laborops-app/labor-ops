@@ -13,8 +13,9 @@ function Clock() {
   const router = useRouter();
   const e = params.get('e') ?? '';
   const c = params.get('c') ?? '';
+  const r = params.get('r') ?? '';
   const [res, setRes] = useState<Result | null>(null);
-  const [err, setErr] = useState<{ message: string; reason?: string } | null>(null);
+  const [err, setErr] = useState<{ message: string; reason?: string; formId?: string; formName?: string; shiftId?: string; resume?: string } | null>(null);
   const [busy, setBusy] = useState(true);
   const sent = useRef(false);
   const scan = useCallback(async (withLocation: boolean) => {
@@ -23,21 +24,22 @@ function Clock() {
       // Location is only needed for a printed poster; ask for it when the server says so.
       const pos = withLocation ? await getPosition(10000).catch(() => null) : null;
       setErr(null);
-      setRes(await api<Result>('/api/time/qr', { body: { eventId: e, code: c, ...(pos ? { lat: pos.lat, lng: pos.lng, accuracy: pos.accuracy } : {}) } }));
+      setRes(await api<Result>('/api/time/qr', { body: { eventId: e, ...(r ? { resume: r } : { code: c }), ...(pos ? { lat: pos.lat, lng: pos.lng, accuracy: pos.accuracy } : {}) } }));
     } catch (x) {
       const a = x as ApiError;
       if (a.status === 401) return router.replace(`/login?next=${encodeURIComponent(location.pathname + location.search)}`);
       if (a.reason === 'need_location' && !withLocation) return scan(true);
-      setErr({ message: a.message, reason: a.reason });
+      const extra = (a as ApiError & { data?: { formId?: string; formName?: string; shiftId?: string; resume?: string } }).data;
+      setErr({ message: a.message, reason: a.reason, ...extra });
     } finally { setBusy(false); }
-  }, [e, c, router]);
+  }, [e, c, r, router]);
   useEffect(() => {
-    if (!e || !c) { setErr({ message: 'This link is missing its code. Scan the code at the venue again.' }); setBusy(false); return; }
+    if (!e || (!c && !r)) { setErr({ message: 'This link is missing its code. Scan the code at the venue again.' }); setBusy(false); return; }
     // One scan per page load, even if React runs this twice or the camera app opens the link twice.
     if (sent.current) return;
     sent.current = true;
     scan(false);
-  }, [e, c, scan]);
+  }, [e, c, r, scan]);
   const hours = res?.since ? Math.round(((+new Date(res.at) - +new Date(res.since)) / 3600_000) * 10) / 10 : null;
   return (
     <main className="clk">
@@ -60,9 +62,12 @@ function Clock() {
         )}
         {err && !res && (
           <>
-            <div className="clk-badge bad" aria-hidden="true">!</div>
-            <h1>Not clocked in</h1>
+            <div className={`clk-badge ${err.reason === 'form' ? 'step' : 'bad'}`} aria-hidden="true">{err.reason === 'form' ? '1' : '!'}</div>
+            <h1>{err.reason === 'form' ? 'One step first' : 'Not clocked in'}</h1>
             <p role="alert">{err.message}</p>
+            {err.reason === 'form' && err.formId && err.shiftId && (
+              <Link className="btn primary" href={`/my-documents/${err.formId}?shift=${err.shiftId}&clock=${encodeURIComponent(`${e}~${err.resume ?? ''}`)}`}>Fill in {err.formName ?? 'the form'}</Link>
+            )}
             {(err.reason === 'need_location' || err.reason === 'geofence') && <button type="button" className="btn primary" disabled={busy} onClick={() => scan(true)}>Try again with my location</button>}
             <Link className="btn" href="/my-shifts">Open my shifts</Link>
           </>

@@ -1,5 +1,5 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import PdfPages from './PdfPages';
 import SignaturePad from './SignaturePad';
@@ -33,6 +33,17 @@ export default function DocFill({ template, shiftId, people, signerName, onDone 
   const needsSig = fields.some((f) => f.type === 'signature');
   const others = template.kind === 'pdf' ? (fields as PdfField[]).filter((f) => f.type === 'sign_other') : [];
   const set = (id: string, v: Value) => setAnswers((a) => ({ ...a, [id]: v }));
+  // On a phone the boxes on the page are too small to type in, so they're also listed below as normal-sized fields.
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const m = matchMedia('(max-width: 700px)');
+    const on = () => setNarrow(m.matches);
+    on();
+    m.addEventListener('change', on);
+    return () => m.removeEventListener('change', on);
+  }, []);
+  const fillable = template.kind === 'pdf' ? (fields as PdfField[]).filter((f) => f.type === 'text' || f.type === 'checkbox').sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x) : [];
+  const toField = (id: string) => { const el = document.getElementById(`in-${id}`); el?.scrollIntoView({ block: 'center', behavior: 'smooth' }); setTimeout(() => el?.focus({ preventScroll: true }), 300); };
   const today = useMemo(() => new Date().toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }), []);
   const submit = async () => {
     setBusy(true); setErr('');
@@ -74,6 +85,12 @@ export default function DocFill({ template, shiftId, people, signerName, onDone 
                 return <textarea key={f.id} className="pf pf-text pf-area" style={style} value={String(answers[f.id] ?? '')} onChange={(e) => set(f.id, e.target.value)} placeholder={f.required ? 'Type here' : 'Type here (optional)'} aria-label={f.label || 'Text'} aria-required={f.required} maxLength={1500} />;
               if (f.type === 'date') return <span key={f.id} className="pf pf-auto" style={{ ...style, fontSize: Math.max(9, f.h * p.height * 0.6) }}>{today}</span>;
               if (f.type === 'name') return <span key={f.id} className="pf pf-auto" style={{ ...style, fontSize: Math.max(9, f.h * p.height * 0.6) }}>{signerName}</span>;
+              if (narrow && (f.type === 'text' || f.type === 'checkbox'))
+                return (
+                  <button key={f.id} type="button" className={`pf pf-tap${answers[f.id] ? ' done' : ''}`} style={{ ...style, fontSize: Math.min(11, Math.max(7, f.h * p.height * 0.7)) }} onClick={() => toField(f.id)} aria-label={`${f.label || (f.type === 'checkbox' ? 'Checkbox' : 'Text')}: fill in below`}>
+                    {f.type === 'checkbox' ? (answers[f.id] === true ? '✓' : '') : String(answers[f.id] ?? '')}
+                  </button>
+                );
               if (f.type === 'checkbox')
                 return <input key={f.id} type="checkbox" className="pf pf-check" style={style} checked={answers[f.id] === true} onChange={(e) => set(f.id, e.target.checked)} aria-label={f.label || 'Checkbox'} aria-required={f.required} />;
               return <input key={f.id} type="text" className="pf pf-text" style={{ ...style, fontSize: Math.min(15, Math.max(10, f.h * p.height * 0.6)) }} value={String(answers[f.id] ?? '')} onChange={(e) => set(f.id, e.target.value)} placeholder={f.label || 'Type here'} aria-label={f.label || 'Text'} aria-required={f.required} />;
@@ -118,6 +135,24 @@ export default function DocFill({ template, shiftId, people, signerName, onDone 
               )}
             </div>
           ))}
+        </div>
+      )}
+      {narrow && fillable.length > 0 && (
+        <div className="docfill-foot docfill-list">
+          <h2>Fill in</h2>
+          <p className="muted small" style={{ margin: 0 }}>Everything you type here goes onto the document above.</p>
+          {fillable.map((f) =>
+            f.type === 'checkbox' ? (
+              <label key={f.id} className="check big"><input id={`in-${f.id}`} type="checkbox" checked={answers[f.id] === true} onChange={(e) => set(f.id, e.target.checked)} /> <span>{f.label || 'Tick to confirm'}{!f.required && <span className="muted small"> (optional)</span>}</span></label>
+            ) : (
+              <label key={f.id} className="docfill-field">
+                <span>{f.label || 'Text'}{!f.required && <span className="muted small"> (optional)</span>}</span>
+                {f.h > 0.037
+                  ? <textarea id={`in-${f.id}`} rows={3} value={String(answers[f.id] ?? '')} onChange={(e) => set(f.id, e.target.value)} maxLength={1500} />
+                  : <input id={`in-${f.id}`} type={/phone/i.test(f.label) ? 'tel' : /email/i.test(f.label) ? 'email' : 'text'} inputMode={/zip|phone/i.test(f.label) ? (/phone/i.test(f.label) ? 'tel' : 'numeric') : undefined} autoComplete={/email/i.test(f.label) ? 'email' : /phone/i.test(f.label) && !/contact/i.test(f.label) ? 'tel' : undefined} value={String(answers[f.id] ?? '')} onChange={(e) => set(f.id, e.target.value)} maxLength={300} />}
+              </label>
+            ),
+          )}
         </div>
       )}
       {others.length > 0 && (

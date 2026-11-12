@@ -11,7 +11,7 @@ import { nudgeOne } from './routes/staffing';
 
 /**
  * Offer waves. A coordinator approves a plan once for a shift, then LaborOps works through it:
- *   wave 1: the best-rated people for the position (top N), wave 2: everyone else who qualifies, wave 3: an open shift.
+ *   wave 1: the best-rated people for the position (top N, never fewer than the open seats), wave 2: everyone else who qualifies, wave 3: an open shift.
  * Offers only ever go out for seats that are still open. Inside a wave a "no" hands the seat to the next person in
  * that wave. When a wave's wait time is up, offers nobody answered are withdrawn and the next wave starts. Nothing is
  * offered after the answer-by time; what is still open then becomes an open shift (if wave 3 is on).
@@ -228,7 +228,7 @@ export async function startWaves(c: PoolClient, tid: string, by: string, shiftId
   if (!ranked.length) return { code: 409, error: 'Nobody qualified is free for this shift.' };
   await c.query('DELETE FROM shift_wave_plans WHERE shift_id = $1', [shiftId]);
   const id = (
-    await c.query('INSERT INTO shift_wave_plans (tenant_id, shift_id, config, pool, started_by) VALUES ($1,$2,$3,$4,$5) RETURNING id', [tid, shiftId, JSON.stringify(cfg), ranked.slice(0, cfg.topN).map((r) => r.user_id), by])
+    await c.query('INSERT INTO shift_wave_plans (tenant_id, shift_id, config, pool, started_by) VALUES ($1,$2,$3,$4,$5) RETURNING id', [tid, shiftId, JSON.stringify(cfg), ranked.slice(0, Math.max(cfg.topN, s.headcount - s.taken)).map((r) => r.user_id), by])
   ).rows[0].id as string;
   await audit(c, tid, by, 'shift.waves_start', 'shift', shiftId, cfg);
   await advancePlan(c, tid, id);

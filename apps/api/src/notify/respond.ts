@@ -90,6 +90,14 @@ export async function respondToAssignment(
   await audit(c, tenantId, user.id, `assignment.${response}`, 'assignment', assignmentId);
   if (response === 'declined') {
     const d = await describeShift(c, tenantId, row.shift_id, row.user_id);
+    // An offer wave on this shift hands the seat to the next person now, not on the next background sweep.
+    const plan = (await c.query("SELECT id FROM shift_wave_plans WHERE shift_id = $1 AND status = 'active'", [row.shift_id])).rows[0];
+    if (plan) {
+      const { advancePlan } = await import('../waves');
+      await c.query('SAVEPOINT waves');
+      try { await advancePlan(c, tenantId, plan.id); await c.query('RELEASE SAVEPOINT waves'); }
+      catch (e) { await c.query('ROLLBACK TO SAVEPOINT waves'); console.error('offer waves after a decline', e); }
+    }
     if (d) await notifyStaff(c, tenantId, { category: 'approval_request', title: `${user.name} declined ${d.role}`, body: `${user.name} declined a shift and may need replacing.\n\n${d.line}`, link: `/events` });
   }
   return { id: row.id as string, status: row.status as string };

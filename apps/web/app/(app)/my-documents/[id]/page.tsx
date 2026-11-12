@@ -14,6 +14,9 @@ function Body({ me }: { me: Me }) {
   const q = useSearchParams();
   const shiftId = q.get('shift') ?? undefined;
   const preview = q.get('preview') === '1';
+  // Came from a QR scan that this form held up: after signing, one tap finishes clocking in.
+  const clock = q.get('clock');
+  const [clockEvent, clockResume] = clock ? clock.split('~') : [null, null];
   const [t, setT] = useState<Template | null>(null);
   const [people, setPeople] = useState<{ id: string; name: string }[]>([]);
   const [error, setError] = useState('');
@@ -33,7 +36,9 @@ function Body({ me }: { me: Me }) {
         <h1 aria-live="polite">{t.name} is done</h1>
         <p className="muted">The signed PDF is saved. {t.purpose === 'onboarding' ? (done.left ? `${done.left} onboarding ${done.left === 1 ? 'step' : 'steps'} left.` : 'That was the last onboarding step.') : 'Your coordinator can see it on the event.'}</p>
         <div className="row" style={{ gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
-          <Link className="btn primary" href={back}>{t.purpose === 'onboarding' && done.left ? 'Next step' : shiftId ? 'Back to my shifts' : 'Back to my documents'}</Link>
+          {clockEvent && clockResume
+            ? <Link className="btn primary" href={`/clock?e=${clockEvent}&r=${encodeURIComponent(clockResume)}`}>Clock in now</Link>
+            : <Link className="btn primary" href={back}>{t.purpose === 'onboarding' && done.left ? 'Next step' : shiftId ? 'Back to my shifts' : 'Back to my documents'}</Link>}
           <button type="button" className="btn" onClick={() => setView(true)}>Open the signed PDF</button>
         </div>
         {view && <PdfViewer title={t.name} url={`/api/docs/submissions/${done.id}/pdf`} onClose={() => setView(false)} />}

@@ -17,13 +17,15 @@ test('onboarding: add the starter packet, crew fill in and sign on a phone, prog
   await crew.page.goto('/my-documents');
   await crew.page.locator('.doc-list li', { hasText: 'Workplace policies' }).getByRole('link').click();
   await expect(crew.page.locator('.pdfp-page canvas').first()).toBeVisible();
+  // On a phone the tick boxes are also listed below the document at a normal size
+  await expect(crew.page.getByRole('heading', { name: 'Fill in' })).toBeVisible();
 
   // Signing without ticking every box is refused, then accepted once they are ticked
   await crew.page.getByRole('radio', { name: 'Type my name' }).click();
   await crew.page.getByLabel(/I agree that this is my electronic signature/).check();
   await crew.page.getByRole('button', { name: 'Sign and finish' }).click();
   await expect(crew.page.getByRole('alert').filter({ hasText: 'Tick' })).toBeVisible();
-  for (const box of await crew.page.locator('.pf-check').all()) await box.check();
+  for (const box of await crew.page.locator('.docfill-list input[type=checkbox]').all()) await box.check();
   await crew.page.getByRole('button', { name: 'Sign and finish' }).click();
   await expect(crew.page.getByRole('heading', { name: 'Workplace policies is done' })).toBeVisible();
   await crew.page.getByRole('button', { name: 'Open the signed PDF' }).click();
@@ -53,9 +55,11 @@ test('incident report: filed from a shift with a witness signing on the same pho
   await expect(card.getByText('Only if you need it')).toBeVisible();
   await card.getByRole('link', { name: 'Fill in' }).click();
   await expect(crew.page.locator('.pdfp-page canvas').first()).toBeVisible();
-  for (const f of await crew.page.locator('.pf-text[aria-required="true"]').all()) await f.fill('Dock B ramp, road case tipped');
-  await crew.page.getByLabel('Injury', { exact: true }).check();
-  await crew.page.getByLabel('Witness 1 name').fill('Wendy Witness');
+  // On a phone, the boxes on the page are filled in from the list below it
+  const list = crew.page.locator('.docfill-list');
+  for (const f of await list.locator('.docfill-field:not(:has(.muted)) input, .docfill-field:not(:has(.muted)) textarea').all()) await f.fill('Dock B ramp, road case tipped');
+  await crew.page.locator('#in-t_injury').check();
+  await crew.page.locator('#in-w1_name').fill('Wendy Witness');
   await scribble(crew.page, crew.page.locator('.docfill-other').first().locator('canvas'));
   await scribble(crew.page, crew.page.locator('#docfill-sign canvas'));
   await crew.page.getByLabel(/I agree that this is my electronic signature/).check();

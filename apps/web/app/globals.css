@@ -2623,6 +2623,7 @@ details.card.profile-fold > summary::before { content: none; }
 .clk-badge { width: 76px; height: 76px; border-radius: 38px; display: grid; place-items: center; font-size: 38px; font-weight: 800; background: var(--good); color: var(--surface); }
 .clk-badge.out { background: var(--text); }
 .clk-badge.bad { background: var(--bad); }
+.clk-badge.step { background: var(--primary); color: var(--on-primary); }
 .clk-sub { margin: 0; color: var(--muted); }
 .clk-shift { width: 100%; box-sizing: border-box; display: grid; gap: 2px; padding: 12px 14px; border-radius: 12px; background: var(--surface-2); text-align: left; }
 .clk-shift span { color: var(--muted); font-size: 14px; }
@@ -2688,3 +2689,8 @@ details.card.profile-fold > summary::before { content: none; }
 .fb-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .pf-area { resize: none; padding: 3px 4px !important; font-size: 11px !important; line-height: 1.25 !important; }
 .docfill-other { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--border); }
+.pf-tap { display: flex; align-items: center; padding: 0 2px; border: 1px solid #6c5cf0; border-radius: 2px; background: rgba(255, 244, 194, 0.85); color: #101a2e; font-family: Helvetica, Arial, sans-serif; white-space: nowrap; overflow: hidden; cursor: pointer; text-align: left; line-height: 1; }
+.pf-tap.done { background: rgba(255, 255, 255, 0.55); border-color: rgba(108, 92, 240, 0.45); }
+.docfill-list label.check.big { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.docfill-field { display: grid; gap: 6px; font-weight: 600; }
+.docfill-field input, .docfill-field textarea { font-weight: 400; min-height: 44px; font-size: 16px; }

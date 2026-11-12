@@ -26,7 +26,8 @@ export default function WavePanel({ shiftId, onChanged }: { shiftId: string; onC
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const load = useCallback(
-    () => api<Data>(`/api/shifts/${shiftId}/waves`).then((x) => { setD(x); setCfg((c) => c ?? x.plan?.config ?? x.defaults); }).catch((e) => setErr(e.message)),
+    // Wave 1 always asks at least as many people as there are open spots.
+    () => api<Data>(`/api/shifts/${shiftId}/waves`).then((x) => { setD(x); setCfg((c) => c ?? x.plan?.config ?? { ...x.defaults, topN: Math.max(x.defaults.topN, x.shift.headcount - x.shift.taken) }); }).catch((e) => setErr(e.message)),
     [shiftId],
   );
   useEffect(() => { load(); }, [load]);
@@ -63,7 +64,7 @@ export default function WavePanel({ shiftId, onChanged }: { shiftId: string; onC
               <div className="wave-fields">
                 <label>Who
                   <select value={cfg.topN} onChange={(e) => set({ topN: Number(e.target.value) })}>
-                    {[...new Set([d.shift.headcount, 5, 10, 15, 20, 30, cfg.topN])].sort((a, b) => a - b).map((n) => <option key={n} value={n}>Top {n} rated</option>)}
+                    {[...new Set([open, 5, 10, 15, 20, 30, cfg.topN])].filter((n) => n >= Math.max(1, open)).sort((a, b) => a - b).map((n) => <option key={n} value={n}>Top {n} rated{n === open ? ' (one per open spot)' : ''}</option>)}
                   </select>
                 </label>
                 <label>Time to answer

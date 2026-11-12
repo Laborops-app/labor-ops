@@ -5043,7 +5043,7 @@ test('offer waves: best rated first, next person on a no, unanswered offers with
   // wv1 says no: the third-best in wave 1 is offered right away
   const asg1 = w.offers[0].assignment_id;
   assert.equal((await call(crew[0]!.session, 'POST', `/api/assignments/${asg1}/respond`, { response: 'declined' })).status, 200);
-  await tick();
+  // (the next person is offered right away, without waiting for the background sweep)
   w = (await call(a, 'GET', `/api/shifts/${sh}/waves`)).json;
   assert.deepEqual(w.offers.map((o: { name: string; state: string }) => [o.name, o.state]), [['Crew wv1', 'declined'], ['Crew wv2', 'waiting'], ['Crew wv3', 'waiting']]);
   // wv2 accepts; wave 1 runs out of time: wv3's unanswered offer is withdrawn and wave 2 offers wv4

@@ -28,6 +28,21 @@ const screenToken = (tid: string, eid: string, days = 14) => {
   const payload = `${tid}.${eid}.${Math.floor(Date.now() / 1000) + days * 86400}`;
   return Buffer.from(payload).toString('base64url') + '.' + mac(payload);
 };
+/** A scan that was stopped by a form to fill in first: lets the same person finish clocking in for 20 minutes. */
+const resumeMac = (p: string) => createHmac('sha256', config.jwtSecret + ':qrresume').update(p).digest('base64url');
+const resumeToken = (tid: string, uid: string, eid: string) => {
+  const payload = `${tid}.${uid}.${eid}.${Math.floor(Date.now() / 1000) + 20 * 60}`;
+  return Buffer.from(payload).toString('base64url') + '.' + resumeMac(payload);
+};
+const readResume = (raw: string, tid: string, uid: string, eid: string) => {
+  const [p, sig] = String(raw).split('.');
+  if (!p || !sig) return false;
+  let payload: string;
+  try { payload = Buffer.from(p, 'base64url').toString(); } catch { return false; }
+  if (!same(resumeMac(payload), sig)) return false;
+  const [t, u, e, exp] = payload.split('.');
+  return t === tid && u === uid && e === eid && Number(exp) >= Date.now() / 1000;
+};
 const readScreenToken = (raw: string) => {
   const [p, sig] = String(raw).split('.');
   if (!p || !sig) return null;
@@ -140,13 +155,15 @@ export async function qrClockRoutes(app: FastifyInstance) {
 
   // A crew member scanned the code.
   app.post('/api/time/qr', { preHandler: authenticate, config: limit }, async (req, reply) => {
-    const b = z.object({ eventId: uuid, code: z.string().min(6).max(40), lat: z.number().min(-90).max(90).optional(), lng: z.number().min(-180).max(180).optional(), accuracy: z.number().min(0).max(100000).optional() }).parse(req.body);
+    const b = z.object({ eventId: uuid, code: z.string().min(6).max(40).optional(), resume: z.string().max(400).optional(), lat: z.number().min(-90).max(90).optional(), lng: z.number().min(-180).max(180).optional(), accuracy: z.number().min(0).max(100000).optional() }).parse(req.body);
     const out = await withTenant(req.user.tid, async (c) => {
       const ev = await eventQr(c, b.eventId);
       if (!ev || !ev.qr_clock || !ev.qr_secret) return { code: 404, error: 'QR clock-in isn’t turned on for this event. Clock in from your shift instead.' };
       const w = windowNow();
-      const live = [w, w - 1, w - 2].some((n) => same(codeFor(ev.qr_secret!, ev.id, String(n)), b.code));
-      const poster = !live && same(codeFor(ev.qr_secret, ev.id, 'poster'), b.code);
+      const code = b.code ?? '';
+      const resumed = !!b.resume && readResume(b.resume, req.user.tid, req.user.sub, ev.id);
+      const live = resumed || (!!code && [w, w - 1, w - 2].some((n) => same(codeFor(ev.qr_secret!, ev.id, String(n)), code)));
+      const poster = !live && !!code && same(codeFor(ev.qr_secret, ev.id, 'poster'), code);
       if (!live && !poster) return { code: 409, reason: 'old_code', error: 'That code has expired. Scan the code on the screen again.' };
       let distance: number | null = b.lat !== undefined && b.lng !== undefined && ev.geo_lat !== null && ev.geo_lng !== null ? Math.round(distanceM(b.lat, b.lng, ev.geo_lat, ev.geo_lng)) : null;
       if (poster) {
@@ -195,7 +212,7 @@ export async function qrClockRoutes(app: FastifyInstance) {
         return { code: 409, reason: 'no_shift', error: later ? 'Your shift here hasn’t opened for clock-in yet. It opens 1 hour before the start.' : `You’re not confirmed on a shift at ${ev.name} right now. Find the coordinator on site.`, opensAt: later?.starts_at ?? null };
       }
       const form = await clockInBlock(c, req.user.sub, a.id);
-      if (form) return { code: 409, reason: 'form', error: `Fill in "${form.name}" before you clock in.`, formId: form.id, shiftId: form.shiftId, assignmentId: a.id };
+      if (form) return { code: 409, reason: 'form', error: `Fill in "${form.name}" before you clock in. Your scan is kept for 20 minutes, so you won’t need to scan again.`, formId: form.id, formName: form.name, shiftId: form.shiftId, assignmentId: a.id, resume: resumeToken(req.user.tid, req.user.sub, ev.id) };
       const t = (await c.query(`INSERT INTO time_entries (tenant_id, assignment_id, user_id, in_lat, in_lng, in_distance_m, clock_in, in_accuracy_m) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, clock_in`, [req.user.tid, a.id, req.user.sub, b.lat ?? null, b.lng ?? null, distance, now, b.accuracy === undefined ? null : Math.round(b.accuracy)])).rows[0];
       await c.query('UPDATE time_breaks SET ended_at = $2 WHERE user_id = $1 AND ended_at IS NULL', [req.user.sub, now]);
       await audit(c, req.user.tid, req.user.sub, 'time.clock_in', 'time_entry', t.id, { qr: poster ? 'poster' : 'screen' });
