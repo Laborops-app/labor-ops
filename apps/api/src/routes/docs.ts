@@ -167,6 +167,7 @@ export async function docRoutes(app: FastifyInstance) {
   // A ready-made onboarding packet: generic PDFs with the fields already placed. Ones already in the packet are skipped.
   app.post('/api/docs/starter-packet', { preHandler: mgr }, async (req) =>
     withTenant(req.user.tid, async (c) => {
+      await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`docs:starter:${req.user.tid}`]);
       const company = (await c.query('SELECT name FROM tenants WHERE id = $1', [req.user.tid])).rows[0]?.name ?? 'the company';
       const have = new Set((await c.query("SELECT lower(name) AS n FROM doc_templates WHERE purpose = 'onboarding'")).rows.map((r) => r.n as string));
       let sort = (await c.query("SELECT COALESCE(max(sort), 0) AS n FROM doc_templates WHERE purpose = 'onboarding'")).rows[0].n as number;
@@ -185,10 +186,12 @@ export async function docRoutes(app: FastifyInstance) {
   );
 
   // A ready-made incident report (PDF) with witness and supervisor signatures, used only when needed.
-  app.post('/api/docs/starter-incident-report', { preHandler: mgr }, async (req, reply) =>
-    withTenant(req.user.tid, async (c) => {
+  app.post('/api/docs/starter-incident-report', { preHandler: mgr }, async (req, reply) => {
+    // Answer only after the transaction has committed, so asking twice in a row (a double click) can't add it twice.
+    const out = await withTenant(req.user.tid, async (c) => {
+      await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`docs:starter:${req.user.tid}`]);
       const company = (await c.query('SELECT name FROM tenants WHERE id = $1', [req.user.tid])).rows[0]?.name ?? 'the company';
-      if ((await c.query("SELECT 1 FROM doc_templates WHERE purpose = 'shift' AND lower(name) = 'incident report'")).rowCount) return reply.code(409).send({ error: 'You already have a form called Incident report.' });
+      if ((await c.query("SELECT 1 FROM doc_templates WHERE purpose = 'shift' AND lower(name) = 'incident report'")).rowCount) return null;
       const d = await incidentReport(company);
       const sort = (await c.query("SELECT COALESCE(max(sort), 0) + 1 AS n FROM doc_templates WHERE purpose = 'shift'")).rows[0].n;
       const r = (await c.query(
@@ -196,9 +199,10 @@ export async function docRoutes(app: FastifyInstance) {
         [req.user.tid, d.name, d.pdf, d.fileName, d.pdf.length, d.pages, JSON.stringify(d.fields), JSON.stringify(templateSettings.parse({ required: false, who: 'everyone', when: 'any', useOn: 'all' })), sort, req.user.sub],
       )).rows[0];
       await audit(c, req.user.tid, req.user.sub, 'docs.starter_incident', 'doc_template', r.id);
-      return reply.code(201).send({ id: r.id });
-    }),
-  );
+      return { id: r.id as string };
+    });
+    return out ? reply.code(201).send(out) : reply.code(409).send({ error: 'You already have a form called Incident report.' });
+  });
 
   // ----- filling in and signing -----
   app.post('/api/docs/templates/:id/submit', { preHandler: authenticate, bodyLimit: 8 * 1024 * 1024 }, async (req, reply) => {
