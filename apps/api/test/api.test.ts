@@ -4989,3 +4989,32 @@ test('Rentman role names: mapping renames existing shifts (so rates apply), Remo
   assert.ok(!map.includes('old name') && map.includes('audio a1'));
   assert.equal((await call(a, 'DELETE', '/api/rentman/role-map?name=nope')).status, 404);
 });
+
+test('call sheet and wrap report: PDFs for coordinators, signed links for crew and customers', async () => {
+  const a = await register('docs1');
+  const c1 = await mkCrew(a, 'dc1');
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Docs Show', startDate: '2031-07-01', endDate: '2031-07-01', venue: 'Main Hall', notes: 'Park in Lot C.' })).json.event.id;
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: start(40), endsAt: start(48), headcount: 2 })).json.shift.id;
+  assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, confirmed: true })).status, 201);
+  const cs = await call(a, 'GET', `/api/events/${ev}/call-sheet.pdf?phones=1&unconfirmed=1`);
+  assert.equal(cs.status, 200);
+  assert.match(String(cs.res.headers['content-type']), /application\/pdf/);
+  assert.ok(cs.res.rawPayload.subarray(0, 4).toString() === '%PDF');
+  const wr = await call(a, 'GET', `/api/events/${ev}/wrap-report.pdf`);
+  assert.ok(wr.status === 200 && wr.res.rawPayload.subarray(0, 4).toString() === '%PDF');
+  // Crew can't use the coordinator endpoints, and get a signed link instead
+  assert.equal((await call(c1.session, 'GET', `/api/events/${ev}/call-sheet.pdf`)).status, 403);
+  const sent = await call(a, 'POST', `/api/events/${ev}/call-sheet/send`, { phones: false });
+  assert.equal(sent.json.recipients, 1);
+  const note = (await call(c1.session, 'GET', '/api/notifications')).json.items.find((n: { title: string }) => /call sheet/.test(n.title));
+  assert.match(note.link, /^\/api\/event-doc\?t=/);
+  const open = await call(null, 'GET', note.link);
+  assert.ok(open.status === 200 && open.res.rawPayload.subarray(0, 4).toString() === '%PDF');
+  assert.equal((await call(null, 'GET', note.link.slice(0, -3) + 'abc')).status, 404);
+  // Wrap report by email needs an address
+  assert.equal((await call(a, 'POST', `/api/events/${ev}/wrap-report/send`, {})).status, 400);
+  assert.equal((await call(a, 'POST', `/api/events/${ev}/wrap-report/send`, { to: 'client@example.com' })).json.sentTo, 'client@example.com');
+  // Another company can't read it
+  const b = await register('docs2');
+  assert.equal((await call(b, 'GET', `/api/events/${ev}/call-sheet.pdf`)).status, 404);
+});

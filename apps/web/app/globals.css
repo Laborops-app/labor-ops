@@ -2569,3 +2569,13 @@ details.card.profile-fold > summary::before { content: none; }
 .cs-row.menu-on { background: var(--primary-soft); border-radius: 6px; }
 :root[data-look='violet'] .cm { border-radius: 8px; box-shadow: var(--shadow), 0 14px 36px rgba(0, 0, 0, 0.2); }
 :root[data-look='modern'] .cm { border-radius: 14px; }
+
+/* Call sheet & wrap report window: PDF preview beside the options */
+.edoc { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(240px, 1fr); gap: 18px; align-items: start; }
+.edoc-view iframe { width: 100%; height: min(70vh, 760px); border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+.edoc-opts label { display: grid; gap: 6px; font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 10px; }
+.edoc-opts label.check { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 500; min-height: 32px; margin-bottom: 4px; }
+.edoc-opts label.check input { width: 18px; height: 18px; }
+.edoc-acts { display: grid; gap: 8px; margin-top: 14px; }
+.edoc-acts .btn { min-height: 44px; justify-content: center; text-align: center; }
+@media (max-width: 760px) { .edoc { grid-template-columns: minmax(0, 1fr); } .edoc-view iframe { height: 55vh; } }

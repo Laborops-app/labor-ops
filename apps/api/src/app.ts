@@ -6,6 +6,7 @@ import { archiveRoutes } from './routes/archive';
 import { eventUpdateRoutes } from './routes/eventUpdates';
 import { workRuleRoutes } from './routes/workRules';
 import { clientRoutes } from './routes/client';
+import { eventDocRoutes } from './routes/eventDocs';
 import { autofillRoutes } from './routes/autofill';
 import { staffingRoutes } from './routes/staffing';
 import Fastify from 'fastify';
@@ -122,5 +123,6 @@ export async function buildApp() {
   await app.register(workRuleRoutes);
   await app.register(clientRoutes);
   await app.register(autofillRoutes);
+  await app.register(eventDocRoutes);
   return app;
 }

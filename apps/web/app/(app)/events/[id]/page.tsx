@@ -14,6 +14,7 @@ import CrewPick, { PickOption } from '@/components/CrewPick';
 import TimeEdit from '@/components/TimeEdit';
 import Modal from '@/components/Modal';
 import ActionMenu, { ActIcon } from '@/components/ActionMenu';
+import EventDocs from '@/components/EventDocs';
 import CrewMenu, { CrewPayForm, type CrewMenuItem } from '@/components/CrewMenu';
 import InvoicePanel from '@/components/InvoicePanel';
 import HrEventView from '@/components/HrEventView';
@@ -170,6 +171,7 @@ function Body({ me }: { me: Me }) {
   // Linking crew shifts to a lead shift: the shift being edited and the shifts ticked.
   const [teamEdit, setTeamEdit] = useState<{ id: string; picked: Set<string> } | null>(null);
   // Adding time for someone who never clocked in (assignment id).
+  const [docsOpen, setDocsOpen] = useState(false);
   const [addTime, setAddTime] = useState<string | null>(null);
   // Right-click (or ⋯) menu on a crew member: which shift and assignment, and where it opens.
   const [crewMenu, setCrewMenu] = useState<{ sid: string; aid: string; x: number; y: number } | null>(null);
@@ -1478,6 +1480,11 @@ function Body({ me }: { me: Me }) {
           />
         );
       })()}
+      {docsOpen && (
+        <Modal title={`Call sheet & wrap report · ${ev.name}`} onClose={() => setDocsOpen(false)} wide>
+          <EventDocs eventId={id} phases={d.phases} customerEmail={custInfo?.email} onNote={setNote} />
+        </Modal>
+      )}
       {shiftModal && <Modal title={shiftModalTitle} onClose={() => { setShiftModal(false); setAdding(null); }} wide>{shiftFormBody}</Modal>}
       <datalist id="role-names">{skillNames.map((n) => <option key={n} value={n} />)}</datalist>
       <div className="split-main">
@@ -1588,6 +1595,7 @@ function Body({ me }: { me: Me }) {
             <ActionMenu
               badge={!!rateInfo?.due}
               items={[
+                { label: 'Call sheet & wrap report', icon: 'quote', hint: 'Printable PDFs for the crew and the customer', onClick: () => setDocsOpen(true) },
                 { label: 'Who’s free?', icon: 'free', hint: 'Ask crew which days they’re free before booking', onClick: () => setSettings('avail') },
                 { label: 'Rate crew', icon: 'rate', badge: rateInfo?.due ? `${rateInfo.due} to rate` : rateInfo?.total ? `${rateInfo.rated}/${rateInfo.total}` : null, onClick: () => setSettings('rate') },
                 ...((me.role === 'admin' || me.canAdjustRates) ? [{ label: 'Crew pay', icon: 'pay', hint: 'Personal rates for this event', onClick: () => setSettings('pay') }] : []),
