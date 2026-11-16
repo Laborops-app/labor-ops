@@ -1,4 +1,5 @@
 'use client';
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner } from '@/components/ui';
@@ -33,7 +34,9 @@ function Body() {
   const [error, setError] = useState('');
   const [ok, setOk] = useState('');
   const [quiet, setQuiet] = useState<boolean | null>(null);
+  const [docs, setDocs] = useState<{ onboardingOn: boolean; onboardingBlock: boolean } | null>(null);
   useEffect(() => {
+    api<{ onboardingOn: boolean; onboardingBlock: boolean }>('/api/docs/settings').then(setDocs).catch(() => undefined);
     api<{ quietByDefault: boolean }>('/api/staffing/settings').then((x) => setQuiet(x.quietByDefault)).catch(() => undefined);
     api<Rules>('/api/labor-rules').then(setR).catch((e) => setError(e.message));
     loadStates();
@@ -76,6 +79,29 @@ function Body() {
             Start new events building quietly
           </label>
           <p className="muted">Crew picks are kept as a plan and nobody is told. When every position has someone, you’re asked whether to request all the crew now or save and request later. You can change it on each new event.</p>
+          {docs && (
+            <>
+              <label className="check" style={{ marginTop: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={docs.onboardingBlock}
+                  onChange={async (e) => {
+                    const on = e.target.checked;
+                    setError(''); setOk('');
+                    try {
+                      setDocs(await api<{ onboardingOn: boolean; onboardingBlock: boolean }>('/api/docs/settings', { method: 'PUT', body: { onboardingBlock: on } }));
+                      setOk(on ? 'Crew now need their onboarding paperwork done before they can be offered shifts.' : 'Crew can be offered shifts whether or not their onboarding paperwork is done.');
+                    } catch (err) { setError((err as Error).message); }
+                  }}
+                />
+                Require onboarding paperwork before offering shifts
+              </label>
+              <p className="muted">
+                Off: anyone can be scheduled straight away and finish their paperwork later (they still get reminders). On: shift offers wait until every required onboarding step is signed; you can still add people to a quiet plan.
+                {docs.onboardingBlock && !docs.onboardingOn && <> This only takes effect once the onboarding packet is turned on under <Link href="/forms">Forms &amp; documents</Link>.</>}
+              </p>
+            </>
+          )}
         </section>
       )}
       <form onSubmit={save}>

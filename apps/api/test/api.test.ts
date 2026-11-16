@@ -5132,7 +5132,7 @@ test('documents and forms: upload a PDF, place fields, sign in the app; onboardi
   // Off by default
   assert.deepEqual((await call(a, 'GET', '/api/docs/settings')).json, { onboardingOn: false, onboardingBlock: false, onboardingRemind: true, formsOn: false });
   assert.equal((await call(c1.session, 'PUT', '/api/docs/settings', { onboardingOn: true })).status, 403);
-  await call(a, 'PUT', '/api/docs/settings', { onboardingOn: true, onboardingBlock: true, formsOn: true });
+  await call(a, 'PUT', '/api/docs/settings', { onboardingOn: true, formsOn: true });
   // Upload a PDF with a signature, a date and a text field
   assert.equal((await call(a, 'POST', '/api/docs/templates', { name: 'Nope', kind: 'pdf', purpose: 'onboarding', file: Buffer.from('hello').toString('base64') })).status, 400);
   const tpl = (await call(a, 'POST', '/api/docs/templates', {
@@ -5145,6 +5145,12 @@ test('documents and forms: upload a PDF, place fields, sign in the app; onboardi
   // Offers are held until onboarding is done (quiet picks are not)
   const ev = (await call(a, 'POST', '/api/events', { name: 'Doc Show', startDate: new Date().toISOString().slice(0, 10), endDate: new Date().toISOString().slice(0, 10) })).json.event.id;
   const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Rigger', startsAt: start(0.5), endsAt: start(8), headcount: 1 })).json.shift.id;
+  // By default unfinished paperwork doesn't stop scheduling
+  const free = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Runner', startsAt: start(30), endsAt: start(36), headcount: 1 })).json.shift.id;
+  const ok1 = await call(a, 'POST', `/api/shifts/${free}/assign`, { userId: c1.id, confirmed: true });
+  assert.ok(ok1.status < 300, ok1.text);
+  // With the option on, offers wait until onboarding is done (quiet picks don't)
+  await call(a, 'PUT', '/api/docs/settings', { onboardingBlock: true });
   assert.equal((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, confirmed: true })).json.reason, 'onboarding');
   // Signing needs the signature, the consent tick and the required text
   const sub = (b: object) => call(c1.session, 'POST', `/api/docs/templates/${tpl}/submit`, b);

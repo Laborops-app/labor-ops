@@ -183,7 +183,7 @@ function Body({ me }: { me: Me }) {
         </label>
         {tab === 'onboarding' && on && (
           <div className="row" style={{ gap: 18, flexWrap: 'wrap', marginTop: 10 }}>
-            <label className="check"><input type="checkbox" checked={st.onboardingBlock} disabled={!isAdmin} onChange={(e) => setting({ onboardingBlock: e.target.checked }, e.target.checked ? 'Offers are held until onboarding is done.' : 'Offers go out whether or not onboarding is done.')} /> Hold offers until onboarding is done</label>
+            <label className="check"><input type="checkbox" checked={st.onboardingBlock} disabled={!isAdmin} onChange={(e) => setting({ onboardingBlock: e.target.checked }, e.target.checked ? 'Crew now need their onboarding done before they can be offered shifts.' : 'Crew can be offered shifts whether or not onboarding is done.')} /> Require onboarding paperwork before offering shifts</label>
             <label className="check"><input type="checkbox" checked={st.onboardingRemind} disabled={!isAdmin} onChange={(e) => setting({ onboardingRemind: e.target.checked }, e.target.checked ? 'People are reminded every 2 days.' : 'Automatic reminders are off.')} /> Remind people every 2 days until done</label>
           </div>
         )}
