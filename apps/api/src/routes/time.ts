@@ -32,9 +32,7 @@ const ENTRY_SQL = `
   JOIN shift_assignments a ON a.id = t.assignment_id
   JOIN shifts s ON s.id = a.shift_id
   JOIN events e ON e.id = s.event_id
-  LEFT JOIN LATERAL (SELECT x.pay_type, x.rate FROM event_crew_rates x
-           WHERE x.event_id = e.id AND x.user_id = u.id AND (x.role_name = '' OR lower(x.role_name) = lower(trim(s.role_name)))
-           ORDER BY (x.role_name = '') LIMIT 1) cr ON true
+  LEFT JOIN LATERAL person_rate(u.id, s.id) cr ON true
   LEFT JOIN users ap ON ap.id = t.approved_by
   LEFT JOIN users ed ON ed.id = t.edited_by`;
 

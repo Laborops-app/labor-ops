@@ -1,4 +1,5 @@
 'use client';
+import { CrewRatesGrid } from '@/components/CrewRates';
 import RoleDefaults from '@/components/RoleDefaults';
 import { Fragment, useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
@@ -430,5 +431,5 @@ function Body() {
 }
 
 export default function Page() {
-  return <Shell roles={['admin', 'manager']}>{(me: Me) => (me.role === 'admin' ? <Body /> : <RatesOnly />)}</Shell>;
+  return <Shell roles={['admin', 'manager']}>{(me: Me) => (<>{me.role === 'admin' ? <Body /> : <RatesOnly />}{(me.role === 'admin' || me.canAdjustRates) && <CrewRatesGrid />}</>)}</Shell>;
 }

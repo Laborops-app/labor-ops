@@ -50,10 +50,8 @@ export async function payrollSummary(c: PoolClient, from: string, to: string) {
               e.name AS event_name, e.ot_after, e.state, e.address
          FROM time_entries t JOIN users u ON u.id = t.user_id
          JOIN shift_assignments a ON a.id = t.assignment_id JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
-         -- A rate set for this person on this event replaces the shift's and the role's rate.
-         LEFT JOIN LATERAL (SELECT x.pay_type, x.rate FROM event_crew_rates x
-           WHERE x.event_id = s.event_id AND x.user_id = t.user_id AND (x.role_name = '' OR lower(x.role_name) = lower(trim(s.role_name)))
-           ORDER BY (x.role_name = '') LIMIT 1) cr ON true
+         -- This person's own rate (on this event, else their standing rate for the skill on that day) replaces the shift's and the role's rate.
+         LEFT JOIN LATERAL person_rate(t.user_id, s.id) cr ON true
         WHERE t.status = 'approved' AND t.clock_out IS NOT NULL
           AND t.clock_in >= ($1::date - 7)::timestamp AT TIME ZONE $3 AND t.clock_in < ($2::date + 1)::timestamp AT TIME ZONE $3
         ORDER BY t.user_id, t.clock_in`,

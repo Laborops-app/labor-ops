@@ -5596,3 +5596,85 @@ test('time & attendance: rows with conditions, minimum per person, approve many,
   assert.equal((await call(a, 'POST', `/api/time-entries/${r.entryId}/unapprove`, {})).status, 200);
   assert.equal((await ta()).rows.find((x: any) => x.user.id === c1.id).status, 'out');
 });
+
+test('standing crew rates: person per skill on every event, start dates, event rate wins, bill rates, crew see only their own pay', async () => {
+  const a = await register('stdr');
+  const tid = await tenantOf(a);
+  const sk = (await call(a, 'POST', '/api/skills', { name: 'Stagehand', payRate: 20, billRate: 40 })).json.skill;
+  assert.ok(sk?.id);
+  const mk = async (tag: string) => {
+    const m = await call(a, 'POST', '/api/crew', { name: `Crew ${tag}`, email: `${tag}-${run}@test.example`, password: 'password123', skills: ['Stagehand'] });
+    assert.equal(m.status, 201, m.text);
+    return { id: m.json.member.id as string, session: await login(`${tag}-${run}@test.example`, 'password123') };
+  };
+  const c1 = await mk('stdr1'), c2 = await mk('stdr2');
+  const today = (await call(a, 'GET', `/api/crew/${c1.id}/rates`)).json.today as string;
+  const dayAfter = (n: number) => { const d = new Date(`${today}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+
+  // Their own rate for the skill, from today; a raise starting in 10 days
+  assert.equal((await call(a, 'PUT', `/api/crew/${c1.id}/rates`, { skillId: sk.id, payType: 'hourly', rate: 30, billRate: 55 })).status, 200);
+  assert.equal((await call(a, 'PUT', `/api/crew/${c1.id}/rates`, { role: 'Stagehands', rate: 34, startsOn: dayAfter(10), note: 'raise' })).status, 200);
+  const pr = (await call(a, 'GET', `/api/crew/${c1.id}/rates`)).json.skills[0];
+  assert.deepEqual([pr.current.rate, pr.current.billRate, pr.upcoming[0].rate, pr.upcoming[0].billRate, pr.history.length], [30, 55, 34, 55, 2]);
+
+  // Shifts named a little differently still match the skill ("Stagehands (Load in)")
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Std Show', startDate: today, endDate: dayAfter(12) })).json.event.id;
+  const soon = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehands (Load in)', startsAt: start(30), endsAt: start(38), headcount: 3 })).json.shift.id;
+  const later = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: start(24 * 11 + 2), endsAt: start(24 * 11 + 10), headcount: 1 })).json.shift.id;
+  for (const [s, c] of [[soon, c1], [soon, c2], [later, c1]] as const) assert.ok((await call(a, 'POST', `/api/shifts/${s}/assign`, { userId: c.id, confirmed: true, override: true })).status < 300);
+  const seat = async (shiftId: string, userId: string) => {
+    const d = (await call(a, 'GET', `/api/events/${ev}`)).json;
+    const s = d.shifts.find((x: any) => x.id === shiftId);
+    return s.assignments.find((x: any) => x.user_id === userId);
+  };
+  let me1 = await seat(soon, c1.id);
+  assert.deepEqual([me1.rate, me1.rate_src, me1.estimated_pay], [30, 'person', 240]);
+  assert.equal((await seat(soon, c2.id)).rate ?? null, null); // no rate of their own: role rate, no chip
+  assert.equal((await seat(later, c1.id)).rate, 34); // the raise applies from its start date
+
+  // A rate for this event still wins, and can also be saved as their standing rate
+  const er = await call(a, 'PUT', `/api/events/${ev}/crew-rates/${c1.id}`, { payType: 'hourly', rate: 36, role: 'Stagehands (Load in)' });
+  assert.equal(er.status, 200, er.text);
+  me1 = await seat(soon, c1.id);
+  assert.deepEqual([me1.rate, me1.rate_src], [36, 'event']);
+  assert.equal((await call(a, 'DELETE', `/api/events/${ev}/crew-rates/${c1.id}?role=${encodeURIComponent('Stagehands (Load in)')}`)).status, 200);
+  const keep = await call(a, 'PUT', `/api/events/${ev}/crew-rates/${c2.id}`, { payType: 'hourly', rate: 25, role: 'Stagehand', saveStanding: true });
+  assert.equal(keep.json.standing, 'Stagehand');
+  assert.equal((await call(a, 'GET', `/api/crew/${c2.id}/rates`)).json.skills[0].current.rate, 25);
+  await call(a, 'DELETE', `/api/events/${ev}/crew-rates/${c2.id}?role=Stagehand`);
+
+  // Invoice from the schedule: c1's seat at their bill rate, the other two at the role's
+  const bill = (await call(a, 'GET', `/api/events/${ev}/billing?source=schedule`)).json;
+  const reg = bill.lines.filter((l: any) => l.kind === 'regular' && l.date === bill.lines.find((x: any) => x.kind === 'regular').date);
+  assert.deepEqual(reg.map((l: any) => [l.qty, l.rate, l.rateFrom]).sort(), [[16, 40, 'role'], [8, 55, 'person']].sort());
+  // A Rentman quoted price still wins over a person's bill rate
+  await withTenant(tid, (c) => c.query('UPDATE shifts SET bill_rate_override = 50 WHERE id = $1', [soon]));
+  const bill2 = (await call(a, 'GET', `/api/events/${ev}/billing?source=schedule`)).json;
+  assert.ok(bill2.lines.filter((l: any) => l.kind === 'regular' && l.rate === 50).every((l: any) => l.rateFrom === 'rentman'));
+  assert.equal(bill2.lines.some((l: any) => l.rateFrom === 'person' && l.rate === 55 && l.qty === 8 && l.date === reg[0].date), false);
+
+  // Payroll pays approved time at the standing rate in force that day
+  const asg = (await seat(soon, c1.id)).id;
+  await withTenant(tid, (c) => c.query(
+    `INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in, clock_out, status, approved_at)
+     SELECT $1, a.id, a.user_id, s.starts_at, s.starts_at + interval '4 hours', 'approved', now() FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE a.id = $2`, [tid, asg]));
+  const dayOf = start(30).slice(0, 10);
+  const pay = (await call(a, 'GET', `/api/payroll?from=${dayAfter(-1)}&to=${dayAfter(3) > dayOf ? dayAfter(3) : dayOf}`)).json;
+  const p1 = pay.people.find((p: any) => p.userId === c1.id);
+  assert.equal(p1.gross, 120);
+
+  // Crew: their own pay rates only, no bill rates, nobody else's
+  const mine = (await call(c1.session, 'GET', '/api/my/rates')).json.rates[0];
+  assert.deepEqual([mine.skill, mine.own.rate, mine.upcoming.rate, 'billRate' in mine.own], ['Stagehand', 30, 34, false]);
+  assert.equal((await call(c1.session, 'GET', `/api/crew/${c2.id}/rates`)).status, 403);
+  assert.equal((await call(c1.session, 'PUT', `/api/crew/${c1.id}/rates`, { skillId: sk.id, rate: 99 })).status, 403);
+  assert.equal((await call(c1.session, 'GET', '/api/rates/grid')).status, 403);
+  // Grid
+  const grid = (await call(a, 'GET', '/api/rates/grid?onlyOwn=1')).json;
+  assert.deepEqual(grid.people.map((p: any) => p.id).sort(), [c1.id, c2.id].sort());
+  assert.equal(grid.cells[c1.id][sk.id].current.rate, 30);
+  // Taking a row back: the one before applies again
+  const rid = (await call(a, 'GET', `/api/crew/${c1.id}/rates`)).json.skills[0].upcoming[0].id;
+  assert.equal((await call(a, 'DELETE', `/api/crew/${c1.id}/rates/${rid}`)).status, 200);
+  assert.equal((await seat(later, c1.id)).rate, 30);
+});

@@ -1,4 +1,5 @@
 'use client';
+import { CrewPayRates } from '@/components/CrewRates';
 import { PersonDocs } from '@/components/docs/SignedDocs';
 import { useLoadEffect, useTabTitle } from '@/lib/tabs';
 import Link from 'next/link';
@@ -252,6 +253,8 @@ function Body({ me }: { me: Me }) {
           )}
         </div>
       </form>
+
+      {me.role !== 'crew' && <CrewPayRates userId={m.id} />}
 
       {(isCrew || (me.role === 'admin' && m.id !== me.id)) && (
         <section className="card" id="access">

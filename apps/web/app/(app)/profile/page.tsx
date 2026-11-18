@@ -1,4 +1,5 @@
 'use client';
+import { MyRates } from '@/components/CrewRates';
 import { useLoadEffect } from '@/lib/tabs';
 import { useEffect, useRef, useState } from 'react';
 import { InstallCard } from '@/components/InstallApp';
@@ -250,6 +251,7 @@ function Body({ me }: { me: Me }) {
         </div>
       </form>
 
+      {isCrew && <MyRates />}
       {isCrew && (
         <section className="card">
           <h2>My certificates</h2>

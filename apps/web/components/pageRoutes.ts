@@ -49,6 +49,7 @@ export const PAGE_ROUTES: PageRoute[] = [
   route('/schedule', () => import('@/app/(app)/schedule/page')),
   route('/skills', () => import('@/app/(app)/skills/page')),
   route('/timesheets', () => import('@/app/(app)/timesheets/page')),
+  route('/attendance', () => import('@/app/(app)/attendance/page')),
   route('/trainings', () => import('@/app/(app)/trainings/page')),
 ];
 

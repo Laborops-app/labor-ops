@@ -108,7 +108,7 @@ function splitHours(rules: Rules, rate: number, start: Date | string, end: Date 
 
 // ---------- event billing ----------
 export type BillKind = 'regular' | 'overtime' | 'double' | 'day' | 'fee';
-export type BillLine = { role: string; date: string; phase: string | null; kind: BillKind; qty: number; unit: 'hour' | 'day' | 'person'; rate: number; amount: number; description: string; qboItemId: string | null; rateFrom: 'rentman' | 'role' };
+export type BillLine = { role: string; date: string; phase: string | null; kind: BillKind; qty: number; unit: 'hour' | 'day' | 'person'; rate: number; amount: number; description: string; qboItemId: string | null; rateFrom: 'rentman' | 'person' | 'role' };
 export type BillSource = 'time' | 'schedule';
 
 export async function eventBilling(c: PoolClient, eventId: string, source: BillSource) {
@@ -138,20 +138,29 @@ export async function eventBilling(c: PoolClient, eventId: string, source: BillS
     const label = kind === 'regular' ? 'hours' : kind === 'overtime' ? 'overtime hours' : kind === 'double' ? 'double-time hours' : kind === 'fee' ? 'fixed fee per person' : 'day rate';
     acc.set(key, { role: baseRole(role), date, phase, kind, qty: r2(qty), unit, rate, amount: r2(qty * rate), description: `${baseRole(role)} ${label} · ${fmtDay(date)}${phase ? ` · ${phase}` : ''} · ${ev.name}`, qboItemId: sk?.qbo_item_id ?? settings.qbo.defaultItemId ?? null, rateFrom: from });
   };
-  // A shift's own billing rate (the rate quoted in Rentman) wins over the role's hourly bill rate.
-  const rates = (role: string, override?: unknown) => {
+  // Which bill rate: the shift's own (the rate quoted in Rentman), then the person's own bill rate for the skill, then the role's.
+  const rates = (role: string, override?: unknown, own?: { pay_type: string; bill_rate: unknown } | null) => {
     const sk = skills.get(roleKeyOf(role));
     const quoted = override != null && Number(override) > 0;
-    return { hourly: quoted ? Number(override) : Number(sk?.bill_rate ?? 0), day: Number(sk?.day_bill_rate ?? 0), from: (quoted ? 'rentman' : 'role') as BillLine['rateFrom'] };
+    if (quoted) return { hourly: Number(override), day: Number(sk?.day_bill_rate ?? 0), from: 'rentman' as BillLine['rateFrom'] };
+    const mine = own && Number(own.bill_rate) > 0 ? Number(own.bill_rate) : 0;
+    return {
+      hourly: mine && own!.pay_type !== 'day' ? mine : Number(sk?.bill_rate ?? 0),
+      day: mine && own!.pay_type === 'day' ? mine : Number(sk?.day_bill_rate ?? 0),
+      from: (mine ? 'person' : 'role') as BillLine['rateFrom'],
+    };
   };
+  const tz = ev.timezone || 'UTC';
 
   if (source === 'time') {
     const rows = (
       await c.query(
-        `SELECT t.user_id, t.assignment_id, t.clock_in, t.clock_out, t.status, s.id AS shift_id, s.starts_at, s.role_name, s.pay_type, s.bill_rate_override, s.fixed_fee_override, p.label AS phase
+        `SELECT t.user_id, t.assignment_id, t.clock_in, t.clock_out, t.status, s.id AS shift_id, s.starts_at, s.role_name, s.pay_type, s.bill_rate_override, s.fixed_fee_override, p.label AS phase,
+                pb.pay_type AS own_type, pb.bill_rate AS own_bill
            FROM time_entries t JOIN shift_assignments a ON a.id = t.assignment_id JOIN shifts s ON s.id = a.shift_id LEFT JOIN event_phases p ON p.id = s.phase_id
+           LEFT JOIN LATERAL standing_rate(t.user_id, s.role_name, (s.starts_at AT TIME ZONE $2)::date) pb ON true
           WHERE s.event_id = $1 ORDER BY t.user_id, t.clock_in`,
-        [eventId],
+        [eventId, tz],
       )
     ).rows;
     const notApproved = rows.filter((r) => r.status !== 'approved').length;
@@ -163,12 +172,13 @@ export async function eventBilling(c: PoolClient, eventId: string, source: BillS
     const feeBilled = new Set<string>(); // shift|person with the fixed fee billed
     for (const r of approved) {
       const date = localDate(ev.timezone, r.clock_in);
-      const rt = rates(r.role_name, r.bill_rate_override);
+      const own = r.own_bill ? { pay_type: r.own_type, bill_rate: r.own_bill } : null;
+      const rt = rates(r.role_name, r.bill_rate_override, own);
       if (r.pay_type === 'day') {
         const k = `${r.assignment_id}|${date}`;
         if (daysBilled.has(k)) continue;
         daysBilled.add(k);
-        if (rt.day > 0) add(r.role_name, date, r.phase, 'day', 1, 'day', rt.day);
+        if (rt.day > 0) add(r.role_name, date, r.phase, 'day', 1, 'day', rt.day, rt.from === 'person' && own?.pay_type === 'day' ? 'person' : 'role');
         else {
           missingRate.add(`${baseRole(r.role_name)} (day bill rate)`);
           add(r.role_name, date, r.phase, 'day', 1, 'day', 0);
@@ -189,21 +199,35 @@ export async function eventBilling(c: PoolClient, eventId: string, source: BillS
       add(r.role_name, date, r.phase, 'double', h.dt, 'hour', r2(rt.hourly * st.dtMult), rt.from);
     }
   } else {
-    const shifts = (await c.query('SELECT s.role_name, s.starts_at, s.ends_at, s.headcount, s.pay_type, s.bill_rate_override, s.fixed_fee_override, p.label AS phase FROM shifts s LEFT JOIN event_phases p ON p.id = s.phase_id WHERE s.event_id = $1 ORDER BY s.starts_at', [eventId])).rows;
+    const shifts = (await c.query('SELECT s.id, s.role_name, s.starts_at, s.ends_at, s.headcount, s.pay_type, s.bill_rate_override, s.fixed_fee_override, p.label AS phase FROM shifts s LEFT JOIN event_phases p ON p.id = s.phase_id WHERE s.event_id = $1 ORDER BY s.starts_at', [eventId])).rows;
     if (!shifts.length) warnings.push('This event has no shifts.');
+    // People booked on a shift with their own bill rate are billed at it; the other seats at the shift's / role's rate.
+    const ownBills = (await c.query(
+      `SELECT a.shift_id, pb.pay_type, pb.bill_rate FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id
+         JOIN LATERAL standing_rate(a.user_id, s.role_name, (s.starts_at AT TIME ZONE $2)::date) pb ON true
+        WHERE s.event_id = $1 AND a.status = 'accepted' AND pb.bill_rate IS NOT NULL`, [eventId, tz])).rows;
     for (const s of shifts) {
       const date = localDate(ev.timezone, s.starts_at);
       const rt = rates(s.role_name, s.bill_rate_override);
-      if (s.pay_type === 'day') {
-        if (!(rt.day > 0)) missingRate.add(`${baseRole(s.role_name)} (day bill rate)`);
-        add(s.role_name, date, s.phase, 'day', s.headcount, 'day', rt.day);
-        continue;
+      const seats: { n: number; own: { pay_type: string; bill_rate: unknown } | null }[] = [];
+      const mine = rt.from === 'rentman' ? [] : ownBills.filter((o) => o.shift_id === s.id).slice(0, s.headcount);
+      for (const o of mine) seats.push({ n: 1, own: o });
+      seats.push({ n: s.headcount - mine.length, own: null });
+      for (const seat of seats) {
+        if (seat.n <= 0) continue;
+        const r = seat.own ? rates(s.role_name, s.bill_rate_override, seat.own) : rt;
+        if (s.pay_type === 'day') {
+          if (!(r.day > 0)) missingRate.add(`${baseRole(s.role_name)} (day bill rate)`);
+          add(s.role_name, date, s.phase, 'day', seat.n, 'day', r.day, seat.own && r.from === 'person' && seat.own.pay_type === 'day' ? 'person' : 'role');
+          continue;
+        }
+        if (!(r.hourly > 0)) missingRate.add(baseRole(s.role_name));
+        const h = splitHours(rules, r.hourly, s.starts_at, s.ends_at, otOpts, false);
+        add(s.role_name, date, s.phase, 'regular', h.reg * seat.n, 'hour', r.hourly, r.from);
+        add(s.role_name, date, s.phase, 'overtime', h.ot * seat.n, 'hour', r2(r.hourly * st.otMult), r.from);
+        add(s.role_name, date, s.phase, 'double', h.dt * seat.n, 'hour', r2(r.hourly * st.dtMult), r.from);
       }
-      if (!(rt.hourly > 0)) missingRate.add(baseRole(s.role_name));
-      const h = splitHours(rules, rt.hourly, s.starts_at, s.ends_at, otOpts, false);
-      add(s.role_name, date, s.phase, 'regular', h.reg * s.headcount, 'hour', rt.hourly, rt.from);
-      add(s.role_name, date, s.phase, 'overtime', h.ot * s.headcount, 'hour', r2(rt.hourly * st.otMult), rt.from);
-      add(s.role_name, date, s.phase, 'double', h.dt * s.headcount, 'hour', r2(rt.hourly * st.dtMult), rt.from);
+      if (s.pay_type === 'day') continue;
       if (Number(s.fixed_fee_override) > 0) add(s.role_name, date, s.phase, 'fee', s.headcount, 'person', Number(s.fixed_fee_override), 'rentman');
     }
   }

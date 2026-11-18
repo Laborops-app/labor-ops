@@ -3081,3 +3081,53 @@ details.card.profile-fold > summary::before { content: none; }
   .ta-apprby br { display: none; }
   .ta-row .act-menu { grid-column: 4; justify-self: end; }
 }
+
+/* ===== Crew pay rates (profile card, rates grid, my rates) ===== */
+.cr-table td { vertical-align: top; }
+.cr-own { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+.cr-next { margin-top: 4px; font-size: 12px; color: var(--info, var(--link)); }
+.cr-acts { white-space: nowrap; display: flex; gap: 8px; align-items: center; }
+.cr-sub > td { background: var(--surface-2); }
+.cr-form { display: flex; flex-direction: column; gap: 8px; padding: 6px 0; }
+.cr-form-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.cr-form-row label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }
+.cr-form-row select, .cr-form-row input[type=date] { width: auto; min-height: 36px; }
+.cr-money { display: flex; align-items: center; gap: 4px; }
+.cr-money i { font-style: normal; color: var(--muted); }
+.cr-money em { font-style: normal; font-size: 12px; color: var(--muted); }
+.cr-money input { width: 96px; min-height: 36px; }
+.cr-note { max-width: 520px; }
+.cr-form-acts { display: flex; gap: 8px; justify-content: flex-end; max-width: 560px; }
+.cr-form.compact .cr-form-acts { max-width: none; }
+.cr-err { color: var(--bad); font-size: 13px; margin: 0; }
+.cr-hist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.cr-hist li { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.cr-hist .link-btn { margin-left: auto; }
+.cr-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0 14px; }
+.cr-filters input:not([type]) { max-width: 220px; }
+.cr-filters select { width: auto; }
+.cr-grid-wrap { overflow: auto; max-height: 70vh; border: 1px solid var(--border); border-radius: 10px; }
+.cr-grid { border-collapse: separate; border-spacing: 0; font-size: 13px; min-width: 100%; }
+.cr-grid th, .cr-grid td { border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); padding: 0; background: var(--surface); }
+.cr-grid thead th { position: sticky; top: 0; z-index: 2; padding: 8px 10px; text-align: left; vertical-align: bottom; min-width: 112px; background: var(--surface-2); }
+.cr-grid thead th span { display: block; font-weight: 600; }
+.cr-grid thead th small { color: var(--muted); font-weight: 400; }
+.cr-grid .cr-name { position: sticky; left: 0; z-index: 1; padding: 8px 12px; text-align: left; white-space: nowrap; min-width: 170px; font-weight: 600; }
+.cr-grid thead .cr-name { z-index: 3; }
+.cr-grid .cr-name a { color: var(--text); text-decoration: none; }
+.cr-grid .cr-name a:hover { text-decoration: underline; }
+.cr-grid td button { position: relative; width: 100%; min-height: 44px; padding: 6px 10px; text-align: left; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; display: flex; flex-direction: column; justify-content: center; }
+.cr-grid td button:hover:not(:disabled) { background: var(--primary-soft); }
+.cr-grid td button:disabled { cursor: default; }
+.cr-grid td.own button { font-weight: 700; color: var(--primary); }
+.cr-grid td.std button, .cr-grid td.none button { color: var(--muted); }
+.cr-grid td button small { font-weight: 500; color: var(--muted); }
+.cr-dot { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); }
+.cr-pop { position: absolute; z-index: 1300; width: min(560px, calc(100vw - 16px)); padding: 16px; background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); border-top: 4px solid var(--primary); border-radius: 10px; box-shadow: 0 18px 48px rgba(0, 0, 0, .22); }
+.cr-pop h3 { margin: 0 0 6px; font-size: 15px; }
+.cr-mine { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.cr-mine li { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+.cr-mine li b { min-width: 140px; }
+.cr-mine li small { flex-basis: 100%; }
+.cr-link { background: none; border: 0; padding: 2px 0; color: var(--link); font: inherit; font-size: 13px; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.cr-link.danger { color: var(--bad); }

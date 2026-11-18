@@ -43,7 +43,7 @@ import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 import { askConfirm, undoable } from '@/components/Toasts';
 import Skeleton from '@/components/Skeleton';
 
-type Assignment = { id: string; user_id: string; user_name: string; status: string; is_lead?: boolean; created_at?: string; nudged_at?: string | null; late_eta?: string | null; late_note?: string | null; planned?: boolean; clocked_in_at?: string | null; last_clock_out?: string | null; pay_type?: 'hourly' | 'day'; rate?: number | null; estimated_pay?: number | null };
+type Assignment = { id: string; user_id: string; user_name: string; status: string; is_lead?: boolean; created_at?: string; nudged_at?: string | null; late_eta?: string | null; late_note?: string | null; planned?: boolean; clocked_in_at?: string | null; last_clock_out?: string | null; pay_type?: 'hourly' | 'day'; rate?: number | null; rate_src?: 'event' | 'person'; estimated_pay?: number | null };
 type CrewRate = { user_id: string; user_name: string; role_name?: string; pay_type: 'hourly' | 'day'; rate: number; note: string | null };
 type Elig = { user_id: string; missing_certs: string[]; time_off: boolean; outside_availability: boolean; booked?: { role_name: string; event_name: string; starts_at: string; ends_at: string } | null };
 /** Stars for a position; on a lead role ("Audio Lead") the rating as that position ("Audio") counts. */
@@ -748,7 +748,7 @@ function Body({ me }: { me: Me }) {
                     {a.is_lead && a.status !== 'declined' && <span className="cs-lead" title="Leads their department on this event: checks the team in and out and rates them on the On site page">Lead</span>}
                     {a.late_eta && !a.clocked_in_at && a.status === 'accepted' && <span className="cs-late" title={a.late_note ? `“${a.late_note}”` : 'Told us they are running late'}>Late · ~{fmtTime(a.late_eta)}</span>}
                     {a.rate != null && a.status !== 'declined' && (
-                      <button type="button" className="chip" style={{ border: 0, cursor: 'pointer', marginLeft: 6 }} title="This person's own rate on this event. Click to change it." onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setCrewMenu({ sid: s.id, aid: a.id, x: r.left, y: r.bottom + 4 }); }}>
+                      <button type="button" className="chip" style={{ border: 0, cursor: 'pointer', marginLeft: 6 }} title={a.rate_src === 'person' ? "This person's own standing rate for this skill (crew profile › Pay rates). Click to set a rate for this event." : "This person's own rate on this event. Click to change it."} onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setCrewMenu({ sid: s.id, aid: a.id, x: r.left, y: r.bottom + 4 }); }}>
                         {money(a.rate)}{a.pay_type === 'day' ? '/day' : '/hr'}
                       </button>
                     )}
@@ -2123,6 +2123,7 @@ function CrewPay({ eventId, shifts, rates, onSaved }: { eventId: string; shifts:
   const saved = (uid: string, role: string) => rates.find((r) => r.user_id === uid && low(r.role_name ?? '') === low(role));
   const key = (uid: string, role: string) => `${uid}|${low(role)}`;
   const [edit, setEdit] = useState<Record<string, { type: 'default' | 'hourly' | 'day'; rate: string }>>({});
+  const [keep, setKeep] = useState<Record<string, boolean>>({}); // also save as their standing rate for the skill
   const [busy, setBusy] = useState('');
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
@@ -2141,8 +2142,9 @@ function CrewPay({ eventId, shifts, rates, onSaved }: { eventId: string; shifts:
       } else {
         const n = Math.round(Number(e.rate) * 100) / 100;
         if (!(n > 0)) throw new Error('Enter a rate above 0.');
-        await api(`/api/events/${eventId}/crew-rates/${p.id}`, { method: 'PUT', body: { payType: e.type, rate: n, role: role || null } });
-        setMsg(`${what}: ${money(n)}${e.type === 'day' ? ' per day' : '/hr'} on this event.`);
+        const r = await api<{ standing: string | null }>(`/api/events/${eventId}/crew-rates/${p.id}`, { method: 'PUT', body: { payType: e.type, rate: n, role: role || null, saveStanding: !!(role && keep[k]) } });
+        setMsg(`${what}: ${money(n)}${e.type === 'day' ? ' per day' : '/hr'} on this event${r.standing ? `, and saved as their ${r.standing} rate for every event from today` : ''}.`);
+        setKeep((x) => { const { [k]: _, ...rest } = x; return rest; });
       }
       setEdit((x) => { const { [k]: _, ...rest } = x; return rest; });
       onSaved();
@@ -2176,6 +2178,12 @@ function CrewPay({ eventId, shifts, rates, onSaved }: { eventId: string; shifts:
             )}
           </div>
           {sv && !dirty && <div className="small" style={{ marginTop: 4 }}><span className="chip open">Own rate · {money(sv.rate)}{sv.pay_type === 'day' ? '/day' : '/hr'}</span></div>}
+          {dirty && role && e.type !== 'default' && (
+            <label className="check small" style={{ marginTop: 6 }}>
+              <input type="checkbox" checked={!!keep[k]} onChange={(x) => setKeep({ ...keep, [k]: x.target.checked })} />
+              Also save as their standing {role} rate (every event from today)
+            </label>
+          )}
         </td>
         <td>{dirty && <button className="btn small primary" disabled={busy === k} onClick={() => save(p, role)}>{busy === k ? 'Saving…' : 'Save'}</button>}</td>
       </tr>

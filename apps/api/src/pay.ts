@@ -146,14 +146,12 @@ export async function priorJobDayHours(c: PoolClient, rules: Rules, userId: stri
 /** Estimate for a specific person (counts the hours they already work that week and on this job that day) or, without a user, for the shift on its own.
  *  Hourly shifts use the job's overtime threshold and the state's multipliers; day-rate shifts pay one flat amount. */
 export async function estimateShift(c: PoolClient, rules: Rules, rates: Map<string, number>, role: string, startsAt: Date | string, endsAt: Date | string, userId?: string | null, shiftId: string | null = null, opts: { noPrior?: boolean } = {}): Promise<Priced> {
-  // A rate set for this person on this event wins over the shift's rate and the role's rate.
+  // This person's own rate (on this event, else their standing rate for the skill) wins over the shift's and the role's rate.
   const sh = shiftId
     ? (await c.query(
-        `SELECT s.event_id, s.pay_type, s.pay_rate_override, s.min_hours, e.ot_after, e.state, e.address, cr.pay_type AS cr_type, cr.rate AS cr_rate
+        `SELECT s.event_id, s.pay_type, s.pay_rate_override, s.min_hours, e.ot_after, e.state, e.address, cr.pay_type AS cr_type, cr.rate AS cr_rate, cr.src AS cr_src
            FROM shifts s JOIN events e ON e.id = s.event_id
-           LEFT JOIN LATERAL (SELECT x.pay_type, x.rate FROM event_crew_rates x
-           WHERE x.event_id = s.event_id AND x.user_id = $2::uuid AND (x.role_name = '' OR lower(x.role_name) = lower(trim(s.role_name)))
-           ORDER BY (x.role_name = '') LIMIT 1) cr ON true
+           LEFT JOIN LATERAL person_rate($2::uuid, s.id) cr ON true
           WHERE s.id = $1`, [shiftId, userId ?? null])).rows[0]
     : null;
   if (sh) sh.day_rate = (await loadDayRates(c)).get(roleKeyOf(role)) ?? 0;
@@ -162,7 +160,7 @@ export async function estimateShift(c: PoolClient, rules: Rules, rates: Map<stri
   const override = personal ? Number(sh.cr_rate) : Number(sh?.pay_rate_override ?? 0);
   if (payType === 'day') {
     const rate = override > 0 ? override : Number(sh?.day_rate ?? 0) > 0 ? Number(sh!.day_rate) : null;
-    return { hours: hoursBetween(startsAt, endsAt), rate, estimate: rate, otHours: 0, dtHours: 0, premiumHours: 0, notes: personal ? ['day rate', 'personal rate for this event'] : ['day rate'], payType: 'day' };
+    return { hours: hoursBetween(startsAt, endsAt), rate, estimate: rate, otHours: 0, dtHours: 0, premiumHours: 0, notes: personal ? ['day rate', sh.cr_src === 'event' ? 'personal rate for this event' : 'their own rate'] : ['day rate'], payType: 'day' };
   }
   const prior = userId && !opts.noPrior ? await priorWeekHours(c, rules, userId, shiftId, startsAt) : 0;
   const priorDay = userId && sh && !opts.noPrior ? await priorJobDayHours(c, rules, userId, sh.event_id, shiftId, startsAt) : 0;
@@ -173,7 +171,7 @@ export async function estimateShift(c: PoolClient, rules: Rules, rates: Map<stri
     otAfter: wr?.otAfter ?? (sh?.ot_after === null || sh?.ot_after === undefined ? null : Number(sh.ot_after)),
     otMult: wr?.otMult ?? st?.otMult, dtAfter: wr?.dtAfter ?? st?.dtAfter, dtMult: wr?.dtMult ?? st?.dtMult, priorDay,
   });
-  if (personal) priced.notes.push('personal rate for this event');
+  if (personal) priced.notes.push(sh.cr_src === 'event' ? 'personal rate for this event' : 'their own rate');
   // Minimum call: a shorter shift is still paid this many hours (as regular time).
   const min = Number(sh?.min_hours ?? 0) || (wr?.minCallH ?? 0);
   if (min > 0 && priced.hours < min) {

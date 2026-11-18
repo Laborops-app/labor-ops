@@ -4,6 +4,7 @@ import type { PoolClient } from 'pg';
 import { notify, describeShift } from '../notify';
 import { syncEventChannel, sendDirectMessage } from './chat';
 import { loadRates, loadRules, estimateShift, priceShift, checkRules, rateFor, eventState, loadStateOt, US_STATES } from '../pay';
+import { saveStandingRate } from './crewRates';
 import { canAdjustRates } from '../rates';
 import { respondLinks } from '../notify/respond';
 import type { FastifyInstance } from 'fastify';
@@ -465,6 +466,8 @@ export async function eventRoutes(app: FastifyInstance) {
         ? (await c.query('SELECT r.user_id, u.name AS user_name, r.role_name, r.pay_type, r.rate::float AS rate, r.note, r.updated_at FROM event_crew_rates r JOIN users u ON u.id = r.user_id WHERE r.event_id = $1 ORDER BY u.name, r.role_name', [eventId])).rows
         : [];
       const personal = new Set(crewRates.map((r) => r.user_id));
+      // People with a standing rate of their own for some skill may be priced at it here too.
+      if (seePay) for (const r of (await c.query('SELECT DISTINCT user_id FROM crew_rates WHERE rate IS NOT NULL')).rows) personal.add(r.user_id);
       for (const s of shifts) {
         const pay = rates && rules ? await estimateShift(c, rules, rates, s.role_name, s.starts_at, s.ends_at, null, s.id) : null;
         const mine = assigns.filter((a) => a.shift_id === s.id);
@@ -474,8 +477,11 @@ export async function eventRoutes(app: FastifyInstance) {
         if (pay && rates && rules) {
           for (const a of mine.filter((x) => x.status !== 'declined' && personal.has(x.user_id))) {
             const own = await estimateShift(c, rules, rates, s.role_name, s.starts_at, s.ends_at, a.user_id, s.id, { noPrior: true });
+            const src = own.notes.includes('personal rate for this event') ? 'event' : own.notes.includes('their own rate') ? 'person' : null;
+            if (!src) continue; // no rate of their own for this position: priced with everyone else
             a.pay_type = own.payType;
             a.rate = own.rate;
+            a.rate_src = src;
             a.estimated_pay = own.estimate;
             if (own.estimate !== null && priced < s.headcount) {
               cost += own.estimate;
@@ -597,7 +603,7 @@ export async function eventRoutes(app: FastifyInstance) {
   app.put('/api/events/:id/crew-rates/:userId', { preHandler: mgr }, async (req, reply) => {
     const { id: eventId, userId } = z.object({ id: z.string().uuid(), userId: z.string().uuid() }).parse(req.params);
     // role: one position on this event ("Audio Tech"); empty or left out = every position they work here.
-    const b = z.object({ payType: z.enum(['hourly', 'day']), rate: z.number().positive().max(100000), note: z.string().trim().max(200).optional().nullable(), role: z.string().trim().max(100).optional().nullable() }).parse(req.body);
+    const b = z.object({ payType: z.enum(['hourly', 'day']), rate: z.number().positive().max(100000), note: z.string().trim().max(200).optional().nullable(), role: z.string().trim().max(100).optional().nullable(), saveStanding: z.boolean().optional() }).parse(req.body);
     const role = b.role?.trim() ?? '';
     const r = await withTenant(req.user.tid, async (c) => {
       if (!(await canAdjustRates(c, req.user))) return { code: 403, error: 'Only admins, and coordinators allowed to adjust rates, can set pay.' };
@@ -617,7 +623,14 @@ export async function eventRoutes(app: FastifyInstance) {
       const onIt = (await c.query("SELECT 1 FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE s.event_id = $1 AND a.user_id = $2 AND a.status <> 'declined' AND ($3 = '' OR lower(trim(s.role_name)) = lower($3)) LIMIT 1", [eventId, userId, role])).rowCount;
       if (onIt && (!prev || prev.pay_type !== b.payType || prev.rate !== rate))
         await notify(c, req.user.tid, { userId, category: 'shift_change', title: `Pay updated: ${ev.name}`, body: (b.payType === 'day' ? `You'll be paid a day rate of $${rate.toFixed(2)} per shift day` : `Your rate is $${rate.toFixed(2)}/hr`) + (role ? ` as ${role} on this event` : ' on this event') + (b.payType === 'day' ? '.' : ' (overtime rules still apply).'), link: '/my-shifts' });
-      return { code: 200, rate: { user_id: userId, user_name: u.name, role_name: role, pay_type: b.payType, rate, note: b.note || null } };
+      // "Also save as their standing rate": the same pay for this position on every event from today.
+      let standing: string | null = null;
+      if (b.saveStanding && role) {
+        const sv = await saveStandingRate(c, req.user, userId, { role, payType: b.payType, rate, note: b.note || null });
+        if (sv.code !== 200) return { code: sv.code, error: sv.error };
+        standing = sv.skill.name;
+      }
+      return { code: 200, rate: { user_id: userId, user_name: u.name, role_name: role, pay_type: b.payType, rate, note: b.note || null }, standing };
     });
     const { code, ...rest } = r as { code: number; [k: string]: unknown };
     return reply.code(code).send(rest);
