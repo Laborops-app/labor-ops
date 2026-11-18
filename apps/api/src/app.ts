@@ -29,6 +29,7 @@ import { pipelineRoutes } from './routes/pipeline';
 import { platformRoutes } from './routes/platform';
 import { eventRoutes } from './routes/events';
 import { timeRoutes } from './routes/time';
+import { attendanceRoutes } from './routes/attendance';
 import { onsiteRoutes } from './routes/onsite';
 import { skillRoutes } from './routes/skills';
 import { profileRoutes } from './routes/profile';
@@ -102,6 +103,7 @@ export async function buildApp() {
   await app.register(eventRoutes);
   await app.register(staffingRoutes);
   await app.register(timeRoutes);
+  await app.register(attendanceRoutes);
   await app.register(onsiteRoutes);
   await app.register(schedulingRoutes);
   await app.register(profileRoutes);

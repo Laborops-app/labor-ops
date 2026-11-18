@@ -5550,3 +5550,49 @@ test('Rentman prices: an invoice from the schedule matches the Rentman quote 1:1
     globalThis.fetch = real;
   }
 });
+
+test('time & attendance: rows with conditions, minimum per person, approve many, unapprove', async () => {
+  const a = await register('tatt');
+  const c1 = await mkCrew(a, 'tatt1');
+  const c2 = await mkCrew(a, 'tatt2');
+  const ev = await mkEvent(a);
+  // A 5-hour shift that started 6 hours ago with a 4-hour minimum
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: start(-6), endsAt: start(-1), headcount: 2, minHours: 4 })).json.shift;
+  assert.ok(sh?.id);
+  for (const c of [c1, c2]) assert.ok((await call(a, 'POST', `/api/shifts/${sh.id}/assign`, { userId: c.id, confirmed: true, override: true })).status < 300);
+  const ta = async () => (await call(a, 'GET', `/api/attendance?from=${start(-48).slice(0, 10)}&to=${start(24).slice(0, 10)}`)).json;
+  let d = await ta();
+  const mine = (id: string) => d.rows.find((r: any) => r.user.id === id);
+  // Nobody clocked in an hour+ after the start: no-show
+  assert.deepEqual(mine(c1.id).conditions.map((x: any) => x.code), ['NS']);
+  assert.equal(d.stats.flagged, 2);
+  // c1 came 30 minutes late and left after an hour: late start, early end, minimum paid
+  const asg = mine(c1.id).assignmentId;
+  const add = await call(a, 'POST', `/api/assignments/${asg}/time`, { clockIn: start(-5.5), clockOut: start(-4.5) });
+  assert.ok(add.status < 300, add.text);
+  d = await ta();
+  let r = mine(c1.id);
+  assert.ok(['LS', 'EE', 'UMH', 'ED'].every((k) => r.conditions.some((x: any) => x.code === k)) || ['LS', 'EE', 'UMH'].every((k) => r.conditions.some((x: any) => x.code === k)), JSON.stringify(r.conditions));
+  assert.deepEqual([r.actual.hours, r.minHours, r.minSource, r.paidHours, r.adjust], [1, 4, 'shift', 4, 3]);
+  if (r.status === 'approved') assert.equal((await call(a, 'POST', `/api/time-entries/${r.entryId}/unapprove`, {})).status, 200);
+  // This person's minimum: 2 hours, then off
+  assert.equal((await call(a, 'PUT', `/api/time-entries/${r.entryId}/minimum`, { on: true, hours: 2 })).status, 200);
+  d = await ta(); r = mine(c1.id);
+  assert.deepEqual([r.minHours, r.minSource, r.paidHours], [2, 'person', 2]);
+  assert.equal((await call(a, 'PUT', `/api/time-entries/${r.entryId}/minimum`, { on: false })).status, 200);
+  d = await ta(); r = mine(c1.id);
+  assert.deepEqual([r.minHours, r.minSource, r.paidHours, r.conditions.some((x: any) => x.code === 'UMH')], [0, 'off', 1, false]);
+  // Filters
+  assert.equal((await call(a, 'GET', `/api/attendance?from=${start(-48).slice(0, 10)}&to=${start(24).slice(0, 10)}&cond=NS`)).json.rows.length, 1);
+  assert.equal((await call(a, 'GET', `/api/attendance?from=${start(-48).slice(0, 10)}&to=${start(24).slice(0, 10)}&status=out`)).json.rows.length, 1);
+  // Approve many: only finished time is approved; crew can't
+  assert.equal((await call(c1.session, 'POST', '/api/attendance/approve', { entryIds: [r.entryId] })).status, 403);
+  const ap = (await call(a, 'POST', '/api/attendance/approve', { entryIds: [r.entryId] })).json;
+  assert.deepEqual(ap, { approved: 1, skipped: 0 });
+  d = await ta();
+  assert.equal(mine(c1.id).status, 'approved');
+  assert.equal(d.stats.approved, 1);
+  assert.equal(d.stats.flagged, 1); // approved rows aren't counted as flagged
+  assert.equal((await call(a, 'POST', `/api/time-entries/${r.entryId}/unapprove`, {})).status, 200);
+  assert.equal((await ta()).rows.find((x: any) => x.user.id === c1.id).status, 'out');
+});

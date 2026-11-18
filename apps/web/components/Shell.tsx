@@ -125,6 +125,17 @@ const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; field?
     ),
   },
   {
+    href: '/attendance',
+    label: 'Time & attendance',
+    roles: ['admin', 'manager', 'hr'],
+    icon: icon(
+      <>
+        <rect x="3" y="4" width="18" height="17" rx="2" />
+        <path d="M3 9h18M8 2v4M16 2v4M8.5 15l2.5 2.5 4.5-5" />
+      </>,
+    ),
+  },
+  {
     href: '/requests',
     label: 'Requests',
     roles: ['admin', 'manager'],

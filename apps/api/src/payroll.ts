@@ -45,7 +45,7 @@ export async function payrollSummary(c: PoolClient, from: string, to: string) {
   const rows = (
     await c.query(
       `SELECT t.id, t.user_id, t.assignment_id, t.clock_in, t.clock_out, t.payroll_exported_at,
-              u.name, u.email, u.payroll_ids, s.role_name, s.min_hours, COALESCE(cr.pay_type, s.pay_type) AS pay_type,
+              u.name, u.email, u.payroll_ids, s.role_name, s.min_hours, t.min_hours_override, t.min_off, COALESCE(cr.pay_type, s.pay_type) AS pay_type,
               COALESCE(cr.rate, s.pay_rate_override) AS pay_rate_override, s.event_id,
               e.name AS event_name, e.ot_after, e.state, e.address
          FROM time_entries t JOIN users u ON u.id = t.user_id
@@ -151,7 +151,8 @@ export async function payrollSummary(c: PoolClient, from: string, to: string) {
       m.person = p;
     }
     // Minimum call is per person per shift per day: remember the hours worked and the last entry.
-    const minH = Number(r.min_hours) || (w?.minCallH ?? 0);
+    // Time & attendance can change the minimum for one person's shift, or switch it off.
+    const minH = r.min_off ? 0 : Number(r.min_hours_override) || Number(r.min_hours) || (w?.minCallH ?? 0);
     if (minH > 0) {
       const k = `${r.assignment_id}|${date}`;
       const m = minCall.get(k) ?? { worked: 0, min: minH, rate: rate ?? 0, entry, person: p };
