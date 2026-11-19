@@ -298,6 +298,12 @@ export async function eventRoutes(app: FastifyInstance) {
       const rows = (
         await c.query(
           `SELECT s.id, s.role_name, s.starts_at, s.ends_at, s.headcount, e.id AS event_id, e.name AS event_name, e.venue,
+              -- For the event cards: client, job number, address (city), how many days the event runs, and the day this
+              -- shift is on in the event's own time zone.
+              COALESCE(cu.name, e.client) AS client, e.rentman_project_id AS job_number, e.address,
+              to_char(e.start_date, 'YYYY-MM-DD') AS event_start, to_char(e.end_date, 'YYYY-MM-DD') AS event_end,
+              to_char(s.starts_at AT TIME ZONE COALESCE(e.timezone, $3), 'YYYY-MM-DD') AS day,
+              (SELECT count(*)::int FROM shift_assignments a WHERE a.shift_id = s.id AND a.status = 'declined') AS declined,
               ph.id AS phase_id, ph.label AS phase_label,
               (SELECT count(*)::int FROM shift_assignments a WHERE a.shift_id = s.id AND a.status <> 'declined') AS filled,
               (SELECT count(*)::int FROM shift_assignments a WHERE a.shift_id = s.id AND a.status = 'accepted') AS confirmed,
@@ -305,6 +311,7 @@ export async function eventRoutes(app: FastifyInstance) {
                  FROM shift_assignments a JOIN users u ON u.id = a.user_id
                  WHERE a.shift_id = s.id AND a.status <> 'declined'), '[]'::json) AS assignees
            FROM shifts s JOIN events e ON e.id = s.event_id
+           LEFT JOIN customers cu ON cu.id = e.customer_id
            -- The shift's own phase, or else the event phase whose dates cover the day it starts.
            LEFT JOIN LATERAL (
              SELECT p.id, p.label FROM event_phases p

@@ -139,3 +139,48 @@ test('event page shows and saves times in the venue time zone', async ({ page })
   // (read outside the event page, so not converted)
   expect(new Date(saved.shifts[0]!.starts_at).toISOString()).toBe(`${day}T17:00:00.000Z`);
 });
+
+test('schedule: event cards by day, needs-crew strip, filters, month grid and day panel', async ({ page }) => {
+  await newCompany(page);
+  const sam = await newCrew(page, 'Sam Okafor');
+  // Two events tomorrow: one fully staffed, one with nobody yet
+  const full = await eventWithShift(page, { name: 'Staffed Show', startInMin: 24 * 60 });
+  await api(page, 'POST', `/api/shifts/${full.shiftId}/assign`, { userId: sam.id, confirmed: true });
+  await eventWithShift(page, { name: 'Empty Show', startInMin: 24 * 60 + 60 });
+
+  await page.goto('/schedule');
+  await page.evaluate(() => localStorage.removeItem('lo-sched'));
+  await page.goto('/schedule');
+  await page.getByRole('tab', { name: 'Week' }).click();
+  const staffed = page.locator('.bd-card', { hasText: 'Staffed Show' });
+  const empty = page.locator('.bd-card', { hasText: 'Empty Show' });
+  // Cards near the end of a week can land in the next one
+  if (!(await staffed.count())) await page.getByRole('button', { name: 'Next week' }).click();
+  await expect(staffed).toHaveClass(/good/);
+  await expect(empty).toHaveClass(/bad/);
+  await expect(staffed.getByRole('img', { name: 'Fully staffed' })).toBeVisible();
+  // Open shifts are listed up top
+  await expect(page.locator('.bd-needs', { hasText: 'Empty Show' })).toBeVisible();
+
+  // Filters: only events with nobody yet; search
+  if (!(await page.locator('.bd-rail').count())) await page.getByRole('button', { name: /^Filters/ }).click();
+  await page.locator('.bd-rail').getByLabel('No crew yet').check();
+  await expect(staffed).toHaveCount(0);
+  await expect(empty).toHaveCount(1);
+  await page.locator('.bd-rail').getByLabel('No crew yet').uncheck();
+  await page.getByLabel('Find event, client or job number').fill('staffed');
+  await expect(empty).toHaveCount(0);
+  await page.getByLabel('Find event, client or job number').fill('');
+
+  // Month: the day panel lists that day's events; "Open that week" goes back to the week
+  await page.getByRole('tab', { name: 'Month' }).click();
+  const cell = page.locator('.bd-mc:not(.out)', { hasText: 'Staffed Show' });
+  if (!(await cell.count())) await page.getByRole('button', { name: 'Next month' }).click();
+  await cell.click();
+  const panel = page.locator('.bd-panel');
+  await expect(panel.locator('.bd-card', { hasText: 'Staffed Show' })).toBeVisible();
+  await expect(panel.locator('.bd-card', { hasText: 'Empty Show' })).toBeVisible();
+  await panel.getByRole('button', { name: 'Open that week' }).click();
+  await expect(page.getByRole('tab', { name: 'Week' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('.bd-card', { hasText: 'Staffed Show' })).toBeVisible();
+});

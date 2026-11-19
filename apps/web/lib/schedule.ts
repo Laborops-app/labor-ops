@@ -16,6 +16,15 @@ export type S = {
   filled: number;
   confirmed: number;
   assignees: Assignee[];
+  /** Event details for the cards (newer API; may be missing on old responses). */
+  client?: string | null;
+  job_number?: number | string | null;
+  address?: string | null;
+  event_start?: string | null;
+  event_end?: string | null;
+  /** YYYY-MM-DD the shift starts on, in the event's time zone. */
+  day?: string;
+  declined?: number;
   /** Only sent to admins and coordinators who may see pay. */
   hours?: number;
   unit_cost?: number | null;
