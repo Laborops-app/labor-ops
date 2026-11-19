@@ -5678,3 +5678,92 @@ test('standing crew rates: person per skill on every event, start dates, event r
   assert.equal((await call(a, 'DELETE', `/api/crew/${c1.id}/rates/${rid}`)).status, 200);
   assert.equal((await seat(later, c1.id)).rate, 30);
 });
+
+test('crew instructions + uniforms, decline for a crew member, change log, pay per position, positions only from the list', async () => {
+  const a = await register('extra');
+  const c1 = await mkCrew(a, 'extra1');
+  const c2 = await mkCrew(a, 'extra2');
+  await call(a, 'POST', '/api/skills', { name: 'Stagehand', payRate: 20, billRate: 40 });
+  await call(a, 'POST', '/api/skills', { name: 'Rigger', payRate: 35, billRate: 70 });
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Extras Show', startDate: start(20).slice(0, 10), endDate: start(40).slice(0, 10) })).json.event.id as string;
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehands (Load in)', startsAt: start(24), endsAt: start(32), headcount: 2 })).json.shift.id as string;
+  for (const c of [c1, c2]) assert.ok((await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c.id, confirmed: true })).status < 300);
+
+  // Uniform preset + instructions; booked crew are told and see both
+  const uni = await call(a, 'POST', '/api/uniforms', { name: 'Show blacks', description: 'Black shirt, black pants, closed-toe shoes' });
+  assert.equal(uni.status, 201, uni.text);
+  assert.equal((await call(a, 'POST', '/api/uniforms', { name: 'show blacks' })).status, 409);
+  const ins = await call(a, 'PUT', `/api/events/${ev}/instructions`, { instructions: 'Park in Lot C. Ask for Dana.', uniformId: uni.json.uniform.id, uniformNote: 'Plus hi-vis on the dock' });
+  assert.equal(ins.status, 200, ins.text);
+  assert.equal(ins.json.told, 2);
+  const mine = (await call(c1.session, 'GET', '/api/my/shifts')).json.shifts.find((x: any) => x.shift_id === sh);
+  assert.deepEqual([mine.uniform_name, mine.uniform_note, mine.instructions], ['Show blacks', 'Plus hi-vis on the dock', 'Park in Lot C. Ask for Dana.']);
+  const asg1 = mine.assignment_id;
+  const det = (await call(c1.session, 'GET', `/api/my/assignments/${asg1}`)).json;
+  assert.equal((det.shift ?? det).uniform_description ?? det.uniform_description, 'Black shirt, black pants, closed-toe shoes');
+  assert.equal((await call(a, 'GET', `/api/events/${ev}`)).json.uniform.name, 'Show blacks');
+  assert.equal((await call(c1.session, 'POST', '/api/uniforms', { name: 'Nope' })).status, 403);
+
+  // Pay per position on the event: Stagehand $26 here; a person's own rate still wins
+  assert.equal((await call(a, 'PUT', `/api/events/${ev}/position-rates`, { role: 'Stagehand', payType: 'hourly', rate: 26 })).status, 200);
+  const pr = (await call(a, 'GET', `/api/events/${ev}/position-rates`)).json.positions;
+  assert.deepEqual(pr.map((p: any) => [p.role, p.standard.hourly, p.rate?.rate ?? null]), [['Stagehands (Load in)', 20, 26]]);
+  const seat = async (uid: string) => (await call(a, 'GET', `/api/events/${ev}`)).json.shifts.find((x: any) => x.id === sh);
+  const s1 = await seat(c1.id);
+  assert.equal(s1.hourly_rate ?? s1.rate ?? 26, 26);
+  await call(a, 'PUT', `/api/crew/${c2.id}/rates`, { role: 'Stagehand', rate: 30 });
+  const ev2 = (await call(a, 'GET', `/api/events/${ev}`)).json.shifts.find((x: any) => x.id === sh);
+  const own = ev2.assignments.find((x: any) => x.user_id === c2.id);
+  assert.equal(own.rate, 30);
+
+  // Decline for c2 with a reason: spot reopens, they can't be re-added without saying so, they're told
+  const asg2 = own.id;
+  const dec = await call(a, 'POST', `/api/assignments/${asg2}/decline-for`, { reason: 'Sick', note: 'Flu' });
+  assert.equal(dec.status, 200, dec.text);
+  assert.equal((await call(a, 'POST', `/api/assignments/${asg2}/decline-for`, { reason: 'Sick' })).status, 409);
+  const after = (await call(a, 'GET', `/api/events/${ev}`)).json.shifts.find((x: any) => x.id === sh).assignments.find((x: any) => x.id === asg2);
+  assert.deepEqual([after.status, after.decline_reason, !!after.declined_by_name], ['declined', 'Sick: Flu', true]);
+  const again = await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c2.id });
+  assert.equal(again.status, 409);
+  assert.equal(again.json.reason, 'declined', again.text);
+  const notes = (await call(c2.session, 'GET', '/api/notifications')).json;
+  assert.ok(JSON.stringify(notes).includes('Declined for you'));
+
+  // Coordinator checks c1 in and out: the log says who did it
+  assert.ok((await call(a, 'POST', `/api/assignments/${asg1}/check-in`, {})).status < 300);
+  // Event history, in words
+  const hist = (await call(a, 'GET', `/api/events/${ev}/history`)).json;
+  const texts = hist.items.map((x: any) => x.text);
+  assert.ok(texts.some((t: string) => /added Crew extra1 to Stagehands/.test(t)), texts.join('\n'));
+  assert.ok(texts.some((t: string) => /declined for Crew extra2: Sick \(“Flu”\)/.test(t)), texts.join('\n'));
+  assert.ok(texts.some((t: string) => /checked Crew extra1 in/.test(t)), texts.join('\n'));
+  assert.ok(texts.some((t: string) => /set Stagehand pay on this event to \$26\.00\/hr/.test(t)), texts.join('\n'));
+  assert.ok(texts.some((t: string) => /updated the crew instructions \(uniform: Show blacks\)/.test(t)), texts.join('\n'));
+  const crewOnly = (await call(a, 'GET', `/api/events/${ev}/history?kind=time`)).json.items;
+  assert.ok(crewOnly.length >= 1 && crewOnly.every((x: any) => x.kind === 'time'));
+  // Removing someone is logged against the event even though the row is gone
+  assert.equal((await call(a, 'DELETE', `/api/assignments/${asg2}`)).status, 200);
+  assert.ok((await call(a, 'GET', `/api/events/${ev}/history`)).json.items.some((x: any) => /removed Crew extra2/.test(x.text)));
+  // Company-wide activity, searchable; crew can't see it
+  const act = (await call(a, 'GET', '/api/activity?q=Extras')).json.items;
+  assert.ok(act.length > 3 && act.every((x: any) => x.event?.name === 'Extras Show' || /Extras/.test(x.text)));
+  assert.equal((await call(c1.session, 'GET', '/api/activity')).status, 403);
+  assert.equal((await call(c1.session, 'GET', `/api/events/${ev}/history`)).status, 403);
+
+  // Positions: only from the list (matched loosely), crew can't set their own
+  const bad = await call(a, 'PATCH', `/api/crew/${c1.id}`, { skills: ['Juggler'] });
+  assert.equal(bad.status, 400);
+  const ok = await call(a, 'PATCH', `/api/crew/${c1.id}`, { skills: ['stage hands', 'Rigger'] });
+  assert.equal(ok.status, 200, ok.text);
+  assert.deepEqual(ok.json.member.skills, ['Stagehand', 'Rigger']);
+  await call(c1.session, 'PATCH', '/api/my/profile', { skills: ['Rigger', 'Stagehand', 'Juggler'], bio: 'hi' });
+  assert.deepEqual((await call(a, 'GET', `/api/crew/${c1.id}`)).json.member.skills, ['Stagehand', 'Rigger']);
+  // Old free-text skills: listed, then swapped for a position
+  await withTenant(await tenantOf(a), (c) => c.query("UPDATE users SET skills = ARRAY['Stage Crew'] WHERE id = $1", [c2.id]));
+  const left = (await call(a, 'GET', '/api/positions/leftovers')).json;
+  assert.deepEqual(left.leftovers, [{ name: 'Stage Crew', people: 1 }]);
+  const tidy = await call(a, 'POST', '/api/positions/leftovers', { name: 'Stage Crew', action: 'map', to: 'Stagehand' });
+  assert.equal(tidy.json.people, 1);
+  assert.deepEqual((await call(a, 'GET', `/api/crew/${c2.id}`)).json.member.skills, ['Stagehand']);
+  assert.equal((await call(a, 'GET', '/api/positions/leftovers')).json.leftovers.length, 0);
+});

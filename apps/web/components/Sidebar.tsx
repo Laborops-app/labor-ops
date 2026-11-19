@@ -8,7 +8,7 @@ export type NavItem = { href: string; label: string; icon: React.ReactNode };
 
 /** How the menu is grouped. Items not listed fall into "More"; children sit under their parent with a tree line. */
 const SECTIONS: { title: string; items: string[] }[] = [
-  { title: 'Main', items: ['/dashboard', '/schedule', '/events', '/pipeline', '/requests', '/timesheets', '/attendance', '/reports', '/archive', '/chat'] },
+  { title: 'Main', items: ['/dashboard', '/schedule', '/events', '/pipeline', '/requests', '/timesheets', '/attendance', '/reports', '/activity', '/archive', '/chat'] },
   { title: 'My work', items: ['/onsite', '/my-shifts', '/my-calendar', '/open-shifts', '/availability'] },
   { title: 'Sales', items: ['/customers', '/quotes'] },
   { title: 'People', items: ['/crew', '/skills', '/trainings'] },

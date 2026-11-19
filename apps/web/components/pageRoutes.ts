@@ -13,6 +13,7 @@ export const PAGE_ROUTES: PageRoute[] = [
   route('/accounting', () => import('@/app/(app)/accounting/page')),
   route('/billing', () => import('@/app/(app)/billing/page')),
   route('/archive', () => import('@/app/(app)/archive/page')),
+  route('/activity', () => import('@/app/(app)/activity/page')),
   route('/availability', () => import('@/app/(app)/availability/page')),
   route('/chat', () => import('@/app/(app)/chat/page')),
   route('/crew/[id]', () => import('@/app/(app)/crew/[id]/page')),

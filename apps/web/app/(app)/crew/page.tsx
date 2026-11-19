@@ -158,7 +158,7 @@ function Body({ me }: { me: Me }) {
           {me.role === 'admin' && <button type="button" className="btn small ghost" onClick={() => setDemo(true)}>Demo crew</button>}
           <span className="pill-input">
             <SearchIcon />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, skill, phone" aria-label="Search crew" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, position, phone" aria-label="Search crew" />
           </span>
         </div>
       </div>
@@ -175,7 +175,7 @@ function Body({ me }: { me: Me }) {
                 <th className="av-col" aria-label="Avatar" />
                 <th>Name</th>
                 <th>Role</th>
-                <th>Skills</th>
+                <th>Positions</th>
                 <th>Rating</th>
                 <th>Certificates</th>
                 <th className="hide-sm">Phone</th>

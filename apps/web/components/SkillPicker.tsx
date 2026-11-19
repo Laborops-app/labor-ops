@@ -33,7 +33,7 @@ export function useSkillNames() {
 }
 
 /** Pick skills from the company list with a drop-down; chosen ones show as removable chips. */
-export default function SkillPicker({ value, onChange, options, sections, label = 'Add a skill…' }: { value: string[]; onChange: (v: string[]) => void; options: string[]; sections?: Section[]; label?: string }) {
+export default function SkillPicker({ value, onChange, options, sections, label = 'Add a position…' }: { value: string[]; onChange: (v: string[]) => void; options: string[]; sections?: Section[]; label?: string }) {
   const [text, setText] = useState('');
   const left = options.filter((o) => !value.some((v) => v.toLowerCase() === o.toLowerCase()));
   const add = (s: string) => {
@@ -46,14 +46,17 @@ export default function SkillPicker({ value, onChange, options, sections, label 
     <div className="skill-picker" onClick={(e) => { if (!(e.target as HTMLElement).closest('button, select, input, option')) e.preventDefault(); }}>
       {value.length > 0 && (
         <div className="skill-chips">
-          {value.map((s) => (
-            <span key={s} className="chip">
-              {s}
+          {value.map((s) => {
+            const old = options.length > 0 && !options.some((o) => o.toLowerCase() === s.toLowerCase());
+            return (
+            <span key={s} className={`chip${old ? ' chip-old' : ''}`} title={old ? 'Not a position: swap it on Positions & rates › Old skills to tidy up' : undefined}>
+              {s}{old && <span className="sr-only"> (not a position)</span>}
               <button type="button" className="chip-x" onClick={() => onChange(value.filter((x) => x !== s))} aria-label={`Remove ${s}`}>
                 ✕
               </button>
             </span>
-          ))}
+            );
+          })}
         </div>
       )}
       {options.length > 0 ? (
@@ -65,7 +68,7 @@ export default function SkillPicker({ value, onChange, options, sections, label 
           }}
           disabled={left.length === 0}
         >
-          <option value="">{left.length ? label : 'All skills added'}</option>
+          <option value="">{left.length ? label : 'All positions added'}</option>
           {sections && sections.length > 1
             ? sections.map((g) => {
                 const r = g.roles.filter((o) => left.includes(o));

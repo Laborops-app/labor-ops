@@ -3131,3 +3131,40 @@ details.card.profile-fold > summary::before { content: none; }
 .cr-mine li small { flex-basis: 100%; }
 .cr-link { background: none; border: 0; padding: 2px 0; color: var(--link); font: inherit; font-size: 13px; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .cr-link.danger { color: var(--bad); }
+
+/* ===== Crew instructions, uniforms, decline-for, change log ===== */
+.ev-instr-view { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.ev-uniform { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; }
+.ev-uniform svg { flex: none; color: var(--primary); margin-top: 1px; }
+.ev-instr-text { white-space: pre-wrap; margin: 0; font-size: 14px; line-height: 1.5; }
+.ev-instr-form { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.ev-instr-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.ev-instr-form label.check { flex-direction: row; color: var(--text); }
+.crew-wear-line { margin-top: 4px; color: var(--muted); }
+.crew-wear-line b { color: var(--text); }
+.chip.chip-old { background: var(--warn-bg); color: var(--warn); border: 1px dashed var(--warn); }
+.uni-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.uni-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.decline-for fieldset { border: 0; padding: 0; margin: 10px 0; }
+.decline-for legend { margin-bottom: 6px; font-weight: 600; }
+.df-reasons { display: flex; flex-wrap: wrap; gap: 6px; }
+.df-reason { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: 999px; cursor: pointer; font-size: 13px; }
+.df-reason input { width: auto; min-height: 0; margin: 0; accent-color: var(--primary); }
+.df-reason.on { border-color: var(--primary); background: var(--primary-soft); }
+.df-note { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 10px; color: var(--muted); }
+.decline-for .check { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.log { display: flex; flex-direction: column; gap: 12px; }
+.log-kinds { display: flex; flex-wrap: wrap; gap: 6px; }
+.log-kinds button { border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.log-kinds button[aria-pressed=true] { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+.log-list { list-style: none; margin: 0; padding: 0; }
+.log-day { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; padding: 14px 0 6px; }
+.log-item { display: flex; gap: 10px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+.log-ico { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--muted); transform: translateY(-1px); }
+.log-item.crew .log-ico { background: var(--primary); }
+.log-item.time .log-ico { background: var(--good); }
+.log-item.shift .log-ico { background: var(--warn); }
+.log-item.pay .log-ico { background: var(--bad); }
+.log-item.event .log-ico { background: var(--chip-text); }
+.log-text { flex: 1; min-width: 0; }
+.log-item time { font-size: 12.5px; color: var(--muted); white-space: nowrap; }

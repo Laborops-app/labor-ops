@@ -184,3 +184,45 @@ test('schedule: event cards by day, needs-crew strip, filters, month grid and da
   await expect(page.getByRole('tab', { name: 'Week' })).toHaveAttribute('aria-selected', 'true');
   await expect(page.locator('.bd-card', { hasText: 'Staffed Show' })).toBeVisible();
 });
+
+test('event: crew instructions with a uniform, decline for a crew member, and the History log', async ({ page }) => {
+  await newCompany(page);
+  const sam = await newCrew(page, 'Sam Okafor');
+  const { eventId, shiftId } = await eventWithShift(page, { name: 'Log Show', startInMin: 24 * 60 });
+  await api(page, 'POST', `/api/shifts/${shiftId}/assign`, { userId: sam.id, confirmed: true });
+  await api(page, 'POST', '/api/uniforms', { name: 'Show blacks', description: 'All black, closed-toe shoes' });
+
+  await page.goto(`/events/${eventId}`);
+  // Instructions + uniform
+  const card = page.locator('.ev-instr');
+  await card.getByRole('button', { name: 'Add' }).click();
+  await card.getByLabel('Instructions for the crew').fill('Park in Lot C. Ask for Dana.');
+  await card.getByLabel('Uniform', { exact: true }).selectOption({ label: 'Show blacks' });
+  await card.getByRole('button', { name: 'Save' }).click();
+  await expect(card.getByText('Park in Lot C. Ask for Dana.')).toBeVisible();
+  await expect(card.getByText('Show blacks')).toBeVisible();
+
+  // Decline for Sam from his row menu
+  const row = page.locator('.cs-row', { hasText: 'Sam Okafor' });
+  await row.locator('b', { hasText: 'Sam Okafor' }).click({ button: 'right' });
+  await page.getByRole('menu', { name: 'Options for Sam Okafor' }).getByRole('menuitem', { name: /Decline for them/ }).click();
+  const dlg = page.getByRole('dialog', { name: 'Decline for Sam Okafor' });
+  await dlg.getByLabel('Sick').check();
+  await dlg.getByRole('button', { name: 'Decline for them' }).click();
+  await expect(dlg).toBeHidden();
+  await expect(row.getByText(/declined for them by .* · Sick/)).toBeVisible();
+
+  // He's not offered in this shift's crew picker any more
+  await page.getByRole('button', { name: /Fill an open spot on Stagehand/ }).click();
+  await page.getByPlaceholder('Type a name…').fill('Sam');
+  await expect(page.getByRole('option', { name: /Sam Okafor/ })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+
+  // History shows who did what
+  await page.getByRole('button', { name: 'More', exact: true }).first().click();
+  await page.getByRole('menuitem', { name: /^History/ }).click();
+  const hist = page.getByRole('dialog', { name: 'History' });
+  await expect(hist.getByText(/declined for Sam Okafor: Sick/)).toBeVisible();
+  await expect(hist.getByText(/updated the crew instructions \(uniform: Show blacks\)/)).toBeVisible();
+  await expect(hist.getByText(/added Sam Okafor to Stagehand/)).toBeVisible();
+});

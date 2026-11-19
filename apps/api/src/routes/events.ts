@@ -134,7 +134,12 @@ export async function assignCrew(c: PoolClient, tid: string, actorId: string, sh
       conflict: clash,
     };
 
-  const dup = await c.query('SELECT 1 FROM shift_assignments WHERE shift_id = $1 AND user_id = $2 UNION ALL SELECT 1 FROM planned_picks WHERE shift_id = $1 AND user_id = $2', [shiftId, userId]);
+  // They declined this shift (or someone declined it for them): say so; booking them anyway clears the old answer.
+  const said = (await c.query("SELECT id, decline_reason FROM shift_assignments WHERE shift_id = $1 AND user_id = $2 AND status = 'declined'", [shiftId, userId])).rows[0];
+  if (said && !override) return { code: 409, error: `${user.name} declined this shift${said.decline_reason ? ` (${said.decline_reason})` : ''}.`, reason: 'declined' };
+  if (said) await c.query('DELETE FROM shift_assignments WHERE id = $1', [said.id]);
+
+  const dup = await c.query("SELECT 1 FROM shift_assignments WHERE shift_id = $1 AND user_id = $2 AND status <> 'declined' UNION ALL SELECT 1 FROM planned_picks WHERE shift_id = $1 AND user_id = $2", [shiftId, userId]);
   if (dup.rowCount) return { code: 409, error: `${user.name} is already on this shift` };
 
   const [el] = await evaluateShift(c, shiftId, userId);
@@ -173,7 +178,7 @@ export async function assignCrew(c: PoolClient, tid: string, actorId: string, sh
         [tid, shift.event_id, shiftId, userId, !!confirmed, lead ?? null, actorId],
       )
     ).rows[0];
-    await audit(c, tid, actorId, 'assignment.plan', 'planned_pick', p.id, { shiftId, userId });
+    await audit(c, tid, actorId, 'assignment.plan', 'planned_pick', p.id, { shiftId, userId, eventId: shift.event_id, role: shift.role_name });
     return { code: 201, planned: true, assignment: { ...p, status: 'planned' }, warnings: chk.warns };
   }
 
@@ -184,7 +189,7 @@ export async function assignCrew(c: PoolClient, tid: string, actorId: string, sh
       [tid, shiftId, userId, confirmed ? 'accepted' : 'offered', lead ?? (await loadDepartments(c)).isLeadRole(shift.role_name)],
     )
   ).rows[0];
-  await audit(c, tid, actorId, 'assignment.create', 'assignment', a.id, { shiftId, userId });
+  await audit(c, tid, actorId, 'assignment.create', 'assignment', a.id, { shiftId, userId, eventId: shift.event_id, role: shift.role_name });
   await syncEventChannel(c, tid, shift.event_id, userId, true);
   const d = await describeShift(c, tid, shiftId, userId);
   if (d) {
@@ -451,13 +456,14 @@ export async function eventRoutes(app: FastifyInstance) {
       const assigns = (
         await c.query(
           `SELECT a.id, a.shift_id, a.user_id, a.status, a.is_lead, u.name AS user_name, a.created_at, a.nudged_at, a.late_eta, a.late_note, false AS planned,
+             a.decline_reason, (SELECT x.name FROM users x WHERE x.id = a.declined_by) AS declined_by_name,
              (SELECT t.clock_in FROM time_entries t WHERE t.assignment_id = a.id AND t.clock_out IS NULL LIMIT 1) AS clocked_in_at,
              (SELECT max(t.clock_out) FROM time_entries t WHERE t.assignment_id = a.id) AS last_clock_out
            FROM shift_assignments a JOIN users u ON u.id = a.user_id
            JOIN shifts s ON s.id = a.shift_id WHERE s.event_id = $1
            UNION ALL
            -- Held back while the event is built quietly (not sent yet).
-           SELECT p.id, p.shift_id, p.user_id, 'planned', COALESCE(p.is_lead, false), u.name, p.created_at, NULL, NULL::timestamptz, NULL, true, NULL, NULL
+           SELECT p.id, p.shift_id, p.user_id, 'planned', COALESCE(p.is_lead, false), u.name, p.created_at, NULL, NULL::timestamptz, NULL, true, NULL, NULL, NULL, NULL
            FROM planned_picks p JOIN users u ON u.id = p.user_id WHERE p.event_id = $1
            ORDER BY user_name`,
           [eventId],
@@ -525,7 +531,8 @@ export async function eventRoutes(app: FastifyInstance) {
       const so = await loadStateOt(c, st, rl);
       const overtime = { otAfter: ev.ot_after === null ? null : Number(ev.ot_after), state: ev.state ?? null, effectiveState: st, stateFromAddress: !ev.state && !!st && st !== fallback, companyDailyOt: rl.dailyOt, otMult: so.otMult, dtAfter: so.dtAfter, dtMult: so.dtMult };
       const companyTz = (await c.query('SELECT timezone FROM tenants WHERE id = $1', [req.user.tid])).rows[0]?.timezone ?? 'America/Denver';
-      return { event: ev, shifts: out, phases, groups, overtime, companyTimezone: companyTz, ...(seePay ? { crewRates } : {}) };
+      const uniform = ev.uniform_id ? (await c.query('SELECT id, name, description FROM uniforms WHERE id = $1', [ev.uniform_id])).rows[0] ?? null : null;
+      return { event: ev, uniform, shifts: out, phases, groups, overtime, companyTimezone: companyTz, ...(seePay ? { crewRates } : {}) };
     });
     if (!out) return reply.code(404).send({ error: 'Event not found' });
     return out;
@@ -790,6 +797,7 @@ export async function eventRoutes(app: FastifyInstance) {
     const { id: shiftId } = id.parse(req.params);
     const n = await withTenant(req.user.tid, async (c) => {
       const d = await describeShift(c, req.user.tid, shiftId);
+      const was = (await c.query('SELECT event_id, role_name FROM shifts WHERE id = $1', [shiftId])).rows[0];
       const crew = d ? (await c.query("SELECT user_id, status FROM shift_assignments WHERE shift_id = $1 AND status <> 'declined'", [shiftId])).rows : [];
       for (const x of crew) await recordCancellation(c, req.user.tid, req.user.sub, { userId: x.user_id, status: x.status, shiftId });
       const r = await c.query('DELETE FROM shifts WHERE id = $1', [shiftId]);
@@ -798,7 +806,7 @@ export async function eventRoutes(app: FastifyInstance) {
           userId: x.user_id, category: 'shift_change' as const, title: `Shift cancelled: ${d.role}`,
           body: `${d.line}\n\nThis shift was cancelled.`, link: '/my-shifts', sms: `Shift cancelled: ${d.role}, ${d.event}, ${d.when}.`,
         })));
-      if (r.rowCount) await audit(c, req.user.tid, req.user.sub, 'shift.delete', 'shift', shiftId);
+      if (r.rowCount) await audit(c, req.user.tid, req.user.sub, 'shift.delete', 'shift', shiftId, { eventId: was?.event_id, role: was?.role_name });
       return r.rowCount;
     });
     return n ? { ok: true } : reply.code(404).send({ error: 'Shift not found' });
@@ -864,7 +872,7 @@ export async function eventRoutes(app: FastifyInstance) {
   app.delete('/api/assignments/:id', { preHandler: mgr }, async (req, reply) => {
     const { id: aId } = id.parse(req.params);
     const n = await withTenant(req.user.tid, async (c) => {
-      const prev = (await c.query('SELECT a.user_id, a.shift_id, a.status, s.event_id FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE a.id = $1', [aId])).rows[0];
+      const prev = (await c.query('SELECT a.user_id, a.shift_id, a.status, s.event_id, s.role_name FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id WHERE a.id = $1', [aId])).rows[0];
       // A confirmed call cut at short notice is paid under the event's work rules (unless the coordinator says not to).
       const noPay = (req.query as { noPay?: string }).noPay === '1';
       if (prev && !noPay) await recordCancellation(c, req.user.tid, req.user.sub, { userId: prev.user_id, status: prev.status, shiftId: prev.shift_id });
@@ -878,7 +886,7 @@ export async function eventRoutes(app: FastifyInstance) {
             body: `${d.line}\n\nYou were removed from this shift.`, link: '/my-shifts', sms: `You were removed from ${d.role}, ${d.event}, ${d.when}.`,
           });
       }
-      if (r.rowCount) await audit(c, req.user.tid, req.user.sub, 'assignment.delete', 'assignment', aId);
+      if (r.rowCount) await audit(c, req.user.tid, req.user.sub, 'assignment.delete', 'assignment', aId, prev ? { eventId: prev.event_id, userId: prev.user_id, shiftId: prev.shift_id, role: prev.role_name, was: prev.status } : undefined);
       return r.rowCount;
     });
     return n ? { ok: true } : reply.code(404).send({ error: 'Assignment not found' });

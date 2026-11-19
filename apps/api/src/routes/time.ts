@@ -25,7 +25,7 @@ const ENTRY_SQL = `
   SELECT t.id, t.status, t.clock_in, t.clock_out, t.approved_at, t.auto_approved, s.starts_at AS shift_starts_at, s.ends_at AS shift_ends_at, s.min_hours::float AS min_hours,
     ROUND(EXTRACT(EPOCH FROM (COALESCE(t.clock_out, now()) - t.clock_in)) / 3600.0, 2)::float AS hours,
     u.id AS user_id, u.name AS user_name, u.email AS user_email,
-    s.role_name, s.pay_rate_override AS shift_rate, cr.rate AS crew_rate, cr.pay_type AS crew_pay_type, e.name AS event_name, ap.name AS approved_by_name,
+    s.role_name, COALESCE(s.pay_rate_override, ep.rate) AS shift_rate, cr.rate AS crew_rate, cr.pay_type AS crew_pay_type, e.name AS event_name, ap.name AS approved_by_name,
     t.edited_at, ed.name AS edited_by_name, t.original_clock_in, t.original_clock_out, t.payroll_exported_at, t.offline_in, t.offline_out, t.auto_clocked_out
   FROM time_entries t
   JOIN users u ON u.id = t.user_id
@@ -33,6 +33,7 @@ const ENTRY_SQL = `
   JOIN shifts s ON s.id = a.shift_id
   JOIN events e ON e.id = s.event_id
   LEFT JOIN LATERAL person_rate(u.id, s.id) cr ON true
+  LEFT JOIN LATERAL event_position_rate(s.id) ep ON true
   LEFT JOIN users ap ON ap.id = t.approved_by
   LEFT JOIN users ed ON ed.id = t.edited_by`;
 
@@ -56,6 +57,9 @@ export async function timeRoutes(app: FastifyInstance) {
         await c.query(
           `SELECT a.id AS assignment_id, a.status, a.is_lead, s.id AS shift_id, s.event_id, s.role_name, s.starts_at, s.ends_at,
              e.name AS event_name, e.venue, e.clock_mode, e.geofence_m,
+             -- What to wear and what to know, for the crew
+             e.instructions, e.uniform_note, (SELECT un.name FROM uniforms un WHERE un.id = e.uniform_id) AS uniform_name,
+             (SELECT un.description FROM uniforms un WHERE un.id = e.uniform_id) AS uniform_description,
              (e.geo_lat IS NOT NULL AND e.geofence_m IS NOT NULL) AS needs_location,
              (SELECT w.status FROM shift_swaps w WHERE w.assignment_id = a.id AND w.status IN ('open','pending') LIMIT 1) AS swap_status,
              (SELECT w.id FROM shift_swaps w WHERE w.assignment_id = a.id AND w.status IN ('open','pending') LIMIT 1) AS swap_id,
@@ -131,8 +135,10 @@ export async function timeRoutes(app: FastifyInstance) {
       const me = (
         await c.query(
           `SELECT a.id AS assignment_id, a.status, s.id AS shift_id, s.role_name, s.starts_at, s.ends_at, s.required_certs,
-                  e.id AS event_id, e.name AS event_name, e.venue, e.address, e.notes, e.start_date, e.end_date
+                  e.id AS event_id, e.name AS event_name, e.venue, e.address, e.notes, e.start_date, e.end_date,
+                  e.instructions, e.uniform_note, un.name AS uniform_name, un.description AS uniform_description
            FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
+           LEFT JOIN uniforms un ON un.id = e.uniform_id
            WHERE a.id = $1 AND a.user_id = $2`,
           [id, req.user.sub],
         )

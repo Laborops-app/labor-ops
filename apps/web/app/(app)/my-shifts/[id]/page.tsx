@@ -24,6 +24,10 @@ type Detail = {
     venue: string | null;
     address: string | null;
     notes: string | null;
+    instructions?: string | null;
+    uniform_name?: string | null;
+    uniform_description?: string | null;
+    uniform_note?: string | null;
     start_date: string;
     end_date: string;
     hours: number;
@@ -168,6 +172,19 @@ function Body() {
                 </span>
               ))}
             </div>
+          )}
+          {(s.uniform_name || s.uniform_note) && (
+            <div className="crew-wear">
+              <h2 style={{ marginTop: 16 }}>What to wear</h2>
+              <p><b>{s.uniform_name ?? 'Uniform'}</b>{s.uniform_description ? ` · ${s.uniform_description}` : ''}</p>
+              {s.uniform_note && <p>{s.uniform_note}</p>}
+            </div>
+          )}
+          {s.instructions && (
+            <>
+              <h2 style={{ marginTop: 16 }}>Instructions</h2>
+              <p style={{ whiteSpace: 'pre-wrap' }}>{s.instructions}</p>
+            </>
           )}
           {s.notes && (
             <>

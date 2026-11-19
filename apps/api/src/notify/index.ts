@@ -148,7 +148,8 @@ export type ShiftDesc = { role: string; event: string; venue: string | null; whe
 /** Human description of a shift, formatted in the tenant's time zone. */
 export async function describeShift(c: PoolClient, tenantId: string, shiftId: string, userId?: string | null): Promise<ShiftDesc | null> {
   const { rows } = await c.query(
-    `SELECT s.role_name, s.starts_at, s.ends_at, e.name AS event_name, e.venue, COALESCE(e.timezone, t.timezone) AS timezone
+    `SELECT s.role_name, s.starts_at, s.ends_at, e.name AS event_name, e.venue, COALESCE(e.timezone, t.timezone) AS timezone,
+            e.uniform_note, (SELECT un.name FROM uniforms un WHERE un.id = e.uniform_id) AS uniform
        FROM shifts s JOIN events e ON e.id = s.event_id JOIN tenants t ON t.id = s.tenant_id WHERE s.id = $1`,
     [shiftId],
   );
@@ -166,6 +167,7 @@ export async function describeShift(c: PoolClient, tenantId: string, shiftId: st
     event: r.event_name,
     venue: r.venue,
     when,
-    line: `${r.event_name}\n${r.role_name} · ${when}${r.venue ? '\n' + r.venue : ''}`,
+    // What to wear goes in every offer, confirmation and change notice.
+    line: `${r.event_name}\n${r.role_name} · ${when}${r.venue ? '\n' + r.venue : ''}${r.uniform || r.uniform_note ? `\nWear: ${[r.uniform, r.uniform_note].filter(Boolean).join(', ')}` : ''}`,
   };
 }

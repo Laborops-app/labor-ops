@@ -148,7 +148,7 @@ const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; field?
   },
   {
     href: '/skills',
-    label: 'Roles & rates',
+    label: 'Positions & rates',
     roles: ['admin', 'manager'],
     rates: true, // coordinators only when an admin has allowed them to adjust rates
     icon: icon(
@@ -186,6 +186,16 @@ const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; field?
     icon: icon(
       <>
         <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
+      </>,
+    ),
+  },
+  {
+    href: '/activity',
+    label: 'Activity',
+    roles: ['admin', 'manager'],
+    icon: icon(
+      <>
+        <path d="M3 12h4l3-8 4 16 3-8h4" />
       </>,
     ),
   },

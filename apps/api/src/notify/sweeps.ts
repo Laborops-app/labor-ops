@@ -27,7 +27,8 @@ export async function runSweeps(): Promise<{ reminders: number; certs: number }>
       // Archived events are kept two years.
       await purgeArchive(c, t.id);
       const shifts = await c.query(
-        `SELECT a.id, a.user_id, s.role_name, s.starts_at, e.name AS event_name, e.venue, e.timezone
+        `SELECT a.id, a.user_id, s.role_name, s.starts_at, e.name AS event_name, e.venue, e.timezone, e.uniform_note,
+                (SELECT un.name FROM uniforms un WHERE un.id = e.uniform_id) AS uniform
            FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
           WHERE a.status = 'accepted' AND s.starts_at > now() + interval '90 minutes' AND s.starts_at <= now() + interval '24 hours'`,
       );
@@ -35,12 +36,13 @@ export async function runSweeps(): Promise<{ reminders: number; certs: number }>
         const mark = await c.query("INSERT INTO notify_marks (tenant_id, key) VALUES ($1,$2) ON CONFLICT DO NOTHING RETURNING key", [t.id, `rem24:${r.id}`]);
         if (!mark.rowCount) continue;
         const when = fmtWhen(r.starts_at, r.timezone || t.timezone);
+        const wear = [r.uniform, r.uniform_note].filter(Boolean).join(', ');
         await notify(c, t.id, {
           userId: r.user_id, category: 'reminder',
           title: `Reminder: ${r.role_name} tomorrow`,
-          body: `${r.event_name}\n${r.role_name} · ${when}${r.venue ? '\n' + r.venue : ''}`,
+          body: `${r.event_name}\n${r.role_name} · ${when}${r.venue ? '\n' + r.venue : ''}${wear ? `\nWear: ${wear}` : ''}`,
           link: `/my-shifts/${r.id}`,
-          sms: `Reminder: ${r.role_name} - ${r.event_name}, ${when}.`,
+          sms: `Reminder: ${r.role_name} - ${r.event_name}, ${when}.${wear ? ` Wear: ${wear}.` : ''}`,
         });
         reminders++;
       }

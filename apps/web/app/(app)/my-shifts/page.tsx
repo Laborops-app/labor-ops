@@ -29,6 +29,9 @@ type MyShift = {
   ends_at: string;
   event_name: string;
   venue: string | null;
+  instructions?: string | null;
+  uniform_name?: string | null;
+  uniform_note?: string | null;
   clocked_in: boolean;
   can_clock_in: boolean;
   can_say_late?: boolean;
@@ -177,6 +180,12 @@ function Body() {
                   {fmtDateTime(s.starts_at)} – {fmtTime(s.ends_at)}
                   {s.venue ? ` · ${s.venue}` : ''}
                 </div>
+                {(s.uniform_name || s.uniform_note || s.instructions) && (
+                  <div className="small crew-wear-line">
+                    {(s.uniform_name || s.uniform_note) && <>Wear: <b>{[s.uniform_name, s.uniform_note].filter(Boolean).join(', ')}</b></>}
+                    {s.instructions && <>{s.uniform_name || s.uniform_note ? ' · ' : ''}<Link href={`/my-shifts/${s.assignment_id}`}>Instructions</Link></>}
+                  </div>
+                )}
                 {s.hourly_rate != null && s.estimated_pay != null && (
                   <div className="small pay-line">
                     {money(s.hourly_rate)}{s.pay_type === 'day' ? ' day rate' : '/hr'} · est. <b>{money(s.estimated_pay)}</b>

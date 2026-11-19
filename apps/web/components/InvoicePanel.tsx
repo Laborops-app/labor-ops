@@ -125,8 +125,8 @@ export default function InvoicePanel({ eventId, isAdmin }: { eventId: string; is
             </div>
             <p className="muted small">
               {b.lines.some((l) => l.rateFrom === 'rentman')
-                ? <>Prices marked <span className="rate-src">Rentman</span> are the hourly rates and per-person fixed fees on the Rentman quote; the rest come from Roles &amp; pay rates.{' '}</>
-                : <>Bill rates from Roles &amp; pay rates.{' '}</>}
+                ? <>Prices marked <span className="rate-src">Rentman</span> are the hourly rates and per-person fixed fees on the Rentman quote; the rest come from Positions &amp; pay rates.{' '}</>
+                : <>Bill rates from Positions &amp; pay rates.{' '}</>}
               {b.lines.some((l) => l.rateFrom === 'person') && <>Lines marked <span className="rate-src">Own rate</span> use a person&apos;s own bill rate from their profile.{' '}</>}
               {b.overtime.otAfter ? `Overtime after ${b.overtime.otAfter} h a day at ${b.overtime.otMult}×` : 'No daily overtime on this job'}
               {b.overtime.otAfter && b.overtime.dtAfter ? `, double time after ${b.overtime.dtAfter} h at ${b.overtime.dtMult}×` : ''}.

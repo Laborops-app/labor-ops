@@ -214,14 +214,14 @@ function Body({ me }: { me: Me }) {
             <input value={u.email} disabled />
           </label>
           {isCrew && (
-            <div className="field" style={{ gridColumn: '1 / -1' }} role="group" aria-label="Skills">
-              <span className="field-label">Skills</span>
+            <div className="field" style={{ gridColumn: '1 / -1' }} role="group" aria-label="Positions">
+              <span className="field-label">Positions</span>
               {isCrew ? (
                 <>
                   <div className="row" style={{ gap: '.35rem', flexWrap: 'wrap' }}>
                     {f.skills.length ? f.skills.map((k) => <span key={k} className="chip">{k}</span>) : <span className="muted small">None yet</span>}
                   </div>
-                  <span className="muted small">Your labor coordinator sets your skills. Ask them if something is missing.</span>
+                  <span className="muted small">Your labor coordinator sets your positions. Ask them if something is missing.</span>
                 </>
               ) : (
                 <SkillPicker value={f.skills} onChange={(skills) => setF({ ...f, skills })} options={skillNames} />

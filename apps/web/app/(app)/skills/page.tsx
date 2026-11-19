@@ -1,5 +1,6 @@
 'use client';
 import { CrewRatesGrid } from '@/components/CrewRates';
+import { LeftoverSkills, UniformsCard } from '@/components/EventExtras';
 import RoleDefaults from '@/components/RoleDefaults';
 import { Fragment, useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
@@ -36,7 +37,7 @@ function RatesOnly() {
   };
   return (
     <>
-      <h1>Roles &amp; rates</h1>
+      <h1>Positions &amp; rates</h1>
       <p className="muted">Each role has two rates: the <b>pay rate</b> crew are paid, and the <b>bill rate</b> customers are quoted and invoiced. You can change either. Pay changes apply to every shift of that role from now on.</p>
       {error && <Banner onClose={() => setError('')}>{error}</Banner>}
       {note && <Banner kind="ok" onClose={() => setNote('')}>{note}</Banner>}
@@ -168,7 +169,7 @@ function Body() {
 
   return (
     <>
-      <h1>Roles &amp; pay rates</h1>
+      <h1>Positions &amp; pay rates</h1>
       <p className="muted">
         These skills and roles fill the drop-downs for crew skills and shift roles. Pay rates are hourly and only admins can see them. Timesheet exports use them to work out pay when a shift’s role matches a name below.
       </p>
@@ -234,7 +235,7 @@ function Body() {
       </section>
 
       <section className="card">
-        <h2>Add a skill or role</h2>
+        <h2>Add a position</h2>
         <form className="grid-form" onSubmit={add}>
           <label>
             Name
@@ -277,7 +278,7 @@ function Body() {
 
       <section className="card">
         <div className="row space">
-          <h2>All skills &amp; roles</h2>
+          <h2>All positions</h2>
           {list && list.length > 0 && (
             <div className="row" style={{ gap: 10 }}>
               <span className="muted small">
@@ -431,5 +432,5 @@ function Body() {
 }
 
 export default function Page() {
-  return <Shell roles={['admin', 'manager']}>{(me: Me) => (<>{me.role === 'admin' ? <Body /> : <RatesOnly />}{(me.role === 'admin' || me.canAdjustRates) && <CrewRatesGrid />}</>)}</Shell>;
+  return <Shell roles={['admin', 'manager']}>{(me: Me) => (<>{me.role === 'admin' ? <Body /> : <RatesOnly />}{(me.role === 'admin' || me.canAdjustRates) && <CrewRatesGrid />}<LeftoverSkills /><UniformsCard /></>)}</Shell>;
 }

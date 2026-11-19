@@ -50,6 +50,8 @@ export async function profileRoutes(app: FastifyInstance) {
 
   app.patch('/api/my/profile', { preHandler: authenticate }, async (req) => {
     const b = profileBody.parse(req.body);
+    // Crew don't choose their own positions: a coordinator sets them.
+    if (req.user.role === 'crew') delete b.skills;
     const has = (k: keyof typeof b) => b[k] !== undefined;
     return withTenant(req.user.tid, async (c) => {
       const r = await c.query(

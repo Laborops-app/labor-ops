@@ -42,8 +42,10 @@ import { EventDetails, Phases, Clocking, RentmanCard, EventFull, Phase, RmView }
 import { useSkillNames, useSkillSections } from '@/components/SkillPicker';
 import { askConfirm, undoable } from '@/components/Toasts';
 import Skeleton from '@/components/Skeleton';
+import DeclineFor from '@/components/DeclineFor';
+import { EventInstructions, EventHistory, PositionPay } from '@/components/EventExtras';
 
-type Assignment = { id: string; user_id: string; user_name: string; status: string; is_lead?: boolean; created_at?: string; nudged_at?: string | null; late_eta?: string | null; late_note?: string | null; planned?: boolean; clocked_in_at?: string | null; last_clock_out?: string | null; pay_type?: 'hourly' | 'day'; rate?: number | null; rate_src?: 'event' | 'person'; estimated_pay?: number | null };
+type Assignment = { id: string; user_id: string; user_name: string; status: string; is_lead?: boolean; created_at?: string; nudged_at?: string | null; late_eta?: string | null; late_note?: string | null; planned?: boolean; clocked_in_at?: string | null; last_clock_out?: string | null; pay_type?: 'hourly' | 'day'; rate?: number | null; rate_src?: 'event' | 'person'; decline_reason?: string | null; declined_by_name?: string | null; estimated_pay?: number | null };
 type CrewRate = { user_id: string; user_name: string; role_name?: string; pay_type: 'hourly' | 'day'; rate: number; note: string | null };
 type Elig = { user_id: string; missing_certs: string[]; time_off: boolean; outside_availability: boolean; booked?: { role_name: string; event_name: string; starts_at: string; ends_at: string } | null };
 /** Stars for a position; on a lead role ("Audio Lead") the rating as that position ("Audio") counts. */
@@ -203,6 +205,7 @@ function Body({ me }: { me: Me }) {
   const [addTime, setAddTime] = useState<string | null>(null);
   // Right-click (or ⋯) menu on a crew member: which shift and assignment, and where it opens.
   const [crewMenu, setCrewMenu] = useState<{ sid: string; aid: string; x: number; y: number } | null>(null);
+  const [declineFor, setDeclineFor] = useState<{ a: Assignment; s: Shift } | null>(null);
   // Select mode: tick several crew, then message, confirm, move or remove them together. null = off.
   const [sel, setSel] = useState<Set<string> | null>(null);
   const [msgPeople, setMsgPeople] = useState<string[] | undefined>(undefined);
@@ -255,7 +258,7 @@ function Body({ me }: { me: Me }) {
   const [tplId, setTplId] = useState('');
   const [tplPhase, setTplPhase] = useState('');
   // Event settings panel: clock-in, overtime and shift templates live here to keep the page short.
-  const [settings, setSettings] = useState<null | 'clock' | 'ot' | 'tpl' | 'pay' | 'rentman' | 'invoice' | 'rate' | 'update' | 'autofill' | 'avail'>(null);
+  const [settings, setSettings] = useState<null | 'clock' | 'ot' | 'tpl' | 'pay' | 'rentman' | 'invoice' | 'rate' | 'update' | 'autofill' | 'avail' | 'history'>(null);
   // Quick add (grid) or copy-to-other-days open under one phase.
   const [quick, setQuick] = useState<{ phaseId: string; kind: 'add' | 'copy' } | null>(null);
   // Defaults each role starts with (people needed, start and end).
@@ -612,7 +615,7 @@ function Body({ me }: { me: Me }) {
     const open = () => {
       let picked = new Set(team.map((t) => t.id));
       if (!picked.size) {
-        // Suggest the shifts in the lead's department (Roles & rates group) that overlap the lead shift.
+        // Suggest the shifts in the lead's department (Positions & rates group) that overlap the lead shift.
         const base = s.role_name.replace(LEAD_ROLE, '').trim().toLowerCase();
         const sec = skillSections.find((x) => x.roles.some((r) => r.toLowerCase() === s.role_name.toLowerCase()) || x.label.toLowerCase() === base);
         const inDept = (role: string) => (sec ? sec.roles.some((r) => roleKey(r) === roleKey(role)) : roleKey(role) === base);
@@ -757,6 +760,8 @@ function Body({ me }: { me: Me }) {
                     <span className="cs-sub">sent when you publish</span>
                   ) : a.clocked_in_at ? (
                     <span className="cs-sub">on site since {fmtTime(a.clocked_in_at)}</span>
+                  ) : a.status === 'declined' && (a.decline_reason || a.declined_by_name) ? (
+                    <span className="cs-sub">{a.declined_by_name ? `declined for them by ${a.declined_by_name}` : 'declined'}{a.decline_reason ? ` · ${a.decline_reason}` : ''}</span>
                   ) : a.status === 'offered' && a.created_at ? (
                     <span className="cs-sub">
                       sent {ago(a.created_at)} ago ·{' '}
@@ -879,15 +884,15 @@ function Body({ me }: { me: Me }) {
                       <>
                         No {s.pay_type === 'day' ? 'day rate' : 'pay rate'} set for {s.role_name}
                         {s.unpriced_seats ? `, so ${s.unpriced_seats} seat${s.unpriced_seats === 1 ? ' is' : 's are'} not in the cost` : ''}.{' '}
-                        <Link href="/skills">Set it in Roles &amp; rates</Link> or edit this shift&apos;s pay rate.
+                        <Link href="/skills">Set it in Positions &amp; rates</Link> or edit this shift&apos;s pay rate.
                       </>
                     ) : (
                       <>
-                        {s.role_name} isn&apos;t in Roles &amp; rates, so it has no rate
+                        {s.role_name} isn&apos;t in Positions &amp; rates, so it has no rate
                         {s.unpriced_seats ? ` and ${s.unpriced_seats} seat${s.unpriced_seats === 1 ? ' is' : 's are'} not in the cost` : ''}.{' '}
                         {me.role === 'admin' && (
-                          <button type="button" className="btn small" style={{ marginLeft: 4 }} onClick={() => run(() => api('/api/skills', { body: { name: s.role_name.trim() } }), `${s.role_name} added to Roles & rates. Set its pay and bill rates there.`).then((ok) => ok && router.push('/skills'))}>
-                            Add {s.role_name} to Roles &amp; rates
+                          <button type="button" className="btn small" style={{ marginLeft: 4 }} onClick={() => run(() => api('/api/skills', { body: { name: s.role_name.trim() } }), `${s.role_name} added to Positions & rates. Set its pay and bill rates there.`).then((ok) => ok && router.push('/skills'))}>
+                            Add {s.role_name} to Positions &amp; rates
                           </button>
                         )}{' '}
                         {rm?.linked ? <>Or map the Rentman name to an existing role under <Link href="/integrations/rentman">Integrations › Rentman</Link>.</> : <>Or edit the shift and pick a role from the list.</>}
@@ -1508,6 +1513,11 @@ function Body({ me }: { me: Me }) {
   };
   return (
     <div className="split">
+      {declineFor && (
+        <DeclineFor assignmentId={declineFor.a.id} name={declineFor.a.user_name} role={declineFor.s.role_name}
+          when={new Date(declineFor.s.starts_at).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+          onClose={() => setDeclineFor(null)} onDone={(m) => { setNote(m); load(); }} />
+      )}
       {crewMenu && (() => {
         const s = d.shifts.find((x) => x.id === crewMenu.sid);
         const a = s?.assignments.find((x) => x.id === crewMenu.aid);
@@ -1530,9 +1540,10 @@ function Body({ me }: { me: Me }) {
           ...(!a.planned && a.status === 'accepted' && !a.clocked_in_at && started ? [{ label: 'Add time', icon: 'pay', hint: 'They didn’t clock in', onClick: () => setAddTime(a.id) }] : []),
           'divider',
           { label: 'Message', icon: 'chat', onClick: () => { api<{ id: string }>('/api/chat/dm', { body: { userId: a.user_id } }).then((r) => router.push(`/chat?c=${r.id}`)).catch((e) => setError(e.message)); } },
-          { label: 'View profile', icon: 'link', hint: 'Skills, certificates, ratings', onClick: () => router.push(`/crew/${a.user_id}`) },
+          { label: 'View profile', icon: 'link', hint: 'Positions, certificates, ratings', onClick: () => router.push(`/crew/${a.user_id}`) },
           ...(ended && a.status === 'accepted' ? [{ label: 'Rate their work', icon: 'rate', onClick: () => setSettings('rate') }] : []),
           'divider',
+          ...(live && !a.planned && !a.clocked_in_at ? [{ label: 'Decline for them', icon: 'off', hint: 'They called or texted to say they can’t', onClick: () => setDeclineFor({ a, s }) }] : []),
           ...(live ? [{ label: 'Replace with someone else', icon: 'restore', hint: a.planned ? undefined : 'They’ll be told', onClick: async () => {
             if (!a.planned && !(await askConfirm(`Take ${a.user_name} off ${s.role_name} and pick someone else? They'll be told.`))) return;
             run(() => api(a.planned ? `/api/planned-picks/${a.id}` : `/api/assignments/${a.id}`, { method: 'DELETE' })).then((ok) => ok && openPicker(s.id));
@@ -1730,6 +1741,7 @@ function Body({ me }: { me: Me }) {
                 ...(rm && (rm.connected || rm.linked) ? [{ label: rm.linked && rm.project ? `Rentman · ${rm.project.number ? `#${rm.project.number}` : rm.project.name}` : 'Link a Rentman project', icon: 'link', onClick: () => setSettings('rentman') }] : []),
                 { label: 'Create a quote', icon: 'quote', onClick: () => api<{ quote: { id: string } }>('/api/quotes', { body: { eventId: id } }).then((r) => router.push(`/quotes/${r.quote.id}`)).catch((e) => setError(e.message)) },
                 { label: 'Event chat', icon: 'chat', onClick: () => api<{ id: string }>('/api/chat/channels', { body: { eventId: id } }).then((r) => router.push(`/chat?c=${r.id}`)).catch((e) => setError(e.message)) },
+                { label: 'History', icon: 'update', hint: 'Who changed what: crew, clock-ins, time, pay', onClick: () => setSettings('history') },
                 { label: 'Copy into a new event', icon: 'copy', onClick: () => setCopySignal((n) => n + 1) },
                 { label: 'Event settings', icon: 'settings', hint: 'Clock-in, overtime and work rules, templates', onClick: () => setSettings('clock') },
                 'divider',
@@ -1874,6 +1886,7 @@ function Body({ me }: { me: Me }) {
       <div id="ev-phases">
         <Phases eventId={id} phases={d.phases} onChanged={load} onError={setError} />
       </div>
+      <EventInstructions eventId={id} instructions={(ev as any).instructions ?? null} uniform={(d as any).uniform ?? null} uniformNote={(ev as any).uniform_note ?? null} onSaved={load} />
       <LaborBudget eventId={id} budget={(ev as any).labor_budget} onError={setError} />
       <EventFormsCard eventId={id} shiftLabel={(sid) => { const x = d.shifts.find((y) => y.id === sid); return x ? `${x.role_name} · ${shortWhen(x.starts_at)}` : 'Shift'; }} />
       <section className="card ev-rules">
@@ -1911,13 +1924,14 @@ function Body({ me }: { me: Me }) {
 
       {settings && typeof document !== 'undefined' && createPortal(
         <div className="drawer-backdrop" onMouseDown={() => setSettings(null)}>
-          <aside className={settings === 'rentman' || settings === 'invoice' || settings === 'rate' || settings === 'update' || settings === 'autofill' || settings === 'avail' ? 'drawer wide' : 'drawer'} role="dialog" aria-modal="true" aria-label={settings === 'rentman' ? 'Rentman' : settings === 'invoice' ? 'Invoice' : settings === 'rate' ? 'Rate crew' : settings === 'update' ? 'Send an update' : settings === 'autofill' ? 'Auto-fill' : settings === 'avail' ? 'Who is free' : 'Event settings'} onMouseDown={(e) => e.stopPropagation()}>
+          <aside className={settings === 'rentman' || settings === 'invoice' || settings === 'rate' || settings === 'update' || settings === 'autofill' || settings === 'avail' || settings === 'history' ? 'drawer wide' : 'drawer'} role="dialog" aria-modal="true" aria-label={settings === 'history' ? 'History' : settings === 'rentman' ? 'Rentman' : settings === 'invoice' ? 'Invoice' : settings === 'rate' ? 'Rate crew' : settings === 'update' ? 'Send an update' : settings === 'autofill' ? 'Auto-fill' : settings === 'avail' ? 'Who is free' : 'Event settings'} onMouseDown={(e) => e.stopPropagation()}>
             <div className="row space">
-              <h2 style={{ margin: 0 }}>{settings === 'rentman' ? 'Rentman' : settings === 'invoice' ? `Invoice · ${ev.name}` : settings === 'rate' ? `Rate crew · ${ev.name}` : settings === 'update' ? `Send an update · ${ev.name}` : settings === 'autofill' ? `Auto-fill · ${ev.name}` : settings === 'avail' ? `Who's free? · ${ev.name}` : 'Event settings'}</h2>
+              <h2 style={{ margin: 0 }}>{settings === 'history' ? `History · ${ev.name}` : settings === 'rentman' ? 'Rentman' : settings === 'invoice' ? `Invoice · ${ev.name}` : settings === 'rate' ? `Rate crew · ${ev.name}` : settings === 'update' ? `Send an update · ${ev.name}` : settings === 'autofill' ? `Auto-fill · ${ev.name}` : settings === 'avail' ? `Who's free? · ${ev.name}` : 'Event settings'}</h2>
               <button className="btn ghost small" aria-label="Close" onClick={() => setSettings(null)}>✕</button>
             </div>
             {settings === 'rentman' && <div style={{ marginTop: 12 }}><RentmanCard eventId={id} isAdmin={me.role === 'admin'} onError={setError} onView={setRm} onShifts={(m) => { setNote(m); load(); }} /></div>}
             {settings === 'invoice' && <InvoicePanel eventId={id} isAdmin={me.role === 'admin'} />}
+            {settings === 'history' && <EventHistory eventId={id} />}
             {settings === 'rate' && <div style={{ marginTop: 12 }}><EventRatings me={me} eventId={id} onProgress={() => loadRateInfo()} /></div>}
             {settings === 'autofill' && <div style={{ marginTop: 12 }}><AutoFill key={afCheck || 'all'} eventId={id} groups={crewGroups} freeChecks={freeChecks} initialCheck={afCheck} held={!!ev.staffing_draft} onDone={(m) => { setSettings(null); setNote(m); load(); }} /></div>}
             {settings === 'avail' && (
@@ -1939,7 +1953,7 @@ function Body({ me }: { me: Me }) {
               </div>
             )}
             {settings === 'update' && <div style={{ marginTop: 12 }}><EventUpdates key={msgPeople?.join(',') ?? 'all'} eventId={id} eventName={ev.name} shifts={d.shifts} phases={d.phases} groups={d.groups ?? []} people={msgPeople} /></div>}
-            {settings !== 'rentman' && settings !== 'invoice' && settings !== 'rate' && settings !== 'update' && settings !== 'autofill' && settings !== 'avail' && <div className="phase-tabs" role="tablist" aria-label="Settings section" style={{ margin: '12px 0' }}>
+            {settings !== 'rentman' && settings !== 'invoice' && settings !== 'rate' && settings !== 'update' && settings !== 'autofill' && settings !== 'avail' && settings !== 'history' && <div className="phase-tabs" role="tablist" aria-label="Settings section" style={{ margin: '12px 0' }}>
               {([['clock', 'Clock-in'], ['ot', 'Overtime & work rules'], ['tpl', 'Templates'], ...((me.role === 'admin' || me.canAdjustRates) ? [['pay', 'Crew pay']] as const : [])] as const).map(([k, label]) => (
                 <button key={k} type="button" role="tab" aria-selected={settings === k} className={settings === k ? 'tab on' : 'tab'} onClick={() => setSettings(k)}>
                   {label}
@@ -1949,6 +1963,7 @@ function Body({ me }: { me: Me }) {
             {settings === 'clock' && <Clocking ev={ev} onSaved={load} onError={setError} />}
             {settings === 'ot' && d.overtime && <OvertimeCard eventId={id} ot={d.overtime} onSaved={load} onError={setError} />}
             {settings === 'ot' && <EventRuleSet eventId={id} onSaved={load} />}
+            {settings === 'pay' && <PositionPay eventId={id} />}
             {settings === 'pay' && <CrewPay eventId={id} shifts={d.shifts} rates={d.crewRates ?? []} onSaved={load} />}
             {settings === 'tpl' && (
               <>

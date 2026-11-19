@@ -209,8 +209,8 @@ function Body({ me }: { me: Me }) {
             Home address
             <input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} maxLength={300} />
           </label>
-          <div className="field" style={{ gridColumn: '1 / -1' }} role="group" aria-label="Skills">
-            <span className="field-label">Skills</span>
+          <div className="field" style={{ gridColumn: '1 / -1' }} role="group" aria-label="Positions">
+            <span className="field-label">Positions</span>
             <SkillPicker value={f.skills} onChange={(skills) => setF({ ...f, skills })} options={skillNames} sections={skillSections} />
           </div>
           <label style={{ gridColumn: '1 / -1' }}>

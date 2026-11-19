@@ -45,13 +45,15 @@ export async function payrollSummary(c: PoolClient, from: string, to: string) {
   const rows = (
     await c.query(
       `SELECT t.id, t.user_id, t.assignment_id, t.clock_in, t.clock_out, t.payroll_exported_at,
-              u.name, u.email, u.payroll_ids, s.role_name, s.min_hours, t.min_hours_override, t.min_off, COALESCE(cr.pay_type, s.pay_type) AS pay_type,
-              COALESCE(cr.rate, s.pay_rate_override) AS pay_rate_override, s.event_id,
+              u.name, u.email, u.payroll_ids, s.role_name, s.min_hours, t.min_hours_override, t.min_off, COALESCE(cr.pay_type, CASE WHEN s.pay_rate_override IS NULL THEN ep.pay_type END, s.pay_type) AS pay_type,
+              COALESCE(cr.rate, s.pay_rate_override, ep.rate) AS pay_rate_override, s.event_id,
               e.name AS event_name, e.ot_after, e.state, e.address
          FROM time_entries t JOIN users u ON u.id = t.user_id
          JOIN shift_assignments a ON a.id = t.assignment_id JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
          -- This person's own rate (on this event, else their standing rate for the skill on that day) replaces the shift's and the role's rate.
          LEFT JOIN LATERAL person_rate(t.user_id, s.id) cr ON true
+         -- Then the shift's own rate, then the pay set for this position on the event.
+         LEFT JOIN LATERAL event_position_rate(s.id) ep ON true
         WHERE t.status = 'approved' AND t.clock_out IS NOT NULL
           AND t.clock_in >= ($1::date - 7)::timestamp AT TIME ZONE $3 AND t.clock_in < ($2::date + 1)::timestamp AT TIME ZONE $3
         ORDER BY t.user_id, t.clock_in`,

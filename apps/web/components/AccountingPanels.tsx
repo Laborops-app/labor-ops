@@ -384,7 +384,7 @@ export default function AccountingPanels({ qbo, only }: { qbo: string | null; on
                     </tbody>
                   </table>
                 ) : (
-                  <p className="muted small">No roles yet. Add them under Settings → Roles &amp; rates.</p>
+                  <p className="muted small">No roles yet. Add them under Settings → Positions &amp; rates.</p>
                 )}
               </>
             ) : (

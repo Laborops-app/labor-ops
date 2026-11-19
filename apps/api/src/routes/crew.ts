@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import { z } from 'zod';
+import { roleKeyOf } from '../pay';
 import { withTenant, audit, pool } from '../db';
 import { guard, forgetUser } from '../auth';
 import { sendInvite } from '../notify/tokens';
@@ -29,6 +30,24 @@ const patchBody = z.object({
   skills: z.array(z.string().trim().min(1).max(40)).max(30).optional(),
   active: z.boolean().optional(),
 });
+
+/**
+ * Positions come from the company's list (Positions & rates): names are matched loosely ("stage hands" → "Stagehand")
+ * and saved as the list spells them. Old free-text skills a person already has are kept until someone tidies them.
+ * With no positions set up yet, names are kept as typed.
+ */
+async function toPositions(c: import('pg').PoolClient, names: string[] | undefined, keep: string[] = []): Promise<{ ok: string[] } | { error: string }> {
+  if (!names) return { ok: [] };
+  const list = (await c.query('SELECT name FROM skills WHERE active')).rows.map((r) => r.name as string);
+  if (!list.length) return { ok: [...new Set(names)] };
+  const out: string[] = [], bad: string[] = [];
+  for (const n of names) {
+    const hit = list.find((x) => roleKeyOf(x) === roleKeyOf(n)) ?? keep.find((x) => x === n);
+    if (hit) { if (!out.includes(hit)) out.push(hit); } else bad.push(n);
+  }
+  if (bad.length) return { error: `${bad.map((b) => `“${b}”`).join(', ')} ${bad.length === 1 ? "isn't a position" : "aren't positions"}. Add ${bad.length === 1 ? 'it' : 'them'} on Positions & rates first.` };
+  return { ok: out };
+}
 
 const COLS = 'id, name, email, role, phone, skills, field_roles, active, created_at, address, emergency_name, emergency_phone, bio, coordinator_notes, can_adjust_rates, is_demo';
 /** Leads are chosen per event (on the assignment), so the only permission kept on the person is this one. */
@@ -104,6 +123,9 @@ export async function crewRoutes(app: FastifyInstance) {
     const tempPassword = body.password ?? crypto.randomBytes(6).toString('base64url');
     const hash = await bcrypt.hash(tempPassword, 10);
     const row = await withTenant(req.user.tid, async (c) => {
+      const pos = await toPositions(c, body.skills);
+      if ('error' in pos) return { error: pos.error } as never;
+      body.skills = pos.ok;
       const r = await c.query(
         `INSERT INTO users (tenant_id, email, name, role, password_hash, phone, skills)
          VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING ${COLS}`,
@@ -113,6 +135,7 @@ export async function crewRoutes(app: FastifyInstance) {
       await sendInvite(c, req.user.tid, r.rows[0]);
       return r.rows[0];
     });
+    if (row && 'error' in row) return reply.code(400).send(row);
     return reply.code(201).send({ member: row, tempPassword: body.password ? undefined : tempPassword });
   });
 
@@ -254,6 +277,12 @@ export async function crewRoutes(app: FastifyInstance) {
       if (taken && taken.id !== id) return reply.code(409).send({ error: 'That email is already registered to someone else' });
     }
     const row = await withTenant(req.user.tid, async (c) => {
+      if (b.skills) {
+        const had = (await c.query('SELECT skills FROM users WHERE id = $1', [id])).rows[0]?.skills ?? [];
+        const pos = await toPositions(c, b.skills, had);
+        if ('error' in pos) return { error: pos.error } as never;
+        b.skills = pos.ok;
+      }
       const r = await c.query(
         `UPDATE users SET name = COALESCE($2, name), phone = CASE WHEN $3::boolean THEN $4 ELSE phone END,
            skills = COALESCE($5, skills), active = COALESCE($6, active), email = COALESCE($8, email),
@@ -276,6 +305,7 @@ export async function crewRoutes(app: FastifyInstance) {
       return r.rows[0];
     });
     if (!row) return reply.code(404).send({ error: 'Not found' });
+    if ('error' in row) return reply.code(400).send(row);
     if (b.active !== undefined) forgetUser(id);
     return { member: row };
   });

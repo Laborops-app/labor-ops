@@ -88,11 +88,11 @@ export function CrewPayRates({ userId }: { userId: string }) {
   return (
     <section className="card" id="pay">
       <h2>Pay rates</h2>
-      <p className="muted small">Their own pay and bill rate for each skill, used on every event. A rate set on one event (event › Crew pay) still wins there. They see their own pay rates, never the bill rate.</p>
+      <p className="muted small">Their own pay and bill rate for each position, used on every event. A rate set on one event (event › Crew pay) still wins there. They see their own pay rates, never the bill rate.</p>
       {rows.length === 0 ? <p className="muted">No skills on this profile yet.</p> : (
         <div className="table-wrap">
           <table className="table cr-table">
-            <thead><tr><th>Skill</th><th>Standard pay</th><th>Their pay</th><th>Standard bill</th><th>Their bill</th><th>Since</th>{d.canEdit && <th aria-label="Actions" />}</tr></thead>
+            <thead><tr><th>Position</th><th>Standard pay</th><th>Their pay</th><th>Standard bill</th><th>Their bill</th><th>Since</th>{d.canEdit && <th aria-label="Actions" />}</tr></thead>
             <tbody>
               {rows.map((s) => {
                 const c = s.current;
@@ -100,7 +100,7 @@ export function CrewPayRates({ userId }: { userId: string }) {
                 return (
                   <Fragment key={s.skillId}>
                     <tr>
-                      <td><b>{s.name}</b>{!s.hasSkill && <span className="muted small"> (not on their skills)</span>}</td>
+                      <td><b>{s.name}</b>{!s.hasSkill && <span className="muted small"> (not one of their positions)</span>}</td>
                       <td className="muted">{money(std(s.role, t, 'pay'))}{std(s.role, t, 'pay') != null ? per(t) : ''}</td>
                       <td>{c?.rate != null ? <span className="cr-own">{money(c.rate)}{per(c.payType)}</span> : <span className="muted">Standard</span>}</td>
                       <td className="muted">{money(std(s.role, t, 'bill'))}{std(s.role, t, 'bill') != null ? per(t) : ''}</td>
@@ -143,8 +143,8 @@ export function CrewPayRates({ userId }: { userId: string }) {
       )}
       {d.canEdit && d.otherSkills.length > 0 && !extra && (
         <div className="row" style={{ marginTop: 10 }}>
-          <select value={add} onChange={(e) => { setAdd(e.target.value); setEditing(e.target.value); }} aria-label="Set a rate for another skill" style={{ maxWidth: 260 }}>
-            <option value="">Set a rate for another skill…</option>
+          <select value={add} onChange={(e) => { setAdd(e.target.value); setEditing(e.target.value); }} aria-label="Set a rate for another position" style={{ maxWidth: 260 }}>
+            <option value="">Set a rate for another position…</option>
             {d.otherSkills.map((k) => <option key={k.id} value={k.id}>{k.name}</option>)}
           </select>
         </div>
@@ -159,7 +159,7 @@ type Grid = {
   skills: ({ id: string; name: string } & RoleRates)[]; people: { id: string; name: string }[]; cells: Record<string, Record<string, Cell>>;
 };
 
-/** Roles & pay rates › Crew rates: people down the side, skills across the top. Click a cell to set that person's rate. */
+/** Positions & pay rates › Crew rates: people down the side, positions across the top. Click a cell to set that person's rate. */
 export function CrewRatesGrid() {
   const [g, setG] = useState<Grid | null>(null);
   const [err, setErr] = useState('');
@@ -196,15 +196,15 @@ export function CrewRatesGrid() {
   return (
     <section className="card" id="crew-rates">
       <h2>Crew rates</h2>
-      <p className="muted small">Each person&apos;s own pay and bill rate per skill, used on every event. Empty cells use the standard rate (shown in grey). Click a cell to change it; a change can start on a later date. Rates set for one event (event › Crew pay) still win on that event.</p>
+      <p className="muted small">Each person&apos;s own pay and bill rate per position, used on every event. Empty cells use the standard rate (shown in grey). Click a cell to change it; a change can start on a later date. Rates set for one event (event › Crew pay) still win on that event.</p>
       <div className="cr-filters">
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a person" aria-label="Find a person" />
         <select value={group} onChange={(e) => setGroup(e.target.value)} aria-label="Group">
           <option value="">All groups</option>
           {g?.groups.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
         </select>
-        <select value={skill} onChange={(e) => setSkill(e.target.value)} aria-label="Skill">
-          <option value="">All skills</option>
+        <select value={skill} onChange={(e) => setSkill(e.target.value)} aria-label="Position">
+          <option value="">All positions</option>
           {(g && !skill ? g.skills : allSkills).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
         </select>
         <label className="check"><input type="checkbox" checked={onlyOwn} onChange={(e) => setOnlyOwn(e.target.checked)} /> Only people with their own rates</label>
