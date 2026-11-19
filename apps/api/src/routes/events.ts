@@ -100,8 +100,11 @@ async function spreadShifts(c: PoolClient, fromPhase: string, days: { id: string
 export async function assignCrew(c: PoolClient, tid: string, actorId: string, shiftId: string, userId: string, override?: boolean, confirmed?: boolean, acceptFlags?: boolean, lead?: boolean): Promise<{ code: number; [k: string]: unknown }> {
   const shift = (await c.query('SELECT * FROM shifts WHERE id = $1 FOR UPDATE', [shiftId])).rows[0];
   if (!shift) return { code: 404, error: 'Shift not found' };
-  const user = (await c.query("SELECT id, name, active FROM users WHERE id = $1 AND role = 'crew'", [userId])).rows[0];
+  const user = (await c.query("SELECT id, name, active, employment FROM users WHERE id = $1 AND role = 'crew'", [userId])).rows[0];
   if (!user || !user.active) return { code: 404, error: 'Crew member not found or inactive' };
+  // Full-time staff are booked straight on (no offer to answer) and skip the crew onboarding packet.
+  const staff = user.employment === 'fulltime';
+  if (staff) confirmed = true;
 
   // Seats taken: people on the shift, plus picks still held back while the event is built quietly.
   const filled = (
@@ -153,7 +156,7 @@ export async function assignCrew(c: PoolClient, tid: string, actorId: string, sh
     };
 
   // Onboarding (optional, off unless a company turns it on): offers wait until someone has finished their packet. Quiet picks are fine.
-  if (!override) {
+  if (!override && !staff) {
     const st = (await c.query('SELECT (SELECT onboarding_on AND onboarding_block FROM staffing_settings) AS block, (SELECT staffing_draft FROM events WHERE id = $1) AS draft', [shift.event_id])).rows[0];
     if (st?.block && !st.draft) {
       const left = await onboardingLeft(c, userId);
@@ -189,7 +192,7 @@ export async function assignCrew(c: PoolClient, tid: string, actorId: string, sh
       [tid, shiftId, userId, confirmed ? 'accepted' : 'offered', lead ?? (await loadDepartments(c)).isLeadRole(shift.role_name)],
     )
   ).rows[0];
-  await audit(c, tid, actorId, 'assignment.create', 'assignment', a.id, { shiftId, userId, eventId: shift.event_id, role: shift.role_name });
+  await audit(c, tid, actorId, 'assignment.create', 'assignment', a.id, { shiftId, userId, eventId: shift.event_id, role: shift.role_name, ...(staff ? { staff: true } : {}) });
   await syncEventChannel(c, tid, shift.event_id, userId, true);
   const d = await describeShift(c, tid, shiftId, userId);
   if (d) {
@@ -924,7 +927,7 @@ export async function eventRoutes(app: FastifyInstance) {
     withTenant(req.user.tid, async (c) => {
       const one = async (sql: string) => (await c.query(sql)).rows[0].n as number;
       return {
-        crewCount: await one("SELECT count(*)::int AS n FROM users WHERE role = 'crew' AND active"),
+        crewCount: await one("SELECT count(*)::int AS n FROM users WHERE role = 'crew' AND employment = 'crew' AND active"),
         upcomingShifts: await one('SELECT count(*)::int AS n FROM shifts WHERE ends_at > now()'),
         openSlots: await one(`SELECT COALESCE(sum(GREATEST(s.headcount - (
             SELECT count(*) FROM shift_assignments a WHERE a.shift_id = s.id AND a.status <> 'declined'), 0)),0)::int AS n

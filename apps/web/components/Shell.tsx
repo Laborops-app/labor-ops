@@ -24,7 +24,30 @@ const icon = (d: React.ReactNode) => (
   </svg>
 );
 
-const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; field?: boolean; docs?: boolean; icon: React.ReactNode }[] = [
+const NAV: { href: string; label: string; roles: Role[]; rates?: boolean; field?: boolean; docs?: boolean; staff?: boolean; icon: React.ReactNode }[] = [
+  {
+    href: '/time-clock',
+    label: 'Time clock',
+    roles: ['admin', 'manager', 'hr', 'crew'],
+    staff: true, // full-time staff only
+    icon: icon(
+      <>
+        <circle cx="12" cy="13" r="8" />
+        <path d="M12 9v4l2.5 2.5M9 2h6M12 2v3" />
+      </>,
+    ),
+  },
+  {
+    href: '/staff',
+    label: 'Staff time',
+    roles: ['admin', 'manager', 'hr'],
+    icon: icon(
+      <>
+        <rect x="3" y="4" width="18" height="17" rx="2.5" />
+        <path d="M3 9h18M8 2v4M16 2v4M7 13h4M7 17h7M15.5 13.5l1.5 1.5 2.5-2.5" />
+      </>,
+    ),
+  },
   {
     href: '/dashboard',
     label: 'Dashboard',
@@ -378,6 +401,10 @@ function tabIcon(path: string) {
 }
 
 const MOBILE_ON_PROFILE = ['/trainings', '/availability'];
+/** Full-time staff (crew accounts marked full-time) get the time clock app: these pages, plus the shifts they're booked on. */
+const STAFF_PAGES = ['/time-clock', '/my-calendar', '/chat', '/profile'];
+const isStaffApp = (me: Me) => me.role === 'crew' && !!me.fulltime;
+const staffMayOpen = (path: string) => STAFF_PAGES.some((p) => path === p || path.startsWith(p + '/')) || /^\/my-shifts\/[^/]+/.test(path);
 const MeContext = createContext<Me | null>(null);
 /** The signed-in person, for pages inside the app frame. */
 export const useMe = () => useContext(MeContext);
@@ -462,7 +489,9 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
     // A full reload, so nothing from this session's open tabs stays in memory.
     window.location.href = '/login';
   };
-  const items = NAV.filter((n) => n.roles.includes(me.role) && (!n.rates || me.role === 'admin' || me.canAdjustRates) && (!n.field || !!me.fieldRoles?.length || !!me.leads) && (!n.docs || docsOn));
+  const staffApp = isStaffApp(me);
+  const items = NAV.filter((n) => n.roles.includes(me.role) && (!n.rates || me.role === 'admin' || me.canAdjustRates) && (!n.field || !!me.fieldRoles?.length || !!me.leads) && (!n.docs || docsOn)
+    && (!n.staff || !!me.fulltime) && (!staffApp || STAFF_PAGES.includes(n.href)));
 
   const current = items.find((n) => path.startsWith(n.href));
   // The phone's bottom bar: Trainings and Availability live on the Profile page there.
@@ -534,11 +563,11 @@ export default function Shell({ roles, children }: { roles: Role[]; children: (m
   const router = useRouter();
   const active = usePageActive();
   const here = usePathname();
-  const allowed = !!me && roles.includes(me.role);
+  const allowed = !!me && roles.includes(me.role) && (!isStaffApp(me) || staffMayOpen(here));
   useEffect(() => {
     if (!me || allowed || !active) return;
     closeTab(here, ''); // no tab for a page this person cannot open
-    router.replace(homeFor(me.role));
+    router.replace(homeFor(me.role, me.fulltime));
   }, [me, allowed, active, router, here]);
   if (!me) return <div className="center muted">Loading…</div>;
   if (!allowed) return null;

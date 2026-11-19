@@ -5767,3 +5767,99 @@ test('crew instructions + uniforms, decline for a crew member, change log, pay p
   assert.deepEqual((await call(a, 'GET', `/api/crew/${c2.id}`)).json.member.skills, ['Stagehand']);
   assert.equal((await call(a, 'GET', '/api/positions/leftovers')).json.leftovers.length, 0);
 });
+
+test('full-time staff: own time clock, office timecards, kept out of crew lists and offers, booked straight on events, left out of payroll by default', async () => {
+  const a = await register('staffc');
+  const tid = await tenantOf(a);
+  const mk = await call(a, 'POST', '/api/crew', { name: 'Sam Staff', email: `staff1-${run}@test.example`, password: 'password123', employment: 'fulltime' });
+  assert.equal(mk.status, 201, mk.text);
+  const staffId = mk.json.member.id as string;
+  assert.equal(mk.json.member.employment, 'fulltime');
+  const staff = await login(`staff1-${run}@test.example`, 'password123');
+  const c1 = await mkCrew(a, 'staffcrew1');
+  assert.equal((await call(staff, 'GET', '/api/auth/me')).json.user.fulltime, true);
+  assert.equal((await call(c1.session, 'GET', '/api/auth/me')).json.user.fulltime, false);
+
+  // Their own clock: in (with location and a note), break, out. Crew can't use it.
+  assert.equal((await call(c1.session, 'POST', '/api/staff-clock/in', {})).status, 403);
+  assert.equal((await call(c1.session, 'GET', '/api/staff-clock/me')).json.reason, 'not_staff');
+  const cin = await call(staff, 'POST', '/api/staff-clock/in', { lat: 39.65, lng: -104.99, acc: 12, note: 'At the shop' });
+  assert.equal(cin.status, 201, cin.text);
+  assert.equal((await call(staff, 'POST', '/api/staff-clock/in', {})).status, 409);
+  assert.equal((await call(staff, 'POST', '/api/staff-clock/break', { action: 'start' })).status, 200);
+  assert.equal((await call(staff, 'POST', '/api/staff-clock/break', { action: 'start' })).status, 409);
+  let me = (await call(staff, 'GET', '/api/staff-clock/me')).json;
+  assert.ok(me.open?.break_since);
+  assert.equal(me.weeklyOt, 40);
+  assert.equal((await call(staff, 'POST', '/api/staff-clock/break', { action: 'end' })).status, 200);
+
+  // Office: who's on now; crew can't see it
+  assert.equal((await call(c1.session, 'GET', '/api/staff')).status, 403);
+  let st = (await call(a, 'GET', '/api/staff')).json;
+  assert.equal(st.people.length, 1);
+  assert.equal(st.people[0].open.onBreak, false);
+  assert.equal(st.includeInPayroll, false);
+  assert.equal((await call(staff, 'POST', '/api/staff-clock/out', { lat: 39.66, lng: -104.98 })).status, 200);
+  me = (await call(staff, 'GET', '/api/staff-clock/me')).json;
+  assert.equal(me.open, null);
+  const p0 = me.days.flatMap((d: any) => d.items)[0];
+  assert.deepEqual([p0.kind, p0.note, p0.inLoc.lat, p0.outLoc.lng], ['punch', 'At the shop', 39.65, -104.98]);
+
+  // Office adds and fixes time (no overlaps), approves the week, exports timecards
+  const day = new Date(Date.now() - 3 * 86400000);
+  const at = (h: number) => new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), h)).toISOString();
+  const add = await call(a, 'POST', '/api/staff/punches', { userId: staffId, in: at(15), out: at(23), reason: 'Forgot to clock in' });
+  assert.equal(add.status, 201, add.text);
+  assert.equal((await call(a, 'POST', '/api/staff/punches', { userId: staffId, in: at(16), out: at(18) })).status, 409);
+  assert.equal((await call(a, 'POST', '/api/staff/punches', { userId: c1.id, in: at(16), out: at(18) })).status, 404);
+  assert.equal((await call(a, 'PATCH', `/api/staff/punches/${add.json.id}`, { in: at(14), reason: 'Started earlier' })).status, 200);
+  const wk = (await call(a, 'GET', `/api/staff?week=${at(14).slice(0, 10)}`)).json;
+  const card = wk.people[0].days.flatMap((d: any) => d.items).find((i: any) => i.id === add.json.id);
+  assert.equal(card.minutes, 9 * 60);
+  assert.equal(card.source, 'office');
+  const ap = await call(a, 'POST', '/api/staff/approve', { userId: staffId, from: wk.week.from, to: wk.week.to });
+  assert.ok(ap.json.count >= 1);
+  const csv = await call(a, 'GET', `/api/staff/export?from=${wk.week.from}&to=${wk.week.to}`);
+  assert.equal(csv.status, 200);
+  assert.match(csv.text, /Sam Staff,.*Staff clock/);
+  assert.match(csv.text, /Total \(overlaps counted once\)/);
+  const log = (await call(a, 'GET', '/api/activity?kind=time')).json.items.map((e: any) => e.text).join('\n');
+  assert.match(log, /Admin staffc added staff time for Sam Staff/);
+  assert.match(log, /Sam Staff clocked in \(staff time clock\)/);
+
+  // Kept out of crew offers: waves / autofill only see crew; booking them is direct (no offer)
+  const ev = (await call(a, 'POST', '/api/events', { name: 'Staff Show', startDate: start(-30).slice(0, 10), endDate: start(30).slice(0, 10) })).json.event.id as string;
+  const sh = (await call(a, 'POST', `/api/events/${ev}/shifts`, { roleName: 'Stagehand', startsAt: start(-6), endsAt: start(-1), headcount: 3 })).json.shift.id as string;
+  const bk = await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: staffId, override: true });
+  assert.ok(bk.status < 300, bk.text);
+  assert.equal(bk.json.assignment.status, 'accepted');
+  const bc = await call(a, 'POST', `/api/shifts/${sh}/assign`, { userId: c1.id, confirmed: true, override: true });
+  assert.ok(bc.status < 300, bc.text);
+  const upcoming = (await call(staff, 'GET', '/api/staff-clock/me')).json.upcoming;
+  assert.ok(Array.isArray(upcoming));
+
+  // Event time for both, approved; payroll leaves the staff member out (with a note) until it's switched on
+  const asg = (await call(a, 'GET', `/api/events/${ev}`)).json.shifts.find((x: any) => x.id === sh).assignments;
+  for (const x of asg)
+    await withTenant(tid, (c) => c.query("INSERT INTO time_entries (tenant_id, assignment_id, user_id, clock_in, clock_out, status) VALUES ($1,$2,$3, now() - interval '6 hours', now() - interval '1 hours', 'approved')", [tid, x.id, x.user_id]));
+  const today = new Date().toISOString().slice(0, 10);
+  const from = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
+  let pr = (await call(a, 'GET', `/api/payroll?from=${from}&to=${today}`)).json;
+  assert.deepEqual(pr.people.map((p: any) => p.name), ['Crew staffcrew1']);
+  assert.ok(pr.warnings.some((w: string) => /1 full-time staff member .*Sam Staff.* left out/.test(w)), pr.warnings.join(' | '));
+  const exp = await call(a, 'GET', `/api/payroll/export?provider=csv&from=${from}&to=${today}&mark=0`);
+  assert.ok(!exp.text.includes('Sam Staff'));
+  assert.equal((await call(c1.session, 'PUT', '/api/payroll/include-fulltime', { include: true })).status, 403);
+  assert.equal((await call(a, 'PUT', '/api/payroll/include-fulltime', { include: true })).status, 200);
+  pr = (await call(a, 'GET', `/api/payroll?from=${from}&to=${today}`)).json;
+  assert.deepEqual(pr.people.map((p: any) => p.name).sort(), ['Crew staffcrew1', 'Sam Staff']);
+  assert.equal(pr.payroll.includeFulltime, true);
+  // Their event time shows on their staff timecard
+  const mine = (await call(staff, 'GET', '/api/staff-clock/me')).json.days.flatMap((d: any) => d.items);
+  assert.ok(mine.some((i: any) => i.kind === 'event' && i.event === 'Staff Show'));
+
+  // Back to crew: open punch closed, logged
+  assert.equal((await call(a, 'PUT', `/api/crew/${staffId}/employment`, { employment: 'crew' })).status, 200);
+  assert.equal((await call(staff, 'GET', '/api/auth/me')).json.user.fulltime, false);
+  assert.equal((await call(a, 'GET', '/api/staff')).json.people.length, 0);
+});

@@ -47,7 +47,7 @@ export async function rankForShift(c: PoolClient, shiftId: string): Promise<Rank
     await c.query(
       `SELECT u.id, u.name, u.skills, COALESCE(r.avg_stars, r.stars, 0)::float8 AS stars
          FROM users u LEFT JOIN crew_ratings r ON r.user_id = u.id AND r.role_key = lower(trim(regexp_replace($1, '\\s*\\(.*\\)\\s*$', '')))
-        WHERE u.role = 'crew' AND u.active ORDER BY u.name`,
+        WHERE u.role = 'crew' AND u.employment = 'crew' AND u.active ORDER BY u.name`,
       [shift.role_name],
     )
   ).rows as { id: string; name: string; skills: string[] | null; stars: number }[];

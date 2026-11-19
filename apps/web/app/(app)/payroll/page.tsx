@@ -1,8 +1,9 @@
 'use client';
+import Link from 'next/link';
 import { Fragment, useEffect, useState } from 'react';
 import Shell from '@/components/Shell';
 import { Banner, Empty } from '@/components/ui';
-import { api, money } from '@/lib/api';
+import { api, money, type Me } from '@/lib/api';
 import PayAdjustments from '@/components/PayAdjustments';
 import { askConfirm } from '@/components/Toasts';
 import Skeleton from '@/components/Skeleton';
@@ -13,7 +14,7 @@ type Entry = { id: string; date: string; event: string; role: string; hours: num
 type Person = { userId: string; name: string; email: string; payrollIds: Record<string, string>; regular: number; overtime: number; double: number; hours: number; days: number; dayPay: number; gross: number | null; penaltyPay?: number; entries: Entry[] };
 type Data = {
   from: string; to: string; people: Person[]; warnings: string[]; totals: { people: number; hours: number; gross: number };
-  payroll: { enabled: Provider[]; primary: Provider }; missingIds: Record<string, string[]>; quickbooksConnected: boolean;
+  payroll: { enabled: Provider[]; primary: Provider; includeFulltime?: boolean }; missingIds: Record<string, string[]>; quickbooksConnected: boolean;
   history: { id: string; provider: string; period_start: string; period_end: string; people: number; entries: number; gross: string | null; created_at: string; created_by: string | null }[];
 };
 const LABEL: Record<string, string> = { adp: 'ADP', gusto: 'Gusto', quickbooks: 'QuickBooks', csv: 'Detail CSV' };
@@ -30,7 +31,7 @@ function lastWeek() {
 }
 const h = (n: number) => (n ? n.toFixed(2) : '—');
 
-function Body() {
+function Body({ me }: { me: Me }) {
   const [period, setPeriod] = useState(lastWeek);
   const [d, setD] = useState<Data | null>(null);
   const [prov, setProv] = useState<Provider | null>(null);
@@ -105,6 +106,14 @@ function Body() {
       ) : (
         <>
           {d.warnings.map((w) => <Banner key={w} kind="info">{w}</Banner>)}
+          <p className="small muted payroll-ft">
+            Full-time staff: <b>{d.payroll.includeFulltime ? 'included in these exports' : 'left out of these exports'}</b> (their hours are on <Link href="/staff">Staff time</Link>).{' '}
+            {me.role === 'admin' && (
+              <button type="button" className="btn-link small" onClick={async () => {
+                try { await api('/api/payroll/include-fulltime', { method: 'PUT', body: { include: !d.payroll.includeFulltime } }); await load(); } catch (e) { setError((e as Error).message); }
+              }}>{d.payroll.includeFulltime ? 'Leave them out' : 'Include them'}</button>
+            )}
+          </p>
           <div className="phase-tabs" role="tablist" aria-label="Payroll provider">
             {d.payroll.enabled.map((p) => (
               <button key={p} type="button" role="tab" aria-selected={prov === p} className={prov === p ? 'tab on' : 'tab'} onClick={() => setProv(p)}>
@@ -303,5 +312,5 @@ function Body() {
 }
 
 export default function Page() {
-  return <Shell roles={['admin', 'hr']}>{() => <Body />}</Shell>;
+  return <Shell roles={['admin', 'hr']}>{(me) => <Body me={me} />}</Shell>;
 }

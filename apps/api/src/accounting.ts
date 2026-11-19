@@ -20,6 +20,8 @@ export const acctSchema = z.object({
     .object({
       enabled: z.array(z.enum(PAYROLL_PROVIDERS)).min(1).default(['adp']),
       primary: z.enum(PAYROLL_PROVIDERS).default('adp'),
+      /** Full-time staff are left out of payroll exports unless this is on (they're usually paid through regular payroll). */
+      includeFulltime: z.boolean().default(false),
       adp: z
         .object({
           /** Which ADP import: RUN Powered by ADP (time sheet import) or ADP Workforce Now (pay data import). */

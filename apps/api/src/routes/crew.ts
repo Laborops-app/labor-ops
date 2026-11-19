@@ -16,6 +16,7 @@ const createBody = z.object({
   phone: z.string().trim().max(40).optional().nullable(),
   skills: z.array(z.string().trim().min(1).max(40)).max(30).default([]),
   role: z.enum(['crew', 'manager', 'admin', 'hr']).default('crew'),
+  employment: z.enum(['crew', 'fulltime']).default('crew'),
   password: z.string().min(8).max(200).optional(),
 });
 const patchBody = z.object({
@@ -49,7 +50,7 @@ async function toPositions(c: import('pg').PoolClient, names: string[] | undefin
   return { ok: out };
 }
 
-const COLS = 'id, name, email, role, phone, skills, field_roles, active, created_at, address, emergency_name, emergency_phone, bio, coordinator_notes, can_adjust_rates, is_demo';
+const COLS = 'id, name, email, role, employment, phone, skills, field_roles, active, created_at, address, emergency_name, emergency_phone, bio, coordinator_notes, can_adjust_rates, is_demo';
 /** Leads are chosen per event (on the assignment), so the only permission kept on the person is this one. */
 export const FIELD_ROLES = ['onsite_coordinator'] as const;
 
@@ -127,11 +128,11 @@ export async function crewRoutes(app: FastifyInstance) {
       if ('error' in pos) return { error: pos.error } as never;
       body.skills = pos.ok;
       const r = await c.query(
-        `INSERT INTO users (tenant_id, email, name, role, password_hash, phone, skills)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING ${COLS}`,
-        [req.user.tid, body.email, body.name, body.role, hash, body.phone ?? null, body.skills],
+        `INSERT INTO users (tenant_id, email, name, role, password_hash, phone, skills, employment)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${COLS}`,
+        [req.user.tid, body.email, body.name, body.role, hash, body.phone ?? null, body.skills, body.employment],
       );
-      await audit(c, req.user.tid, req.user.sub, 'user.create', 'user', r.rows[0].id, { role: body.role });
+      await audit(c, req.user.tid, req.user.sub, 'user.create', 'user', r.rows[0].id, { role: body.role, employment: body.employment });
       await sendInvite(c, req.user.tid, r.rows[0]);
       return r.rows[0];
     });

@@ -24,7 +24,7 @@ type Kind = keyof typeof KINDS;
 
 const kindOf = (a: string): Kind =>
   a.startsWith('assignment.') || a.startsWith('claim.') || a.startsWith('swap.') || a === 'attendance.no_show' || a === 'event.autofill' || a === 'shift.fill_group' || a === 'shift.offer_group' || a === 'shift.waves_start' ? 'crew'
-    : a.startsWith('time.') ? 'time'
+    : a.startsWith('time.') || (a.startsWith('staff.') && a !== 'staff.employment') ? 'time'
     : a.startsWith('shift.') ? 'shift'
     : a.includes('rate') || a.startsWith('billing.') || a === 'event.overtime' ? 'pay'
     : a.startsWith('event.') || a.startsWith('phase.') ? 'event'
@@ -68,6 +68,16 @@ export function describe(r: LogRow): string {
     case 'time.minimum': return d.on === false ? `${who} switched off the minimum pay for ${them}` : `${who} set ${them}’s minimum to ${d.hours ?? 'the usual'} h`;
     case 'time.lunch_start': case 'time.break_start': return `${them} started a ${r.action.includes('lunch') ? 'lunch' : 'break'}`;
     case 'time.lunch_done': case 'time.lunch_end': case 'time.break_end': return `${them} ended a ${r.action.includes('lunch') ? 'lunch' : 'break'}`;
+    case 'staff.clock_in': return self || !r.actor ? `${them} clocked in (staff time clock)` : `${who} clocked ${them} in (staff time clock)`;
+    case 'staff.clock_out': return self || !r.actor ? `${them} clocked out (staff time clock)` : `${who} clocked ${them} out (staff time clock)`;
+    case 'staff.break_start': return `${them} started a break`;
+    case 'staff.break_end': return `${them} ended a break`;
+    case 'staff.add': return `${who} added staff time for ${them}: ${t(d.in)} – ${d.out ? t(d.out) : 'still on'}${d.reason ? ` (${d.reason})` : ''}`;
+    case 'staff.edit': return `${who} changed ${them}’s staff time from ${t(d.from?.in)}–${t(d.from?.out)} to ${t(d.to?.in)}–${t(d.to?.out)}${d.reason ? ` (${d.reason})` : ''}`;
+    case 'staff.delete': return `${who} deleted ${them}’s staff time ${t(d.in)} – ${t(d.out)}${d.reason ? ` (${d.reason})` : ''}`;
+    case 'staff.approve': return `${who} approved ${them}’s staff time${d.count > 1 ? ` (${d.count} punches)` : ''}`;
+    case 'staff.unapprove': return `${who} unapproved ${them}’s staff time`;
+    case 'staff.employment': return d.employment === 'fulltime' ? `${who} made ${them} full-time staff` : `${who} moved ${them} back to crew`;
     case 'shift.create': return `${who} added a shift${d.role ? `: ${d.role}` : ''}`;
     case 'shift.bulk_create': return `${who} added ${d.count ?? 'several'} shifts`;
     case 'shift.update': return `${who} changed a shift${d.role ? `: ${d.role}` : ''}`;

@@ -19,7 +19,7 @@ function Body() {
   const load = () => api<{ groups: Group[] }>('/api/crew-groups').then((r) => setGroups(r.groups)).catch((e) => setError(e.message));
   useEffect(() => {
     load();
-    api<{ crew: Crew[] }>('/api/crew').then((r) => setCrew(r.crew.filter((m) => m.role === 'crew' && m.active))).catch(() => {});
+    api<{ crew: Crew[] }>('/api/crew').then((r) => setCrew(r.crew.filter((m) => m.role === 'crew' && m.active && (m as { employment?: string }).employment !== 'fulltime'))).catch(() => {});
   }, []);
   const gone = useGone();
   const run = async (fn: () => Promise<unknown>) => {

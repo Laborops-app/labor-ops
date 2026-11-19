@@ -11,7 +11,7 @@ export default function ClientFrame({ children }: { children: (me: Me) => React.
   const [me, setMe] = useState<Me | null>(null);
   useEffect(() => {
     api<{ user: Me }>('/api/auth/me')
-      .then(({ user }) => (user.role === 'client' ? setMe(user) : router.replace(homeFor(user.role))))
+      .then(({ user }) => (user.role === 'client' ? setMe(user) : router.replace(homeFor(user.role, user.fulltime))))
       .catch(() => router.replace(`/login?next=${encodeURIComponent(path)}`));
   }, [router, path]);
   if (!me) return <div className="center muted">Loading…</div>;

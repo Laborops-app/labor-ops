@@ -37,7 +37,7 @@ const weekOf = (ymd: string) => {
  * Weekly overtime counts the whole Mon–Sun week (including approved time just before the period); daily overtime is per job per day,
  * with the job's threshold and its state's multipliers. Day-rate shifts pay one flat amount per day.
  */
-export async function payrollSummary(c: PoolClient, from: string, to: string) {
+export async function payrollSummary(c: PoolClient, from: string, to: string, opts: { staff?: 'include' | 'exclude' } = {}) {
   const rules = await loadRules(c);
   const rates = await loadRates(c);
   const dayRates = await loadDayRates(c);
@@ -45,7 +45,7 @@ export async function payrollSummary(c: PoolClient, from: string, to: string) {
   const rows = (
     await c.query(
       `SELECT t.id, t.user_id, t.assignment_id, t.clock_in, t.clock_out, t.payroll_exported_at,
-              u.name, u.email, u.payroll_ids, s.role_name, s.min_hours, t.min_hours_override, t.min_off, COALESCE(cr.pay_type, CASE WHEN s.pay_rate_override IS NULL THEN ep.pay_type END, s.pay_type) AS pay_type,
+              u.name, u.email, u.payroll_ids, u.employment, s.role_name, s.min_hours, t.min_hours_override, t.min_off, COALESCE(cr.pay_type, CASE WHEN s.pay_rate_override IS NULL THEN ep.pay_type END, s.pay_type) AS pay_type,
               COALESCE(cr.rate, s.pay_rate_override, ep.rate) AS pay_rate_override, s.event_id,
               e.name AS event_name, e.ot_after, e.state, e.address
          FROM time_entries t JOIN users u ON u.id = t.user_id
@@ -185,7 +185,7 @@ export async function payrollSummary(c: PoolClient, from: string, to: string) {
   const adj = (
     await c.query(
       `SELECT a.id, a.user_id, a.event_id, a.event_name, a.role_name, a.kind, to_char(a.work_date, 'YYYY-MM-DD') AS date, a.hours::float AS hours,
-              a.amount::float AS amount, a.note, a.exported_at, u.name, u.email, u.payroll_ids
+              a.amount::float AS amount, a.note, a.exported_at, u.name, u.email, u.payroll_ids, u.employment
          FROM pay_adjustments a JOIN users u ON u.id = a.user_id
         WHERE a.voided_at IS NULL AND a.work_date BETWEEN $1::date AND $2::date ORDER BY a.work_date`,
       [from, to],
@@ -212,12 +212,23 @@ export async function payrollSummary(c: PoolClient, from: string, to: string) {
   }
   const list = [...people.values()].sort((a, b) => a.name.localeCompare(b.name));
   for (const p of list) p.gross = p.missingRate ? null : r2(p.entries.reduce((s, e) => s + (e.pay ?? 0), 0));
+  // Full-time staff: left out of payroll exports unless the company includes them (Payroll settings).
+  let staffOut: { people: number; hours: number; names: string[] } | null = null;
+  if (opts.staff === 'exclude' && list.length) {
+    const ft = new Set((await c.query("SELECT id FROM users WHERE employment = 'fulltime' AND id = ANY($1::uuid[])", [list.map((p) => p.userId)])).rows.map((r) => r.id as string));
+    if (ft.size) {
+      const gone = list.filter((p) => ft.has(p.userId));
+      staffOut = { people: gone.length, hours: r2(gone.reduce((s, p) => s + p.hours, 0)), names: gone.map((p) => p.name) };
+      for (let i = list.length - 1; i >= 0; i--) if (ft.has(list[i]!.userId)) list.splice(i, 1);
+    }
+  }
   const exportedBefore = list.reduce((n, p) => n + p.entries.filter((e) => e.exported).length, 0);
   const warnings: string[] = [];
   if (unapproved) warnings.push(`${unapproved} time entr${unapproved === 1 ? 'y' : 'ies'} in this period ${unapproved === 1 ? 'is' : 'are'} not approved and left out.`);
   if (exportedBefore) warnings.push(`${exportedBefore} entr${exportedBefore === 1 ? 'y was' : 'ies were'} already exported to payroll before. Check you are not paying them twice.`);
   if (list.some((p) => p.missingRate)) warnings.push('Some roles have no pay rate (or day rate), so their gross pay is not shown.');
-  return { from, to, timezone: rules.tz, people: list, warnings, totals: { people: list.length, hours: r2(list.reduce((s, p) => s + p.hours, 0)), gross: r2(list.reduce((s, p) => s + (p.gross ?? 0), 0)) } };
+  if (staffOut) warnings.push(`${staffOut.people} full-time staff member${staffOut.people === 1 ? '' : 's'} (${staffOut.hours} h on events: ${staffOut.names.join(', ')}) ${staffOut.people === 1 ? 'is' : 'are'} left out of this payroll export. Full-time staff are paid through regular payroll; their hours are on Staff time. Change this in Payroll settings.`);
+  return { from, to, timezone: rules.tz, people: list, warnings, staffOut, totals: { people: list.length, hours: r2(list.reduce((s, p) => s + p.hours, 0)), gross: r2(list.reduce((s, p) => s + (p.gross ?? 0), 0)) } };
 }
 
 // ---------- export files ----------

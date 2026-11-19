@@ -27,6 +27,7 @@ type Member = {
   skills: string[];
   field_roles?: FieldRole[];
   active: boolean;
+  employment?: string;
 };
 type Cert = { id: string; name: string; expires_on: string | null; verified: boolean; file_name: string | null; file_size: number | null };
 type Detail = {
@@ -169,7 +170,7 @@ function Body({ me }: { me: Me }) {
           <h1>
             {m.name} {!m.active && <span className="chip bad">Inactive</span>}
           </h1>
-          <div className="muted">{roleLabel(m.role)}</div>
+          <div className="muted">{roleLabel(m.role)}{m.employment === 'fulltime' && <span className="ft-badge">Full-time staff</span>}</div>
         </div>
         <button
           className="btn small"
@@ -243,6 +244,11 @@ function Body({ me }: { me: Me }) {
               <button type="button" className="btn" onClick={() => act('active', m.active ? 'Deactivated.' : 'Reactivated.', () => api(`/api/crew/${id}`, { method: 'PATCH', body: { active: !m.active } }))}>
                 {m.active ? 'Deactivate' : 'Reactivate'}
               </button>
+              {m.role === 'crew' && (
+                <button type="button" className="btn ghost" disabled={busy === 'emp'} onClick={() => act('emp', m.employment === 'fulltime' ? `${m.name} is crew again.` : `${m.name} is now full-time staff. They’ll use the Time clock.`, () => api(`/api/crew/${id}/employment`, { method: 'PUT', body: { employment: m.employment === 'fulltime' ? 'crew' : 'fulltime' } }))}>
+                  {m.employment === 'fulltime' ? 'Move back to crew' : 'Make full-time staff'}
+                </button>
+              )}
               <button type="button" className="btn ghost" onClick={resetPw} disabled={busy === 'pw'}>
                 Reset password
               </button>

@@ -16,7 +16,7 @@ import { ActIcon } from '@/components/ActionMenu';
 import Skeleton from '@/components/Skeleton';
 
 type Cert = { id: string; name: string; expires_on: string | null; verified: boolean; has_file: boolean };
-type Member = { id: string; name: string; email: string; role: string; phone: string | null; skills: string[]; field_roles?: string[]; active: boolean; certs: Cert[]; has_availability: boolean; can_adjust_rates?: boolean; ratings?: Record<string, number>; rating_avg?: number | null; review_count?: number; flag_count?: number; is_demo?: boolean };
+type Member = { id: string; name: string; email: string; role: string; phone: string | null; skills: string[]; field_roles?: string[]; active: boolean; certs: Cert[]; has_availability: boolean; can_adjust_rates?: boolean; ratings?: Record<string, number>; rating_avg?: number | null; review_count?: number; flag_count?: number; is_demo?: boolean; employment?: string };
 
 const certState = (c: Cert) => {
   if (!c.expires_on) return '';
@@ -38,10 +38,12 @@ function Body({ me }: { me: Me }) {
   const [cf, setCf] = useState({ name: '', expiresOn: '' });
   const [rating, setRating] = useState<Member | null>(null);
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [staffCount, setStaffCount] = useState(0);
 
   const load = () =>
     api<{ crew: Member[] }>('/api/crew')
-      .then((r) => setList(r.crew))
+      // Full-time staff live on Staff time, not in the crew list.
+      .then((r) => { setList(r.crew.filter((m) => m.employment !== 'fulltime')); setStaffCount(r.crew.filter((m) => m.employment === 'fulltime' && m.active).length); })
       .catch((e) => setError(e.message));
   useEffect(() => {
     load();
@@ -128,6 +130,7 @@ function Body({ me }: { me: Me }) {
   return (
     <>
       <h1>Crew</h1>
+      {staffCount > 0 && <p className="muted small">{staffCount} full-time staff {staffCount === 1 ? 'member is' : 'members are'} kept on <Link href="/staff">Staff time</Link>.</p>}
       <TopbarAction>
         <button className="btn primary" onClick={() => setAdding(true)}>
           Add Crew Member

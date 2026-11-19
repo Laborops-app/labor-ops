@@ -97,7 +97,7 @@ type Shift = {
 type Overtime = { otAfter: number | null; state: string | null; effectiveState: string | null; stateFromAddress: boolean; companyDailyOt: number; otMult: number; dtAfter: number | null; dtMult: number };
 type PGroup = { id: string; phase_id: string; label: string; sort: number };
 type Detail = { event: EventFull; shifts: Shift[]; phases: Phase[]; groups?: PGroup[]; overtime?: Overtime; crewRates?: CrewRate[] };
-type Member = { id: string; name: string; role: string; skills: string[]; active: boolean; ratings?: Record<string, number>; rating_avg?: number | null; review_count?: number; no_show_count?: number; no_rehire_count?: number };
+type Member = { id: string; name: string; role: string; skills: string[]; active: boolean; ratings?: Record<string, number>; rating_avg?: number | null; review_count?: number; no_show_count?: number; no_rehire_count?: number; employment?: string };
 const times = (n: number) => (n === 1 ? '' : ` ×${n}`);
 /** Short warning for the crew picker, from past reviews. */
 const LEAD_ROLE = /(\(\s*lead\s*\)|\blead)\s*$/i;
@@ -153,6 +153,7 @@ function Body({ me }: { me: Me }) {
   const [adding, setAdding] = useState<string | null>(null); // shift id whose crew picker is open ('new' = the add-shift form)
   // "Add as lead" in the open crew picker: on for lead roles ("Audio Lead"), off otherwise.
   const [asLead, setAsLead] = useState(false);
+  const [withStaff, setWithStaff] = useState(false);
   const [busyAdd, setBusyAdd] = useState(false);
   const [payEdit, setPayEdit] = useState<{ id: string; value: string } | null>(null);
   // Editing a shift's role and times, or a phase's name and dates, in place.
@@ -705,10 +706,14 @@ function Body({ me }: { me: Me }) {
           const assignedIds = new Set(s.assignments.map((a) => a.user_id));
           const full = active.length >= s.headcount;
           const st = new Map(s.crew_status.map((x) => [x.user_id, x]));
-          const candidates = crew.filter((m) => !assignedIds.has(m.id)).map((m) => ({ m, e: st.get(m.id) }));
+          // Full-time staff are kept out of the picker unless "Include full-time staff" is ticked.
+          const candidates = crew.filter((m) => !assignedIds.has(m.id) && (withStaff || m.employment !== 'fulltime')).map((m) => ({ m, e: st.get(m.id) }));
           const stars = (m: Member) => starsShown(m, s.role_name).v;
           const best = (a: { m: Member }, b: { m: Member }) => Number(!!flagOf(a.m)) - Number(!!flagOf(b.m)) || stars(b.m) - stars(a.m) || a.m.name.localeCompare(b.m.name);
-          const options = [...candidates].sort(best).map(({ m, e }) => pickOption(m, e, starsShown(m, s.role_name), undefined, d.event.name));
+          const options = [...candidates].sort(best).map(({ m, e }) => {
+            const o = pickOption(m, e, starsShown(m, s.role_name), undefined, d.event.name);
+            return m.employment === 'fulltime' ? { ...o, sub: `Full-time staff · booked straight on${o.sub ? ` · ${o.sub}` : ''}` } : o;
+          });
           const rank = (a: Assignment) => (a.planned ? 2 : a.status === 'accepted' ? 0 : 1);
           const seated = [...active].sort((a, b) => rank(a) - rank(b));
           const declined = s.assignments.filter((a) => a.status === 'declined');
@@ -1032,10 +1037,18 @@ function Body({ me }: { me: Me }) {
                       title={full ? `Add a spot on ${s.role_name}` : `Add crew to ${s.role_name} (${s.headcount - active.length} open)`}
                       busy={busyAdd}
                       extra={
-                        <label className="check crew-pick-lead">
-                          <input type="checkbox" checked={asLead} onChange={(e) => setAsLead(e.target.checked)} />
-                          <span>Add as lead <span className="muted small">(checks in and rates their department on this event)</span></span>
-                        </label>
+                        <>
+                          <label className="check crew-pick-lead">
+                            <input type="checkbox" checked={asLead} onChange={(e) => setAsLead(e.target.checked)} />
+                            <span>Add as lead <span className="muted small">(checks in and rates their department on this event)</span></span>
+                          </label>
+                          {crew.some((m) => m.employment === 'fulltime') && (
+                            <label className="check crew-pick-lead">
+                              <input type="checkbox" checked={withStaff} onChange={(e) => setWithStaff(e.target.checked)} />
+                              <span>Include full-time staff <span className="muted small">(booked straight on, no offer; their hours go on their staff timecard)</span></span>
+                            </label>
+                          )}
+                        </>
                       }
                       onClose={() => setAdding(null)}
                       options={options}

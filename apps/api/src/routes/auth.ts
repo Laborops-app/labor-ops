@@ -82,16 +82,16 @@ export async function authRoutes(app: FastifyInstance) {
 
   app.get('/api/auth/me', { preHandler: authenticate }, async (req) => {
     const u = req.user;
-    const { company, name, rates, fieldRoles, leads } = await withTenant(u.tid, async (c) => ({
+    const { company, name, rates, fieldRoles, leads, fulltime } = await withTenant(u.tid, async (c) => ({
       rates: await canAdjustRates(c, u),
       company: (await c.query('SELECT name FROM tenants')).rows[0]?.name as string | undefined,
-      ...(await c.query('SELECT name, field_roles FROM users WHERE id = $1', [u.sub]).then((r) => ({ name: (r.rows[0]?.name as string | undefined) ?? u.name, fieldRoles: (r.rows[0]?.field_roles ?? []) as string[] }))),
+      ...(await c.query('SELECT name, field_roles, employment FROM users WHERE id = $1', [u.sub]).then((r) => ({ name: (r.rows[0]?.name as string | undefined) ?? u.name, fieldRoles: (r.rows[0]?.field_roles ?? []) as string[], fulltime: r.rows[0]?.employment === 'fulltime' }))),
       // Lead on an event now or recently (shows the On site page).
       leads: u.role === 'crew' && !!(await c.query(
         `SELECT 1 FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
           WHERE a.user_id = $1 AND a.is_lead AND a.status = 'accepted' AND e.end_date >= current_date - 14 LIMIT 1`, [u.sub])).rowCount,
     }));
     const customer = u.role === 'client' && u.customerId ? await withTenant(u.tid, async (c) => (await c.query('SELECT id, name FROM customers WHERE id = $1', [u.customerId])).rows[0] ?? null) : null;
-    return { user: { id: u.sub, name, role: u.role, company, canAdjustRates: rates, fieldRoles: u.role === 'crew' ? fieldRoles : [], leads, ...(customer ? { customer } : {}) } };
+    return { user: { id: u.sub, name, role: u.role, company, canAdjustRates: rates, fieldRoles: u.role === 'crew' ? fieldRoles : [], leads, fulltime, ...(customer ? { customer } : {}) } };
   });
 }

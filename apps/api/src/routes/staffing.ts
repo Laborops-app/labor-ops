@@ -323,7 +323,7 @@ export async function staffingRoutes(app: FastifyInstance) {
       if (!ev) return null;
       const people = (
         await c.query(
-          `SELECT u.id FROM users u WHERE u.role = 'crew' AND u.active AND (
+          `SELECT u.id FROM users u WHERE u.role = 'crew' AND u.employment = 'crew' AND u.active AND (
              u.id = ANY($1::uuid[])
              OR ($2::uuid IS NOT NULL AND EXISTS (SELECT 1 FROM crew_group_members m WHERE m.group_id = $2 AND m.user_id = u.id))
              OR ($3::text IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(u.skills) k WHERE lower(trim(k)) = lower(trim($3)))))

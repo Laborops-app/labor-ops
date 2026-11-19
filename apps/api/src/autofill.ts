@@ -39,7 +39,7 @@ export async function proposeEvent(c: PoolClient, eventId: string, o: { shiftIds
               (SELECT count(DISTINCT s.event_id)::int FROM shift_assignments a JOIN shifts s ON s.id = a.shift_id JOIN events e ON e.id = s.event_id
                 WHERE a.user_id = u.id AND a.status = 'accepted' AND $2::uuid IS NOT NULL AND e.customer_id = $2 AND s.ends_at < now()) AS customer_events
          FROM users u
-        WHERE u.role = 'crew' AND u.active AND ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM crew_group_members m WHERE m.group_id = $1 AND m.user_id = u.id))
+        WHERE u.role = 'crew' AND u.employment = 'crew' AND u.active AND ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM crew_group_members m WHERE m.group_id = $1 AND m.user_id = u.id))
         ORDER BY u.name`,
       [o.groupId ?? null, ev.customer_id ?? null],
     )

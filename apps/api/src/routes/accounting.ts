@@ -346,8 +346,8 @@ export async function accountingRoutes(app: FastifyInstance) {
   app.get('/api/payroll', { preHandler: payrollTeam }, async (req) => {
     const p = period.parse(req.query);
     return withTenant(req.user.tid, async (c) => {
-      const sum = await payrollSummary(c, p.from, p.to);
       const s = await loadAcct(c);
+      const sum = await payrollSummary(c, p.from, p.to, { staff: s.payroll.includeFulltime ? 'include' : 'exclude' });
       const history = (await c.query(`SELECT x.id, x.provider, x.period_start::text, x.period_end::text, x.people, x.entries, x.gross, x.created_at, u.name AS created_by FROM payroll_exports x LEFT JOIN users u ON u.id = x.created_by ORDER BY x.created_at DESC LIMIT 20`)).rows;
       const missingIds = Object.fromEntries(s.payroll.enabled.map((prov) => [prov, sum.people.filter((x) => !x.payrollIds[prov]).map((x) => x.name)]));
       return { ...sum, payroll: s.payroll, history, missingIds, quickbooksConnected: qboConnected(await loadQbo(c)) };
@@ -369,7 +369,7 @@ export async function accountingRoutes(app: FastifyInstance) {
     const out = await withTenant(req.user.tid, async (c) => {
       const s = await loadAcct(c);
       if (q.provider !== 'csv' && !s.payroll.enabled.includes(q.provider)) return null;
-      const sum = await payrollSummary(c, q.from, q.to);
+      const sum = await payrollSummary(c, q.from, q.to, { staff: s.payroll.includeFulltime ? 'include' : 'exclude' });
       // RUN: the Rate Code mapped to each role (matched the same way pay rates are), else the default.
       const byRole = new Map<string, string>();
       const mapped = s.payroll.adp.run.roleRates;
@@ -407,7 +407,7 @@ export async function accountingRoutes(app: FastifyInstance) {
         const s = await loadAcct(c);
         if (!s.payroll.enabled.includes('quickbooks')) return { code: 400, error: 'Turn QuickBooks payroll on under Integrations first.' };
         const qb = await qboSession(c, req.user.tid);
-        const sum = await payrollSummary(c, p.from, p.to);
+        const sum = await payrollSummary(c, p.from, p.to, { staff: s.payroll.includeFulltime ? 'include' : 'exclude' });
         const emps = await qb.employees();
         const byName = new Map(emps.map((e) => [e.DisplayName.trim().toLowerCase(), e.Id]));
         const byEmail = new Map(emps.filter((e) => e.PrimaryEmailAddr?.Address).map((e) => [e.PrimaryEmailAddr!.Address.toLowerCase(), e.Id]));
@@ -518,7 +518,7 @@ export async function accountingRoutes(app: FastifyInstance) {
         }
         // How many of each entry LaborOps really has (two identical shifts on one day are not duplicates).
         const expected = new Map<string, number>();
-        for (const person of (await payrollSummary(c, p.from, p.to)).people) {
+        for (const person of (await payrollSummary(c, p.from, p.to, { staff: (await loadAcct(c)).payroll.includeFulltime ? 'include' : 'exclude' })).people) {
           const emp = person.payrollIds.quickbooks;
           if (!emp) continue;
           for (const e of person.entries) {

@@ -199,6 +199,7 @@ test('event: crew instructions with a uniform, decline for a crew member, and th
   await card.getByLabel('Instructions for the crew').fill('Park in Lot C. Ask for Dana.');
   await card.getByLabel('Uniform', { exact: true }).selectOption({ label: 'Show blacks' });
   await card.getByRole('button', { name: 'Save' }).click();
+  await expect(card.getByLabel('Instructions for the crew')).toBeHidden();
   await expect(card.getByText('Park in Lot C. Ask for Dana.')).toBeVisible();
   await expect(card.getByText('Show blacks')).toBeVisible();
 
@@ -225,4 +226,56 @@ test('event: crew instructions with a uniform, decline for a crew member, and th
   await expect(hist.getByText(/declined for Sam Okafor: Sick/)).toBeVisible();
   await expect(hist.getByText(/updated the crew instructions \(uniform: Show blacks\)/)).toBeVisible();
   await expect(hist.getByText(/added Sam Okafor to Stagehand/)).toBeVisible();
+});
+
+test('full-time staff: their own time clock, Staff time for the office, and kept out of the crew picker unless asked', async ({ page, browser }) => {
+  await newCompany(page);
+  const email = `staff-${Date.now()}@e2e.example`;
+  const m = await api<{ member: { id: string } }>(page, 'POST', '/api/crew', { name: 'Robin Staff', email, password: 'password123', employment: 'fulltime' });
+  await newCrew(page, 'Casey Crew');
+
+  // Staff sign in and land on the Time clock (crew pages send them back to it)
+  const staff = await signIn(browser, email, true);
+  await staff.page.waitForURL(/\/time-clock$/);
+  await expect(staff.page.getByText('You’re off the clock')).toBeVisible();
+  await staff.page.getByRole('button', { name: 'Add a note' }).click();
+  await staff.page.getByLabel('Note for your manager (optional)').fill('At the warehouse');
+  await staff.page.getByRole('button', { name: 'Clock in' }).click();
+  await expect(staff.page.getByText(/On the clock since/)).toBeVisible();
+  await staff.page.getByRole('button', { name: 'Start break' }).click();
+  await expect(staff.page.getByText(/On break since/)).toBeVisible();
+  await staff.page.getByRole('button', { name: 'End break' }).click();
+  await expect(staff.page.getByText(/On the clock since/)).toBeVisible();
+  await staff.page.goto('/open-shifts');
+  await staff.page.waitForURL(/\/time-clock$/);
+
+  // The office sees them on the clock and can clock them out
+  await page.goto('/staff');
+  const now = page.locator('.staff-now');
+  await expect(now.getByText('Robin Staff')).toBeVisible();
+  await now.getByRole('button', { name: 'Clock out' }).click();
+  await page.getByRole('button', { name: 'Clock out', exact: true }).last().click();
+  await expect(now.getByText('Nobody is clocked in.')).toBeVisible();
+  await page.getByRole('button', { name: /Robin Staff/ }).click();
+  await expect(page.locator('.staff-card').getByText('“At the warehouse”')).toBeVisible();
+  await page.getByRole('button', { name: /^Approve/ }).click();
+  await expect(page.locator('.staff-grid').getByText('✓ Approved')).toBeVisible();
+  await staff.page.reload();
+  await expect(staff.page.getByText('You’re off the clock')).toBeVisible();
+  await staff.ctx.close();
+
+  // Not in the crew list or the crew picker, unless "Include full-time staff" is ticked
+  await page.goto('/crew');
+  await expect(page.getByText('Casey Crew').first()).toBeVisible();
+  await expect(page.getByText(/1 full-time staff member is kept on/)).toBeVisible();
+  const { eventId } = await eventWithShift(page, { name: 'Staff Pick Show', startInMin: 24 * 60, headcount: 2 });
+  await page.goto(`/events/${eventId}`);
+  await page.getByRole('button', { name: /Fill an open spot on Stagehand/ }).first().click();
+  await expect(page.getByRole('option', { name: /Casey Crew/ })).toBeVisible();
+  await expect(page.getByRole('option', { name: /Robin Staff/ })).toHaveCount(0);
+  await page.getByLabel(/Include full-time staff/).check();
+  await page.getByRole('option', { name: /Robin Staff/ }).click();
+  const row = page.locator('.cs-row', { hasText: 'Robin Staff' });
+  await expect(row.locator('.cs-st')).toHaveText(/Confirmed/);
+  void m;
 });
